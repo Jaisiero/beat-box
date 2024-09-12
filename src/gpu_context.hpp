@@ -1,9 +1,9 @@
 #pragma once
 
+#include "defines.hpp"
 #include "window.hpp"
-#include <daxa/daxa.hpp>
-using namespace daxa::types;
 
+BB_NAMESPACE_BEGIN
 
 struct GPUcontext{
 
@@ -55,3 +55,5 @@ struct GPUcontext{
     });
   }
 };
+
+BB_NAMESPACE_END

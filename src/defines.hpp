@@ -5,6 +5,13 @@
 #include "shared.inl"
 #include <daxa/daxa.hpp>
 using namespace daxa::types;
+#include <daxa/utils/pipeline_manager.hpp>
+
+#define BB_NAMESPACE_BEGIN namespace beatbox {
+#define BB_NAMESPACE_END }
+
+
+BB_NAMESPACE_BEGIN
 
 enum StageIndex : u32
 {
@@ -149,3 +156,5 @@ struct MainRayTracingPipeline
     };
   }
 };
+
+BB_NAMESPACE_END

@@ -5,6 +5,8 @@
 
 #include "shared.inl"
 
+using namespace beatbox;
+
 int main(int argc, char const *argv[])
 {
     // Create a window

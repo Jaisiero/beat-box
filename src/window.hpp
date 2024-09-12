@@ -1,8 +1,5 @@
 #pragma once
 
-#include <daxa/daxa.hpp>
-using namespace daxa::types;
-
 #include <GLFW/glfw3.h>
 #if defined(_WIN32)
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -13,6 +10,8 @@ using HWND = void *;
 #define GLFW_EXPOSE_NATIVE_WAYLAND
 #endif
 #include <GLFW/glfw3native.h>
+
+#include "defines.hpp"
 
 struct AppWindow{
     GLFWwindow * glfw_window_ptr;

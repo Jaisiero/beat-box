@@ -1,11 +1,10 @@
 #pragma once
-
-#include <daxa/utils/pipeline_manager.hpp>
-#include <daxa/daxa.hpp>
-using namespace daxa::types;
+#include "defines.hpp"
 
 
-auto paths = std::vector<std::filesystem::path>{
+BB_NAMESPACE_BEGIN
+
+std::vector<std::filesystem::path> paths{
     DAXA_SHADER_INCLUDE_DIR,
     "include",
     "src/shaders",
@@ -41,3 +40,5 @@ struct PipelineManager{
   }
 
 };
+
+BB_NAMESPACE_END
