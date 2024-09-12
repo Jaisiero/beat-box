@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include <daxa/daxa.hpp>
 // For things like `u32`. Not necessary of course.
 using namespace daxa::types;
