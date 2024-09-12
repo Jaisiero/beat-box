@@ -23,7 +23,7 @@
   ],
   "vcpkg-configuration": {
     "overlay-ports": [
-      "lib/Daxa"
+      "../cube-tracing/deps/Daxa"
     ]
   }
 }
