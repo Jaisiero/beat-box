@@ -8,7 +8,7 @@
       "features": [
         "utils-imgui",
         "utils-mem",
-        "utils-pipeline-manager-glslang",
+        "utils-pipeline-manager-slang",
         "utils-task-graph"
       ]
     },
@@ -23,7 +23,8 @@
   ],
   "vcpkg-configuration": {
     "overlay-ports": [
-      "../cube-tracing/deps/Daxa"
+      "../cube-tracing/deps/Daxa",
+      "../cube-tracing/deps/daxa/cmake/vcpkg-overlay-ports/shader-slang"
     ]
   }
 }
