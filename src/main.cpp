@@ -28,13 +28,23 @@ int main(int argc, char const *argv[])
     auto ray_tracing_pipeline_info = MainRayTracingPipeline{};
     ray_tracing_pipeline = pipeline_manager.create_ray_tracing(ray_tracing_pipeline_info.info);
   }
-  // Create the task graph
-  auto loop_TG = RayTracingTaskGraph("RT TaskGraph", gpu, ray_tracing_pipeline);
 
   // Create the shader binding table
   auto rt_pipeline_sbt = RayTracingSBT(ray_tracing_pipeline, gpu.device);
-  loop_TG.shader_binding_table = rt_pipeline_sbt.build_sbt();
 
+  auto camera_buffer = gpu.device.create_buffer({
+        .size = sizeof(Camera),
+        .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+        .name = "camera_buffer",
+    });
+
+  // Create the task graph
+  auto loop_TG_params = RayTracingParams{
+    .ray_tracing_pipeline = ray_tracing_pipeline,
+    .shader_binding_table = rt_pipeline_sbt.build_sbt(),
+    .camera = camera_buffer,
+  };
+  auto loop_TG = RayTracingTaskGraph("ray_tracing_task_graph", gpu, loop_TG_params);
   // Main loop
   while (!window.should_close())
   {
@@ -46,7 +56,7 @@ int main(int argc, char const *argv[])
     {
       gpu.swapchain.resize();
       window.swapchain_out_of_date = false;
-      loop_TG.shader_binding_table = rt_pipeline_sbt.rebuild_sbt();
+      loop_TG.SBT = rt_pipeline_sbt.rebuild_sbt();
     }
 
     // acquire the next image
@@ -58,14 +68,15 @@ int main(int argc, char const *argv[])
 
     // We update the image id of the task swapchain image.
     loop_TG.task_swapchain_image.set_images({.images = std::span{&swapchain_image, 1}});
-    loop_TG.size = gpu.swapchain.get_surface_extent();
 
     // So, now all we need to do is execute our task graph!
     loop_TG.ray_tracing_task_graph.execute({});
     gpu.device.collect_garbage();
   }
 
-  rt_pipeline_sbt.free_sbt();
+  if(!camera_buffer.is_empty()) {
+    gpu.device.destroy_buffer(camera_buffer);
+  }
 
   return 0;
 }

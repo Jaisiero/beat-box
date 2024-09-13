@@ -50,6 +50,11 @@ struct RayTracingSBT
     sbt_pair = ray_tracing_pipeline->create_default_sbt();
     return build_sbt();
   }
+
+  ~RayTracingSBT()
+  {
+    free_sbt();
+  };
 };
 
 BB_NAMESPACE_END

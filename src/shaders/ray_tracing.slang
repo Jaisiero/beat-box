@@ -1,41 +1,42 @@
 #include "shared.inl"
 
-
-[shader("raygeneration")]
-void ray_generation()
+[shader("raygeneration")] void ray_generation()
 {
-  const daxa_u32vec2 threadIdx = DispatchRaysIndex().xy;
+  const daxa_u32vec2 thread_idx = DispatchRaysIndex().xy;
   const daxa_u32vec2 rt_size = DispatchRaysDimensions().xy;
 
   HitPayload payload = {daxa_f32vec3(0.0)};
 
   payload.hit_value = daxa_f32vec3(1.0, 0.0, 0.0);
 
-  // TODO: trace rays here
-  
-  p.swapchain.get()[threadIdx.xy] = daxa_f32vec4(payload.hit_value, 1.0);
+  // Camera setup
+  daxa_f32mat4x4 inv_view = Ptr<Camera>(p.task_head.camera).inv_view;
+  daxa_f32mat4x4 inv_proj = Ptr<Camera>(p.task_head.camera).inv_proj;
+  daxa_f32 tMin = 0.0001;
+  daxa_f32 tMax = 10000.0;
+
+  RayDesc ray = create_ray(inv_view, inv_proj, thread_idx, rt_size, tMin, tMax);
+
+  // TraceRay(RaytracingAccelerationStructure::get(daxa::TlasId(p.task_head.tlas)), RAY_FLAG_NONE, ~0, 0, 0, 0, ray, payload);
+
+  RWTexture2D<daxa_f32vec4>::get(p.task_head.swapchain)[thread_idx.xy] = daxa_f32vec4(payload.hit_value, 1.0);
 }
 
-[shader("miss")]
-void miss(inout HitPayload payload)
+[shader("miss")] void miss(inout HitPayload payload)
 {
-    payload.hit_value = daxa_f32vec3(0.0, 0.0, 0.05); // Background color
+  payload.hit_value = daxa_f32vec3(0.0, 0.0, 0.05); // Background color
 }
-[shader("miss")]
-void miss_shadows(inout ShadowRayPayload payload)
+[shader("miss")] void miss_shadows(inout ShadowRayPayload payload)
 {
-    payload.shadow = 1.0f;
+  payload.shadow = 1.0f;
 }
 
-[shader("closesthit")]
-void closest_hit(inout HitPayload payload, 
-in MyAttributes attr)
+[shader("closesthit")] void closest_hit(inout HitPayload payload,
+                                            in MyAttributes attr)
 {
-    payload.hit_value = daxa_f32vec3(0.0, 1.0, 0.0);
+  payload.hit_value = daxa_f32vec3(0.0, 1.0, 0.0);
 }
 
-[shader("intersection")]
-void intersection()
-{
-  
+[shader("intersection")] void intersection() {
+
 }
