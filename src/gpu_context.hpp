@@ -16,13 +16,13 @@ struct GPUcontext{
   // Swapchain
   daxa::Swapchain swapchain;
 
-  explicit GPUcontext(AppWindow &window) {
+  explicit GPUcontext(char const * dev_name, AppWindow &window) {
     instance = daxa::create_instance({});
 
     // Create a device
     device = [&]()
     {
-        daxa::DeviceInfo2 info = {.name = "default device"};
+        daxa::DeviceInfo2 info = {.name = dev_name};
         // Requested features
         daxa::ImplicitFeatureFlags required_features = daxa::ImplicitFeatureFlagBits::BASIC_RAY_TRACING;
 

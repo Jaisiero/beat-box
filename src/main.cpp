@@ -4,6 +4,7 @@
 #include "gpu_context.hpp"
 #include "pipeline_manager.hpp"
 #include "ray_tracing_task_graph.hpp"
+#include "ray_tracing_SBT.hpp"
 
 #include "shared.inl"
 
@@ -14,38 +15,27 @@ int main(int argc, char const *argv[])
   // Create a window
   auto window = AppWindow("Beat Box", 860, 640);
 
-  auto gpu = GPUcontext(window);
+  // Create a GPU context
+  auto gpu = GPUcontext("RT device", window);
 
-  auto pipeline_manager = PipelineManager(gpu.device);
+  // Create the pipeline manager
+  auto pipeline_manager = PipelineManager("Pipeline Manager", gpu.device);
 
   std::shared_ptr<daxa::RayTracingPipeline> ray_tracing_pipeline;
 
+  // Create the ray tracing pipeline
   {
     auto ray_tracing_pipeline_info = MainRayTracingPipeline{};
     ray_tracing_pipeline = pipeline_manager.create_ray_tracing(ray_tracing_pipeline_info.info);
   }
-  daxa::RayTracingPipeline::SbtPair sbt_pair = ray_tracing_pipeline->create_default_sbt();
+  // Create the task graph
+  auto loop_TG = RayTracingTaskGraph("RT TaskGraph", gpu, ray_tracing_pipeline);
 
-  auto loop_TG = RayTracingTaskGraph(gpu, ray_tracing_pipeline);
+  // Create the shader binding table
+  auto rt_pipeline_sbt = RayTracingSBT(ray_tracing_pipeline, gpu.device);
+  loop_TG.shader_binding_table = rt_pipeline_sbt.build_sbt();
 
-  auto build_sbt = [&]() -> daxa::RayTracingShaderBindingTable {
-    return {
-        .raygen_region = sbt_pair.entries.group_regions.at(0).region,
-        .miss_region = sbt_pair.entries.group_regions.at(1).region,
-        .hit_region = sbt_pair.entries.group_regions.at(2).region,
-        .callable_region = {},
-    };
-  };
-
-  auto free_sbt = [&](daxa::RayTracingPipeline::SbtPair &sbt) {
-        gpu.device.destroy_buffer(sbt.buffer);
-        gpu.device.destroy_buffer(sbt.entries.buffer);
-  };
-
-  daxa::RayTracingShaderBindingTable shader_binding_table = build_sbt();
-
-  loop_TG.shader_binding_table = shader_binding_table;
-
+  // Main loop
   while (!window.should_close())
   {
     // Poll events
@@ -56,12 +46,7 @@ int main(int argc, char const *argv[])
     {
       gpu.swapchain.resize();
       window.swapchain_out_of_date = false;
-      if(!sbt_pair.buffer.is_empty()) {
-        free_sbt(sbt_pair);
-      }
-      sbt_pair = ray_tracing_pipeline->create_default_sbt();
-      shader_binding_table = build_sbt();
-      loop_TG.shader_binding_table = shader_binding_table;
+      loop_TG.shader_binding_table = rt_pipeline_sbt.rebuild_sbt();
     }
 
     // acquire the next image
@@ -80,9 +65,7 @@ int main(int argc, char const *argv[])
     gpu.device.collect_garbage();
   }
 
-  if(!sbt_pair.buffer.is_empty()) {
-    free_sbt(sbt_pair);
-  }
+  rt_pipeline_sbt.free_sbt();
 
   return 0;
 }

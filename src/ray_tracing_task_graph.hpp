@@ -12,7 +12,7 @@ struct RayTracingTaskGraph
   daxa::Extent2D size{860, 640};
   std::shared_ptr<daxa::RayTracingPipeline> pipeline;
 
-  explicit RayTracingTaskGraph(GPUcontext &gpu, std::shared_ptr<daxa::RayTracingPipeline> ray_tracing_pipeline) : pipeline(ray_tracing_pipeline)
+  explicit RayTracingTaskGraph(char const * RT_TG_name, GPUcontext &gpu, std::shared_ptr<daxa::RayTracingPipeline> ray_tracing_pipeline) : pipeline(ray_tracing_pipeline)
   {
     ray_tracing_task_graph = daxa::TaskGraph({
         .device = gpu.device,
@@ -38,7 +38,7 @@ struct RayTracingTaskGraph
             .shader_binding_table = shader_binding_table,
         });
       },
-      .name = "ray_tracing",
+      .name = RT_TG_name,
     });
 
     ray_tracing_task_graph.submit({});

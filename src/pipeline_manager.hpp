@@ -13,7 +13,7 @@ struct PipelineManager{
 
   daxa::PipelineManager pipeline_manager;
 
-  explicit PipelineManager(daxa::Device& device)
+  explicit PipelineManager(char const * pipeline_mngr_name, daxa::Device& device)
   {
     pipeline_manager = daxa::PipelineManager({
         .device = device,
@@ -24,7 +24,7 @@ struct PipelineManager{
             .enable_debug_info = true,
 #endif
         },
-        .name = "pipeline manager",
+        .name = pipeline_mngr_name,
     });
   }
 
