@@ -7,7 +7,8 @@
 
 struct PushConstants
 {
-    daxa::RWTexture2DId<daxa_f32vec4> swapchain;
+  daxa_u32vec2 size;
+  daxa::RWTexture2DId<daxa_f32vec4> swapchain;
 };
 
 

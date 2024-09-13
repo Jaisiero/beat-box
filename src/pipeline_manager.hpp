@@ -1,7 +1,6 @@
 #pragma once
 #include "defines.hpp"
 
-
 BB_NAMESPACE_BEGIN
 
 std::vector<std::filesystem::path> paths{

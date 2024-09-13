@@ -50,10 +50,16 @@ struct GPUcontext{
           }
       },
       .present_mode = daxa::PresentMode::FIFO,
-      .image_usage = daxa::ImageUsageFlagBits::TRANSFER_DST,
+      .image_usage = daxa::ImageUsageFlagBits::SHADER_STORAGE,
       .name = "Swapchain",
     });
   }
+
+  ~GPUcontext() {
+    device.wait_idle();
+    device.collect_garbage();
+  }
+
 };
 
 BB_NAMESPACE_END

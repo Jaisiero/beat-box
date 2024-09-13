@@ -6,6 +6,7 @@
 #include <daxa/daxa.hpp>
 using namespace daxa::types;
 #include <daxa/utils/pipeline_manager.hpp>
+#include <daxa/utils/task_graph.hpp>
 
 #define BB_NAMESPACE_BEGIN namespace beatbox {
 #define BB_NAMESPACE_END }
