@@ -39,7 +39,7 @@ struct RayTracingTaskGraph
   std::shared_ptr<daxa::RayTracingPipeline> pipeline;
   daxa::RayTracingShaderBindingTable SBT;
 
-  explicit RayTracingTaskGraph(char const * RT_TG_name, GPUcontext &gpu, RayTracingParams& params) : pipeline(params.ray_tracing_pipeline), SBT(params.shader_binding_table)
+  explicit RayTracingTaskGraph(char const * RT_TG_name, GPUcontext &gpu, RayTracingParams params) : pipeline(params.ray_tracing_pipeline), SBT(params.shader_binding_table)
   {
     task_camera_buffer.set_buffers({.buffers = std::array{params.camera}});
     ray_tracing_task_graph = daxa::TaskGraph({

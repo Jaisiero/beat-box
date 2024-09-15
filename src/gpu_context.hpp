@@ -16,7 +16,7 @@ struct GPUcontext{
   // Swapchain
   daxa::Swapchain swapchain;
 
-  explicit GPUcontext(char const * dev_name, AppWindow &window) {
+  explicit GPUcontext(char const * dev_name, char const * swapchain_name, AppWindow &window) {
     instance = daxa::create_instance({});
 
     // Create a device
@@ -51,7 +51,7 @@ struct GPUcontext{
       },
       .present_mode = daxa::PresentMode::FIFO,
       .image_usage = daxa::ImageUsageFlagBits::SHADER_STORAGE,
-      .name = "Swapchain",
+      .name = swapchain_name,
     });
   }
 
