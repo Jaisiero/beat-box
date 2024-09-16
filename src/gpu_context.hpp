@@ -72,6 +72,14 @@ struct GPUcontext{
     swapchain.resize();
   }
 
+  auto swapchain_acquire_next_image() -> daxa::ImageId {
+    return swapchain.acquire_next_image();
+  }
+
+  auto swapchain_get_extent() -> daxa::Extent2D {
+    return swapchain.get_surface_extent();
+  }
+
 };
 
 BB_NAMESPACE_END

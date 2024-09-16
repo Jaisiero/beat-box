@@ -23,3 +23,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE glfw)
 
 find_package(daxa CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE daxa::daxa)
+
+find_package(glm CONFIG REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE glm::glm)

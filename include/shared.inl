@@ -17,20 +17,19 @@ struct RigidBody
 };
 DAXA_DECL_BUFFER_PTR(RigidBody)
 
-struct Camera
+struct CameraView
 {
   daxa_f32mat4x4 inv_view;
   daxa_f32mat4x4 inv_proj;
-  daxa_u32vec2 size;
 };
-DAXA_DECL_BUFFER_PTR(Camera)
+DAXA_DECL_BUFFER_PTR(CameraView)
 
 DAXA_DECL_BUFFER_PTR(Aabb)
 
 DAXA_DECL_TASK_HEAD_BEGIN(RayTracingTaskHead)
-DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Camera), camera)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(CameraView), camera)
 DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_WRITE_ONLY, REGULAR_2D, swapchain)
-DAXA_TH_TLAS_PTR(RAY_TRACING_SHADER_READ, tlas)
+DAXA_TH_TLAS_ID(RAY_TRACING_SHADER_READ, tlas)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_DECL_TASK_HEAD_END
@@ -48,23 +47,27 @@ daxa_f32mat3x4 rigid_body_get_transform_matrix(const RigidBody &rigid_body) {
     daxa_f32vec3 translation = rigid_body.position;
     daxa_f32vec4 rotation = rigid_body.rotation;
 
-    // transform quaternion to matrix
-    daxa_f32 x2 = rotation.x + rotation.x;
-    daxa_f32 y2 = rotation.y + rotation.y;
-    daxa_f32 z2 = rotation.z + rotation.z;
-    daxa_f32 xx = rotation.x * x2;
-    daxa_f32 xy = rotation.x * y2;
-    daxa_f32 xz = rotation.x * z2;
-    daxa_f32 yy = rotation.y * y2;
-    daxa_f32 yz = rotation.y * z2;
-    daxa_f32 zz = rotation.z * z2;
-    daxa_f32 wx = rotation.w * x2;
-    daxa_f32 wy = rotation.w * y2;
-    daxa_f32 wz = rotation.w * z2;
+    // // transform quaternion to matrix
+    // daxa_f32 x2 = rotation.x + rotation.x;
+    // daxa_f32 y2 = rotation.y + rotation.y;
+    // daxa_f32 z2 = rotation.z + rotation.z;
+    // daxa_f32 xx = rotation.x * x2;
+    // daxa_f32 xy = rotation.x * y2;
+    // daxa_f32 xz = rotation.x * z2;
+    // daxa_f32 yy = rotation.y * y2;
+    // daxa_f32 yz = rotation.y * z2;
+    // daxa_f32 zz = rotation.z * z2;
+    // daxa_f32 wx = rotation.w * x2;
+    // daxa_f32 wy = rotation.w * y2;
+    // daxa_f32 wz = rotation.w * z2;
 
-    daxa_f32mat3x3 rotation_matrix = daxa_f32mat3x3(daxa_f32vec3(1.0f - (yy + zz), xy - wz, xz + wy),
-                                                    daxa_f32vec3(xy + wz, 1.0f - (xx + zz), yz - wx),
-                                                    daxa_f32vec3(xz - wy, yz + wx, 1.0f - (xx + yy)));
+    // daxa_f32mat3x3 rotation_matrix = daxa_f32mat3x3(daxa_f32vec3(1.0f - (yy + zz), xy - wz, xz + wy),
+    //                                                 daxa_f32vec3(xy + wz, 1.0f - (xx + zz), yz - wx),
+    //                                                 daxa_f32vec3(xz - wy, yz + wx, 1.0f - (xx + yy)));
+
+    daxa_f32mat3x3 rotation_matrix = daxa_f32mat3x3(daxa_f32vec3(1.0f, 0.0f, 0.0f),
+                                                    daxa_f32vec3(0.0f, 1.0f, 0.0f),
+                                                    daxa_f32vec3(0.0f, 0.0f, 1.0f));
 
     return daxa_f32mat3x4(daxa_f32vec4(rotation_matrix.x.x, rotation_matrix.y.x, rotation_matrix.z.x, translation.x),
                         daxa_f32vec4(rotation_matrix.x.y, rotation_matrix.y.y, rotation_matrix.z.y, translation.y),

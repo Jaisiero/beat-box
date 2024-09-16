@@ -10,14 +10,14 @@
   payload.hit_value = daxa_f32vec3(1.0, 0.0, 0.0);
 
   // Camera setup
-  daxa_f32mat4x4 inv_view = Ptr<Camera>(p.task_head.camera).inv_view;
-  daxa_f32mat4x4 inv_proj = Ptr<Camera>(p.task_head.camera).inv_proj;
+  daxa_f32mat4x4 inv_view = Ptr<CameraView>(p.task_head.camera).inv_view;
+  daxa_f32mat4x4 inv_proj = Ptr<CameraView>(p.task_head.camera).inv_proj;
   daxa_f32 tMin = 0.0001;
   daxa_f32 tMax = 10000.0;
 
   RayDesc ray = create_ray(inv_view, inv_proj, thread_idx, rt_size, tMin, tMax);
 
-  TraceRay(RaytracingAccelerationStructure::get(daxa::TlasId(p.task_head.tlas)), RAY_FLAG_NONE, ~0, 0, 0, 0, ray, payload);
+  TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), RAY_FLAG_NONE, ~0, 0, 0, 0, ray, payload);
 
   RWTexture2D<daxa_f32vec4>::get(p.task_head.swapchain)[thread_idx.xy] = daxa_f32vec4(payload.hit_value, 1.0);
 }

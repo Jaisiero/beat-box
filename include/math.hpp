@@ -13,6 +13,11 @@ struct Ray {
 
 #if defined(__cplusplus) // C++
 #include <cmath>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp>
 #define MAX std::max
 #define MIN std::min
 
@@ -36,6 +41,16 @@ bool operator<(const daxa_f32vec3& a, const daxa_f32vec3& b)
   auto lenght_a = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
   auto lenght_b = std::sqrt(b.x * b.x + b.y * b.y + b.z * b.z);
   return lenght_a < lenght_b;
+}
+
+daxa_f32mat4x4 daxa_mat4_from_glm_mat4(glm::mat4 const& m)
+{
+    return {
+        m[0][0], m[0][1], m[0][2], m[0][3],
+        m[1][0], m[1][1], m[1][2], m[1][3],
+        m[2][0], m[2][1], m[2][2], m[2][3],
+        m[3][0], m[3][1], m[3][2], m[3][3]
+    };
 }
 
 #else 

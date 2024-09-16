@@ -67,7 +67,7 @@ struct AccelerationStructureManager
   // Build sizes for the BLAS
   std::vector<daxa::AccelerationStructureBuildSizesInfo> blas_build_sizes = {};
   // Build geometry for the BLAS
-  std::vector<daxa::BlasAabbGeometryInfo> blas_geometries = {};
+  std::vector<std::vector<daxa::BlasAabbGeometryInfo>> blas_geometries = {};
 
   // Build TLAS info
   daxa::AccelerationStructureBuildSizesInfo tlas_build_sizes = {};
@@ -75,6 +75,8 @@ struct AccelerationStructureManager
   daxa::TlasBuildInfo tlas_build_info = {};
   // BLAS instances
   daxa::BufferId blas_instances_buffer = {};
+  // BLAS instances data
+  std::array<daxa::TlasInstanceInfo, 1> tlas_info = {};
   // BLAS instances data
   daxa_BlasInstanceData* blas_instances_data = nullptr;
   // TLAS
@@ -200,6 +202,10 @@ struct AccelerationStructureManager
       device.destroy_buffer(rigid_body_buffer);
       device.destroy_buffer(primitive_scratch_buffer);
       device.destroy_buffer(primitive_buffer);
+      for(auto blas : proc_blas)
+      {
+        device.destroy_blas(blas);
+      }
       device.destroy_buffer(proc_blas_buffer);
       device.destroy_buffer(proc_blas_scratch_buffer);
       device.destroy_buffer(proc_tlas_buffer);
@@ -249,15 +255,20 @@ struct AccelerationStructureManager
     }
 
     // Copy primitives to the buffer
-    std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), current_primitive_count * sizeof(Aabb));
+    std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
 
     // BUILDING BLAS
-    blas_build_infos.clear();
-    blas_build_infos.reserve(rigid_body_count);
-    blas_build_sizes.clear();
-    blas_build_sizes.reserve(rigid_body_count);
-    blas_geometries.clear();
-    blas_geometries.reserve(rigid_body_count);
+    auto clear_build_AS = [&]()
+    {
+      blas_build_infos.clear();
+      blas_build_infos.reserve(rigid_body_count);
+      blas_build_sizes.clear();
+      blas_build_sizes.reserve(rigid_body_count);
+      blas_geometries.clear();
+      blas_geometries.resize(rigid_body_count);
+    };
+
+    clear_build_AS();
     
     /// Alignments:
     auto get_aligned = [&](u32 operand, u32 granularity) -> u32
@@ -277,7 +288,7 @@ struct AccelerationStructureManager
       // Get the rigid body
       auto rigid_body = rigid_bodies[i];
 
-      blas_geometries.push_back({
+      blas_geometries.at(i).push_back({
           .data = device.device_address(primitive_buffer).value() + current_primitive_count * sizeof(Aabb),
           .stride = sizeof(Aabb),
           .count = rigid_body.primitive_count,
@@ -295,17 +306,35 @@ struct AccelerationStructureManager
       blas_build_infos.push_back({
           .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_BUILD,
           .dst_blas = {},
-          .geometries = std::array{blas_geometries.back()},
+          .geometries = daxa::Span<const daxa::BlasAabbGeometryInfo>(blas_geometries.at(i).data(), blas_geometries.at(i).size()),
           .scratch_data = {},
       });
       // Get the build sizes
       blas_build_sizes.push_back(device.blas_build_sizes(blas_build_infos.back()));
 
+      auto scratch_offset = get_aligned(blas_build_sizes.back().build_scratch_size, acceleration_structure_scratch_offset_alignment);
+
+      if(proc_blas_scratch_offset + scratch_offset > AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT)
+      {
+        clear_build_AS();
+        return false;
+      }
+
       // Set the scratch offset
       blas_build_infos.back().scratch_data = device.device_address(proc_blas_scratch_buffer).value() + proc_blas_scratch_offset;
 
       // Increment the scratch offset
-      proc_blas_scratch_offset += get_aligned(blas_build_sizes.back().build_scratch_size, acceleration_structure_scratch_offset_alignment);
+      proc_blas_scratch_offset += scratch_offset;
+
+      // Get the BLAS instance offset
+      auto blas_instance_offset = get_aligned(blas_build_sizes.back().acceleration_structure_size, ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT);
+
+      // Check if the buffer offset is within the limits
+      if(proc_blas_buffer_offset + blas_instance_offset > AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT)
+      {
+        clear_build_AS();
+        return false;
+      }
 
       // Create BLAS buffer from buffer
       proc_blas.push_back(device.create_blas_from_buffer(
@@ -323,7 +352,7 @@ struct AccelerationStructureManager
       blas_build_infos.back().dst_blas = proc_blas.back();
 
       // Increment the buffer offset
-      proc_blas_buffer_offset += get_aligned(blas_build_sizes.back().acceleration_structure_size, ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT);
+      proc_blas_buffer_offset += blas_instance_offset;
 
       blas_instances_data[i] = {
           .transform = rigid_body_get_transform_matrix(rigid_body),
@@ -348,16 +377,18 @@ struct AccelerationStructureManager
     // Set Task BLAS 
     task_blas.set_blas({.blas = proc_blas});
 
+    tlas_info[0] = {
+        .data = device.device_address(blas_instances_buffer).value(),
+        .count = rigid_body_count,
+        .is_data_array_of_pointers = false,
+        .flags = {},
+    };
+
     // BUILDING TLAS
     tlas_build_info = {
         .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_BUILD,
         .dst_tlas = {},
-        .instances = std::array{daxa::TlasInstanceInfo{
-            .data = device.device_address(blas_instances_buffer).value(),
-            .count = rigid_body_count,
-            .is_data_array_of_pointers = false,
-            .flags = {},
-        }},
+        .instances = tlas_info,
         .scratch_data = device.device_address(proc_tlas_scratch_buffer).value(),
     };
 
@@ -367,15 +398,16 @@ struct AccelerationStructureManager
     // Set the scratch offset
     tlas_build_info.scratch_data = device.device_address(proc_tlas_scratch_buffer).value();
 
-    // Create TLAS buffer from buffer
-    tlas = device.create_tlas_from_buffer(
-        {
-          {
-            .size = tlas_build_sizes.acceleration_structure_size,
-            .name = "tlas",
-          }
-        }
-    );
+    // TODO: Create TLAS buffer from buffer
+    // // Create TLAS buffer from buffer
+    // tlas = device.create_tlas_from_buffer(
+    //     {
+    //       {
+    //         .size = tlas_build_sizes.acceleration_structure_size,
+    //         .name = "tlas",
+    //       }
+    //     }
+    // );
 
     // Set the TLAS buffer
     tlas_build_info.dst_tlas = tlas;
