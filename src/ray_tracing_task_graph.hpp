@@ -36,6 +36,9 @@ struct RayTracingTaskGraph
   daxa::TaskGraph ray_tracing_task_graph;
   daxa::TaskImage task_swapchain_image{{.swapchain_image = true, .name = "swapchain_image"}};
   daxa::TaskBuffer task_camera_buffer{{.initial_buffers = {}, .name = "camera_buffer"}};
+  daxa::TaskTlas task_tlas{{.name = "tlas"}};
+  daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "rigid_bodies"}};
+  daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "aabbs"}};
   std::shared_ptr<daxa::RayTracingPipeline> pipeline;
   daxa::RayTracingShaderBindingTable SBT;
 
@@ -51,11 +54,17 @@ struct RayTracingTaskGraph
     });
     ray_tracing_task_graph.use_persistent_image(task_swapchain_image);
     ray_tracing_task_graph.use_persistent_buffer(task_camera_buffer);
+    ray_tracing_task_graph.use_persistent_tlas(task_tlas);
+    ray_tracing_task_graph.use_persistent_buffer(task_rigid_bodies);
+    ray_tracing_task_graph.use_persistent_buffer(task_aabbs);
 
     ray_tracing_task_graph.add_task(RayTracingTask{
         .views = std::array{
             daxa::attachment_view(RayTracingTaskHead::AT.swapchain, task_swapchain_image),
             daxa::attachment_view(RayTracingTaskHead::AT.camera, task_camera_buffer),
+            daxa::attachment_view(RayTracingTaskHead::AT.tlas, task_tlas),
+            daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies, task_rigid_bodies),
+            daxa::attachment_view(RayTracingTaskHead::AT.aabbs, task_aabbs),
         },
         .pipeline = pipeline,
         .SBT = SBT,
@@ -69,6 +78,15 @@ struct RayTracingTaskGraph
   void execute()
   {
     ray_tracing_task_graph.execute({});
+  }
+
+  void update_resources(daxa::ImageId swapchain_image, daxa::BufferId camera, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs)
+  {
+    task_swapchain_image.set_images({.images = std::array{swapchain_image}});
+    task_camera_buffer.set_buffers({.buffers = std::array{camera}});
+    task_tlas.set_tlas({.tlas = std::array{tlas}});
+    task_rigid_bodies.set_buffers({.buffers = std::array{rigid_bodies}});
+    task_aabbs.set_buffers({.buffers = std::array{aabbs}});
   }
 };
 

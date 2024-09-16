@@ -56,8 +56,20 @@ struct GPUcontext{
   }
 
   ~GPUcontext() {
+    synchronize();
+    garbage_collector();
+  }
+
+  auto synchronize() -> void {
     device.wait_idle();
+  }
+
+  auto garbage_collector() -> void {
     device.collect_garbage();
+  }
+
+  auto swapchain_resize() -> void {
+    swapchain.resize();
   }
 
 };
