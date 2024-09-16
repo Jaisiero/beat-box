@@ -69,48 +69,51 @@ const glm::mat4 _get_view_matrix(const Camera& cam) {
     return glm::lookAt(cam.position, cam.position + cam.forward, cam.up);
 }
 
-const glm::mat4 _get_projection_matrix(const Camera& cam) {
-    return glm::perspectiveRH_ZO(cam.fov, cam.width / (float)cam.height , cam._near, cam._far);
+const glm::mat4 _get_projection_matrix(const Camera& cam, bool flip_Y = false) {
+    auto proj_mat = glm::perspectiveRH_ZO(cam.fov, cam.width / (float)cam.height , cam._near, cam._far);
+    if(flip_Y) 
+        proj_mat[1][1] *= -1;
+    return proj_mat;
 }
 
-const glm::mat4 _get_view_projection_matrix(const Camera& cam) {
-    return _get_projection_matrix(cam) * _get_view_matrix(cam);
+const glm::mat4 _get_view_projection_matrix(const Camera& cam, bool flip_Y = false) {
+    return _get_projection_matrix(cam, flip_Y) * _get_view_matrix(cam);
 }
 
 const glm::mat4 _get_inverse_view_matrix(const Camera& cam) {
     return glm::inverse(_get_view_matrix(cam));
 }
 
-const glm::mat4 _get_inverse_projection_matrix(const Camera& cam) {
-    return glm::inverse(_get_projection_matrix(cam));
+const glm::mat4 _get_inverse_projection_matrix(const Camera& cam, bool flip_Y = false) {
+    return glm::inverse(_get_projection_matrix(cam, flip_Y));
 }
 
-const glm::mat4 _get_inverse_view_projection_matrix(const Camera& cam) {
-    return glm::inverse(_get_view_projection_matrix(cam));
+const glm::mat4 _get_inverse_view_projection_matrix(const Camera& cam, bool flip_Y = false) {
+    return glm::inverse(_get_view_projection_matrix(cam, flip_Y));
 }
 
 const daxa_f32mat4x4 get_view_matrix(const Camera& cam) {
     return daxa_mat4_from_glm_mat4(_get_view_matrix(cam));
 }
 
-const daxa_f32mat4x4 get_projection_matrix(const Camera& cam) {
-    return daxa_mat4_from_glm_mat4(_get_projection_matrix(cam));
+const daxa_f32mat4x4 get_projection_matrix(const Camera& cam, bool flip_Y = false) {
+    return daxa_mat4_from_glm_mat4(_get_projection_matrix(cam, flip_Y));
 }
 
-const daxa_f32mat4x4 get_view_projection_matrix(const Camera& cam) {
-    return daxa_mat4_from_glm_mat4(_get_view_projection_matrix(cam));
+const daxa_f32mat4x4 get_view_projection_matrix(const Camera& cam, bool flip_Y = false) {
+    return daxa_mat4_from_glm_mat4(_get_view_projection_matrix(cam, flip_Y));
 }
 
 const daxa_f32mat4x4 get_inverse_view_matrix(const Camera& cam) {
     return daxa_mat4_from_glm_mat4(_get_inverse_view_matrix(cam));
 }
 
-const daxa_f32mat4x4 get_inverse_projection_matrix(const Camera& cam) {
-    return daxa_mat4_from_glm_mat4(_get_inverse_projection_matrix(cam));
+const daxa_f32mat4x4 get_inverse_projection_matrix(const Camera& cam, bool flip_Y = false) {
+    return daxa_mat4_from_glm_mat4(_get_inverse_projection_matrix(cam, flip_Y));
 }
 
-const daxa_f32mat4x4 get_inverse_view_projection_matrix(const Camera& cam) {
-    return daxa_mat4_from_glm_mat4(_get_inverse_view_projection_matrix(cam));
+const daxa_f32mat4x4 get_inverse_view_projection_matrix(const Camera& cam, bool flip_Y = false) {
+    return daxa_mat4_from_glm_mat4(_get_inverse_view_projection_matrix(cam, flip_Y));
 }
 
 const glm::vec3 camera_get_direction(const Camera& cam) {

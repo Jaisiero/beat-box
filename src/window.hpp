@@ -12,14 +12,18 @@ using HWND = void *;
 #include <GLFW/glfw3native.h>
 
 #include "defines.hpp"
+#include "input_manager.hpp"
+
+BB_NAMESPACE_BEGIN  
 
 struct AppWindow{
     GLFWwindow * glfw_window_ptr;
     u32 width, height;
     bool minimized = false;
     bool swapchain_out_of_date = false;
+    InputManager& input_manager;
 
-    explicit AppWindow(char const * window_name, u32 sx = 800, u32 sy = 600) : width{sx}, height{sy} {
+    explicit AppWindow(char const * window_name, InputManager& input_manager,  u32 sx = 800, u32 sy = 600) : input_manager{input_manager}, width{sx}, height{sy} {
         // Initialize GLFW
         glfwInit();
 
@@ -41,7 +45,40 @@ struct AppWindow{
             win->width = static_cast<u32>(size_x);
             win->height = static_cast<u32>(size_y);
             win->swapchain_out_of_date = true;
+            win->minimized = size_x == 0 || size_y == 0;
         });
+
+        glfwSetCursorPosCallback(
+            glfw_window_ptr,
+            [](GLFWwindow * window_ptr, f64 x, f64 y)
+            {
+                auto & app = *reinterpret_cast<AppWindow *>(glfwGetWindowUserPointer(window_ptr));
+                app.input_manager.on_mouse_move(static_cast<f32>(x), static_cast<f32>(y));
+            });
+        glfwSetMouseButtonCallback(
+            glfw_window_ptr,
+            [](GLFWwindow * window_ptr, i32 button, i32 action, i32)
+            {
+                auto & app = *reinterpret_cast<AppWindow *>(glfwGetWindowUserPointer(window_ptr));
+                f64 mouse_x, mouse_y;
+                glfwGetCursorPos(window_ptr, &mouse_x, &mouse_y);
+                app.input_manager.on_mouse_button(button, action, static_cast<f32>(mouse_x), static_cast<f32>(mouse_y));
+            });
+        glfwSetKeyCallback(
+            glfw_window_ptr,
+            [](GLFWwindow * window_ptr, i32 key, i32, i32 action, i32)
+            {
+                auto & app = *reinterpret_cast<AppWindow *>(glfwGetWindowUserPointer(window_ptr));
+                app.input_manager.on_key(key, action);
+            });
+
+        glfwSetScrollCallback(
+            glfw_window_ptr,
+            [](GLFWwindow * window_ptr, f64 x, f64 y)
+            {
+                auto & app = *reinterpret_cast<AppWindow *>(glfwGetWindowUserPointer(window_ptr));
+                app.input_manager.on_scroll(static_cast<f32>(x), static_cast<f32>(y));
+            });
     }
 
     ~AppWindow() {
@@ -89,10 +126,22 @@ struct AppWindow{
         return glfwWindowShouldClose(glfw_window_ptr);
     }
 
-    inline void update() const
+    inline bool update() const
     {
         glfwPollEvents();
         glfwSwapBuffers(glfw_window_ptr);
+
+        if(should_close())
+        {
+            return false;
+        }
+
+        if(minimized)
+        {
+            return false;
+        }
+
+        return true; 
     }
 
     inline GLFWwindow* get_glfw_window() const{
@@ -102,4 +151,10 @@ struct AppWindow{
     inline bool should_close() {
         return glfwWindowShouldClose(glfw_window_ptr);
     }
+
+    inline void window_close() {
+        glfwSetWindowShouldClose(glfw_window_ptr, GLFW_TRUE);
+    }
 };
+
+BB_NAMESPACE_END

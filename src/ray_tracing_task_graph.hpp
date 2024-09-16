@@ -80,10 +80,10 @@ struct RayTracingTaskGraph
     ray_tracing_task_graph.execute({});
   }
 
-  void update_resources(daxa::ImageId swapchain_image, daxa::BufferId camera, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs)
+  void update_resources(daxa::ImageId swapchain_image, CameraManager& cam_mngr, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs)
   {
     task_swapchain_image.set_images({.images = std::array{swapchain_image}});
-    task_camera_buffer.set_buffers({.buffers = std::array{camera}});
+    task_camera_buffer.set_buffers({.buffers = std::array{cam_mngr.camera_buffer}});
     task_tlas.set_tlas({.tlas = std::array{tlas}});
     task_rigid_bodies.set_buffers({.buffers = std::array{rigid_bodies}});
     task_aabbs.set_buffers({.buffers = std::array{aabbs}});
