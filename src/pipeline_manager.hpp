@@ -38,6 +38,11 @@ struct PipelineManager{
     return pipeline_manager.add_compute_pipeline(info).value();
   }
 
+  auto reload() -> daxa::PipelineReloadResult
+  {
+    return pipeline_manager.reload_all();
+  }
+
 };
 
 BB_NAMESPACE_END

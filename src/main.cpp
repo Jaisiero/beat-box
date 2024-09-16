@@ -27,49 +27,60 @@ int main(int argc, char const *argv[])
   input_manager.create(camera_manager);
 
   auto ray_tracing_pipeline = pipeline_manager.create_ray_tracing(MainRayTracingPipeline{}.info);
-  RayTracingSBT rt_pipeline_sbt(ray_tracing_pipeline, gpu.device);
+  RayTracingSBT rt_pipeline_SBT(ray_tracing_pipeline, gpu.device);
 
   AccelerationStructureManager accel_struct_mngr(gpu.device);
   accel_struct_mngr.create();
 
-  RayTracingTaskGraph loop_TG("RT TaskGraph", gpu, {
-      .ray_tracing_pipeline = ray_tracing_pipeline,
-      .shader_binding_table = rt_pipeline_sbt.build_sbt()
-  });
+  RayTracingTaskGraph loop_TG(gpu);
+  loop_TG.create("Ray Tracing Task Graph", RayTracingParams{ray_tracing_pipeline, rt_pipeline_SBT.build_SBT()});
 
   {
     scene_manager.load_scene();
     // TODO: Handle error
-    if(!accel_struct_mngr.build_accel_structs(scene_manager.rigid_bodies, scene_manager.aabb)) return -1;
+    if (!accel_struct_mngr.build_accel_structs(scene_manager.rigid_bodies, scene_manager.aabb))
+      return -1;
     accel_struct_mngr.build_accel_struct_execute();
     gpu.synchronize();
   }
 
   while (!window.should_close())
-  { 
-      if(!window.update()) continue;
+  {
+    if (!window.update())
+      continue;
 
-      if (window.swapchain_out_of_date)
-      {
-          gpu.swapchain_resize();
-          window.swapchain_out_of_date = false;
-          loop_TG.SBT = rt_pipeline_sbt.rebuild_sbt();
-      }
+    if (window.swapchain_out_of_date)
+    {
+      gpu.swapchain_resize();
+      window.swapchain_out_of_date = false;
+    }
 
-      auto swapchain_image = gpu.swapchain_acquire_next_image();
-      if (!swapchain_image.is_empty())
-      {
-          camera_manager->update(gpu.swapchain_get_extent());
-          loop_TG.update_resources(swapchain_image, *camera_manager, accel_struct_mngr.tlas, accel_struct_mngr.rigid_body_buffer, accel_struct_mngr.primitive_buffer);
-          loop_TG.execute();
-          gpu.garbage_collector();
+    auto handle_reload_result = [&](daxa::PipelineReloadResult reload_error, std::shared_ptr<daxa::RayTracingPipeline> RT_pipeline, RayTracingSBT& RT_SBT, RayTracingTaskGraph& TG) -> void
+    {
+      if (auto error = daxa::get_if<daxa::PipelineReloadError>(&reload_error)) {
+            std::cout << "Failed to reload " << error->message << std::endl;
+      } else if (daxa::get_if<daxa::PipelineReloadSuccess>(&reload_error)) {
+        TG.destroy();
+        TG.create("Ray Tracing Task Graph", RayTracingParams{RT_pipeline, RT_SBT.rebuild_SBT()});
+        std::cout << "Successfully reloaded!" << std::endl;
       }
+    };
+
+    auto swapchain_image = gpu.swapchain_acquire_next_image();
+    if (!swapchain_image.is_empty())
+    {
+      handle_reload_result(pipeline_manager.reload(), ray_tracing_pipeline, rt_pipeline_SBT, loop_TG);
+      
+      camera_manager->update(gpu.swapchain_get_extent());
+      loop_TG.update_resources(swapchain_image, *camera_manager, accel_struct_mngr.tlas, accel_struct_mngr.rigid_body_buffer, accel_struct_mngr.primitive_buffer);
+      loop_TG.execute();
+      gpu.garbage_collector();
+    }
   }
 
   accel_struct_mngr.destroy();
   input_manager.destroy();
   camera_manager->destroy();
-
 
   return 0;
 }

@@ -34,6 +34,9 @@ DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_DECL_TASK_HEAD_END
 
+static const daxa_f32 T_MIN = 1e-3f;
+static const daxa_f32 T_MAX = 1e9f;
+static const daxa_f32 PI = 3.14159265359f;
 
 
 struct PushConstants
@@ -80,6 +83,8 @@ daxa_f32mat3x4 rigid_body_get_transform_matrix(const RigidBody &rigid_body) {
 struct HitPayload
 {
   daxa_f32vec3 hit_value;
+  daxa_f32vec3 position;
+  daxa_f32vec3 normal;
 };
 
 struct ShadowRayPayload
@@ -133,6 +138,25 @@ daxa_f32mat4x4 Convert3x4To4x4(
     obj_to_world_4x4[3] = daxa_f32vec4(obj_to_world_4x3[3], 1.0f);
 
     return obj_to_world_4x4;
+}
+
+
+daxa_f32vec3 compute_diffuse(daxa_f32vec3 mat_color, daxa_f32vec3 normal, daxa_f32vec3 light_dir)
+{
+    daxa_f32 NdotL = max(dot(normal, light_dir), 0.0f);
+    return mat_color * NdotL;
+}
+
+daxa_f32vec3 compute_specular(daxa_f32 shininess, daxa_f32vec3 mat_specular, daxa_f32vec3 view_dir, daxa_f32vec3 normal, daxa_f32vec3 light_dir) {
+    
+  daxa_f32 _shininess = max(shininess, 4.0f);
+  
+  const daxa_f32 energy_conservation = (_shininess + 2.0f) / (2.0f * PI);
+  daxa_f32vec3 V = normalize(-view_dir);
+  daxa_f32vec3 R = reflect(-light_dir, normal);
+  daxa_f32 VdotR = max(dot(V, R), 0.0f);
+  daxa_f32 specular = pow(VdotR, _shininess) * energy_conservation;
+  return mat_specular * specular;
 }
 
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG

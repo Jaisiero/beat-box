@@ -5,9 +5,7 @@
   const daxa_u32vec2 thread_idx = DispatchRaysIndex().xy;
   const daxa_u32vec2 rt_size = DispatchRaysDimensions().xy;
 
-  HitPayload payload = {daxa_f32vec3(0.0)};
-
-  payload.hit_value = daxa_f32vec3(1.0, 0.0, 0.0);
+  HitPayload payload = {daxa_f32vec3(1.0, 1.0, 1.0), daxa_f32vec3(0.0, 0.0, 0.0), daxa_f32vec3(0.0, 0.0, 0.0)};
 
   // Camera setup
   daxa_f32mat4x4 inv_view = Ptr<CameraView>(p.task_head.camera).inv_view;
@@ -31,10 +29,68 @@
   payload.shadow = 1.0f;
 }
 
+static const daxa_f32vec3 light_position = daxa_f32vec3(2, 5, -3);
+static const daxa_f32vec3 light_intensity = daxa_f32vec3(2.5);
+static const daxa_f32vec3 material_color = daxa_f32vec3(0.5, 0.0, 0.5);
+static const daxa_f32vec3 material_specular = daxa_f32vec3(0.0, 0.5, 1.0);
+static const daxa_f32 shininess = 10.0;
+
 [shader("closesthit")] void closest_hit(inout HitPayload payload,
                                             in MyAttributes attr)
 {
-  payload.hit_value = daxa_f32vec3(0.0, 1.0, 0.0);
+  daxa_f32vec3 hit_location = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+
+  payload.position = hit_location;
+
+  daxa_u32 prim_index = PrimitiveIndex();
+
+  daxa_f32mat4x4 obj2world = transpose(Convert3x4To4x4(ObjectToWorld4x3()));
+
+  Aabb aabb = p.task_head.aabbs[prim_index];
+
+  daxa_f32vec3 center = (aabb.min + aabb.max) * 0.5;
+
+  center = mul(obj2world, daxa_f32vec4(center, 1.0)).xyz;
+
+  // Computing the normal at hit position
+  daxa_f32vec3 normal = normalize(hit_location - center);
+
+  // cube normal
+  {
+    daxa_f32vec3  abs_normal = abs(normal);
+    daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
+    normal     = (max_component == abs_normal.x) ?
+                 daxa_f32vec3(sign(normal.x), 0, 0) :
+                 (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) : daxa_f32vec3(0, 0, sign(normal.z));
+  }
+
+  payload.normal = normal;
+
+  // Vector toward the light
+  daxa_f32vec3 L = normalize(light_position - daxa_f32vec3(0));
+
+  // Diffuse
+  daxa_f32vec3 diffuse = compute_diffuse(material_color, normal, L);
+  daxa_f32vec3 specular = daxa_f32vec3(0);
+  daxa_f32 attenuation = 0.5;
+
+  // Tracing shadow ray only if the light is visible from the surface
+  if (dot(normal, L) > 0)
+  {
+    daxa_f32vec3 ray_dir = L;
+    RayDesc ray = {hit_location, T_MIN, ray_dir, T_MAX};
+    daxa_u32 flags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE  | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER;
+    ShadowRayPayload shadowPayload = { 0.0f };
+
+    TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), flags, ~0, 1, 0, 0, ray, shadowPayload);
+
+    let shadow_result = (shadowPayload.shadow);
+
+    attenuation =  1.0 - shadow_result;
+    specular = compute_specular(shininess, material_specular, WorldRayDirection(), normal, L);
+  }
+
+  payload.hit_value = daxa_f32vec3(light_intensity * attenuation * (diffuse + specular));
 }
 
 [shader("intersection")] void intersection() {
@@ -45,10 +101,10 @@
   // Get Aabb
   Aabb aabb = p.task_head.aabbs[prim_index];
 
-  daxa_f32mat4x4 obj_to_world = transpose(Convert3x4To4x4(ObjectToWorld4x3()));
+  daxa_f32mat4x4 obj2world = transpose(Convert3x4To4x4(ObjectToWorld4x3()));
 
-  aabb.min = mul(obj_to_world, daxa_f32vec4(aabb.min, 1.0)).xyz;
-  aabb.max = mul(obj_to_world, daxa_f32vec4(aabb.max, 1.0)).xyz;
+  aabb.min = mul(obj2world, daxa_f32vec4(aabb.min, 1.0)).xyz;
+  aabb.max = mul(obj2world, daxa_f32vec4(aabb.max, 1.0)).xyz;
 
   THit = hitAabb(aabb, {WorldRayOrigin(), WorldRayDirection()});
 

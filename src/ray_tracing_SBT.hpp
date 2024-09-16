@@ -22,10 +22,10 @@ struct RayTracingSBT
 
   ~RayTracingSBT()
   {
-    free_sbt();
+    free_SBT();
   };
 
-  auto free_sbt(daxa::RayTracingPipeline::SbtPair &sbt) -> void
+  auto free_SBT(daxa::RayTracingPipeline::SbtPair &sbt) -> void
   {
     if(device.is_valid())
     {
@@ -40,17 +40,17 @@ struct RayTracingSBT
     }
   };
 
-  [[nodiscard]] auto rebuild_sbt() -> daxa::RayTracingShaderBindingTable
+  [[nodiscard]] auto rebuild_SBT() -> daxa::RayTracingShaderBindingTable
   {
     if (!sbt_pair.buffer.is_empty())
     {
-      free_sbt();
+      free_SBT();
     }
     sbt_pair = ray_tracing_pipeline->create_default_sbt();
-    return build_sbt();
+    return build_SBT();
   }
 
-  [[nodiscard]] auto build_sbt() -> daxa::RayTracingShaderBindingTable
+  [[nodiscard]] auto build_SBT() -> daxa::RayTracingShaderBindingTable
   {
     return {
         .raygen_region = sbt_pair.entries.group_regions.at(0).region,
@@ -61,9 +61,9 @@ struct RayTracingSBT
   };
 private:
 
-  auto free_sbt() -> void
+  auto free_SBT() -> void
   {
-    free_sbt(sbt_pair);
+    free_SBT(sbt_pair);
   };
 };
 

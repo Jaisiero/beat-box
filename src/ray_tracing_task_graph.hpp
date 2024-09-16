@@ -9,7 +9,7 @@ struct RayTracingTask : RayTracingTaskHead::Task
   AttachmentViews views = {};
   std::shared_ptr<daxa::RayTracingPipeline> pipeline = {};
   daxa::RayTracingShaderBindingTable SBT;
-  
+
   void callback(daxa::TaskInterface ti)
   {
     auto const image_info = ti.device.info_image(ti.get(RayTracingTask::AT.swapchain).ids[0]).value();
@@ -25,10 +25,9 @@ struct RayTracingTask : RayTracingTaskHead::Task
 };
 
 struct RayTracingParams
-{ 
+{
   std::shared_ptr<daxa::RayTracingPipeline> ray_tracing_pipeline;
   daxa::RayTracingShaderBindingTable shader_binding_table;
-  daxa::BufferId camera;
 };
 
 struct RayTracingTaskGraph
@@ -39,12 +38,24 @@ struct RayTracingTaskGraph
   daxa::TaskTlas task_tlas{{.name = "tlas"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "rigid_bodies"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "aabbs"}};
-  std::shared_ptr<daxa::RayTracingPipeline> pipeline;
-  daxa::RayTracingShaderBindingTable SBT;
 
-  explicit RayTracingTaskGraph(char const * RT_TG_name, GPUcontext &gpu, RayTracingParams params) : pipeline(params.ray_tracing_pipeline), SBT(params.shader_binding_table)
+  GPUcontext &gpu;
+
+  bool initialized = false;
+
+  explicit RayTracingTaskGraph(GPUcontext &gpu) : gpu(gpu)
   {
-    task_camera_buffer.set_buffers({.buffers = std::array{params.camera}});
+  }
+
+  ~RayTracingTaskGraph() {}
+
+  bool create(char const *RT_TG_name, RayTracingParams params)
+  {
+    if (initialized)
+    {
+      return false;
+    }
+
     ray_tracing_task_graph = daxa::TaskGraph({
         .device = gpu.device,
         .swapchain = gpu.swapchain,
@@ -66,8 +77,8 @@ struct RayTracingTaskGraph
             daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies, task_rigid_bodies),
             daxa::attachment_view(RayTracingTaskHead::AT.aabbs, task_aabbs),
         },
-        .pipeline = pipeline,
-        .SBT = SBT,
+        .pipeline = params.ray_tracing_pipeline,
+        .SBT = params.shader_binding_table,
     });
 
     ray_tracing_task_graph.submit({});
@@ -75,12 +86,20 @@ struct RayTracingTaskGraph
     ray_tracing_task_graph.complete({});
   }
 
+  void destroy()
+  {
+    if (initialized)
+    {
+      initialized = false;
+    }
+  }
+
   void execute()
   {
     ray_tracing_task_graph.execute({});
   }
 
-  void update_resources(daxa::ImageId swapchain_image, CameraManager& cam_mngr, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs)
+  void update_resources(daxa::ImageId swapchain_image, CameraManager &cam_mngr, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs)
   {
     task_swapchain_image.set_images({.images = std::array{swapchain_image}});
     task_camera_buffer.set_buffers({.buffers = std::array{cam_mngr.camera_buffer}});
