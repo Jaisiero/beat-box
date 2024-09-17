@@ -1,22 +1,9 @@
 #pragma once
 
 #include "defines.hpp"
+#include "task_manager.hpp"
 
 BB_NAMESPACE_BEGIN
-
-
-struct UpdateInstancesTask : UpdateInstancesTaskHead::Task
-{
-  AttachmentViews views = {};
-  std::shared_ptr<daxa::ComputePipeline> pipeline = {};
-
-  void callback(daxa::TaskInterface ti)
-  {
-    ti.recorder.set_pipeline(*pipeline);
-    ti.recorder.push_constant(UpdateInstancesPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(UpdateInstancesTask::AT.dispatch_buffer).ids[0], .offset = 0});
-  };
-};
 
 struct AccelerationStructureManager
 {
@@ -589,16 +576,27 @@ private:
     TLAS_TG.use_persistent_buffer(task_aabb_buffer);
     TLAS_TG.use_persistent_blas(task_blas);
     TLAS_TG.use_persistent_tlas(task_tlas);
-    TLAS_TG.add_task(UpdateInstancesTask{
-        .views = std::array{
-            daxa::attachment_view(UpdateInstancesTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
-            daxa::attachment_view(UpdateInstancesTaskHead::AT.sim_config, task_sim_config),
-            daxa::attachment_view(UpdateInstancesTaskHead::AT.blas_instance_data, task_blas_instance_data),
-            daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_bodies, task_rigid_body_buffer),
-            daxa::attachment_view(UpdateInstancesTaskHead::AT.aabbs, task_aabb_buffer),
-        },
-        .pipeline = update_AS_pipeline,
-    });
+
+    auto user_callback = [update_AS_pipeline](daxa::TaskInterface ti, auto& self) {
+        ti.recorder.set_pipeline(*update_AS_pipeline);
+        ti.recorder.push_constant(UpdateInstancesPushConstants{.task_head = ti.attachment_shader_blob});
+        ti.recorder.dispatch_indirect({
+            .indirect_buffer = ti.get(UpdateInstancesTaskHead::AT.dispatch_buffer).ids[0],
+            .offset = 0});
+    };
+
+    // Instantiate the task using the template class
+    TaskTemplate<UpdateInstancesTaskHead::Task, decltype(user_callback)> task(std::array{
+          daxa::attachment_view(UpdateInstancesTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+          daxa::attachment_view(UpdateInstancesTaskHead::AT.sim_config, task_sim_config),
+          daxa::attachment_view(UpdateInstancesTaskHead::AT.blas_instance_data, task_blas_instance_data),
+          daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_bodies, task_rigid_body_buffer),
+          daxa::attachment_view(UpdateInstancesTaskHead::AT.aabbs, task_aabb_buffer),
+      }, user_callback);
+
+    // Add the task to the task graph
+    TLAS_TG.add_task(task);
+
     TLAS_TG.add_task({
         .attachments = {
             daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_rigid_body_buffer),

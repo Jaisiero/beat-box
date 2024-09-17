@@ -5,19 +5,6 @@
 
 BB_NAMESPACE_BEGIN
 
-struct RigidBodySimTask : RigidBodySimTaskHead::Task
-{
-  AttachmentViews views = {};
-  std::shared_ptr<daxa::ComputePipeline> pipeline = {};
-
-  void callback(daxa::TaskInterface ti)
-  {
-    ti.recorder.set_pipeline(*pipeline);
-    ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySimTask::AT.dispatch_buffer).ids[0], .offset = 0});
-  };
-};
-
 struct RigidBodyManager{
   // Device reference
   daxa::Device& device;
@@ -77,15 +64,22 @@ struct RigidBodyManager{
     rigid_body_task_graph.use_persistent_buffer(task_rigid_bodies);
     rigid_body_task_graph.use_persistent_buffer(task_aabbs);
 
-    rigid_body_task_graph.add_task(RigidBodySimTask{
-      .views = std::array{
+    auto user_callback = [pipeline](daxa::TaskInterface ti, auto& self) {
+        ti.recorder.set_pipeline(*pipeline);
+        ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
+        ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySimTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
+    };
+
+    // Instantiate the task using the template class
+    TaskTemplate<RigidBodySimTaskHead::Task, decltype(user_callback)> task(std::array{
         daxa::attachment_view(RigidBodySimTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
         daxa::attachment_view(RigidBodySimTaskHead::AT.sim_config, task_sim_config),
         daxa::attachment_view(RigidBodySimTaskHead::AT.rigid_bodies, task_rigid_bodies),
         daxa::attachment_view(RigidBodySimTaskHead::AT.aabbs, task_aabbs),
-      },
-      .pipeline = pipeline,
-    });
+      }, user_callback);
+
+    // Add the task to the task graph
+    rigid_body_task_graph.add_task(task);
 
     rigid_body_task_graph.submit({});
     rigid_body_task_graph.complete({});
