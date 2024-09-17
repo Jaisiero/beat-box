@@ -4,6 +4,20 @@
 
 BB_NAMESPACE_BEGIN
 
+
+struct UpdateInstancesTask : UpdateInstancesTaskHead::Task
+{
+  AttachmentViews views = {};
+  std::shared_ptr<daxa::ComputePipeline> pipeline = {};
+
+  void callback(daxa::TaskInterface ti)
+  {
+    ti.recorder.set_pipeline(*pipeline);
+    ti.recorder.push_constant(UpdateInstancesPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(UpdateInstancesTask::AT.dispatch_buffer).ids[0], .offset = 0});
+  };
+};
+
 struct AccelerationStructureManager
 {
 
@@ -93,6 +107,12 @@ struct AccelerationStructureManager
 
   // TaskGraph for building acceleration structures
   daxa::TaskGraph build_AS_task_graph;
+  // TaskGraph for updating acceleration structures
+  daxa::TaskGraph update_TLAS_TG;
+
+  daxa::TaskBuffer task_dispatch_buffer{{.name = "dispatch_buffer"}};
+  daxa::TaskBuffer task_sim_config{{.name = "sim_config"}};
+  daxa::TaskBuffer task_blas_instance_data{{.name = "blas_instance_data"}};
 
   explicit AccelerationStructureManager(daxa::Device &device) : device(device)
   {
@@ -107,7 +127,7 @@ struct AccelerationStructureManager
     destroy();
   }
 
-  bool create()
+  bool create(std::shared_ptr<daxa::ComputePipeline> update_pipeline)
   {
     if (device.is_valid() && !initialized)
     {
@@ -179,7 +199,9 @@ struct AccelerationStructureManager
       // Set the buffers for the tasks
       task_rigid_body_buffer.set_buffers({.buffers = std::array{rigid_body_buffer}});
       task_aabb_buffer.set_buffers({.buffers = std::array{primitive_buffer}});
+      task_blas_instance_data.set_buffers({.buffers = std::array{blas_instances_buffer}});
 
+      // Task Build TLAS
       build_AS_task_graph = daxa::TaskGraph({
           .device = device,
           .name = "build_AS_task_graph",
@@ -187,6 +209,15 @@ struct AccelerationStructureManager
       record_accel_struct_tasks(build_AS_task_graph);
       build_AS_task_graph.submit({});
       build_AS_task_graph.complete({});
+
+      // Task Update TLAS
+      update_TLAS_TG = daxa::TaskGraph({
+          .device = device,
+          .name = "update_TLAS_TG",
+      });
+      record_update_TLAS_tasks(update_TLAS_TG, update_pipeline);
+      update_TLAS_TG.submit({});
+      update_TLAS_TG.complete({});
 
       initialized = true;
     }
@@ -237,7 +268,7 @@ struct AccelerationStructureManager
     proc_blas_scratch_offset = 0;
   }
 
-  void build_accel_struct_execute()
+  void build_AS()
   {
     build_AS_task_graph.execute({});
   }
@@ -418,15 +449,81 @@ struct AccelerationStructureManager
     return true;
   }
 
+  void update_TLAS()
+  {
+    update_TLAS_TG.execute({});
+  }
+
+  bool update()
+  {
+    if(!initialized)
+    {
+      return false;
+    }
+
+    // Destroy TLAS
+    if(!tlas.is_empty())
+    {
+      device.destroy_tlas(tlas);
+    }
+
+    tlas = device.create_tlas({
+        .size = AVERAGE_AS_SIZE,
+        .name = "tlas",
+    });
+
+    tlas_info[0] = {
+        .data = device.device_address(blas_instances_buffer).value(),
+        .count = current_rigid_body_count,
+        .is_data_array_of_pointers = false,
+        .flags = {},
+    };
+
+    // BUILDING TLAS
+    tlas_build_info = {
+        .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_BUILD,
+        .dst_tlas = {},
+        .instances = tlas_info,
+        .scratch_data = device.device_address(proc_tlas_scratch_buffer).value(),
+    };
+
+    // Get the build sizes
+    tlas_build_sizes = device.tlas_build_sizes(tlas_build_info);
+
+    // Set the scratch offset
+    tlas_build_info.scratch_data = device.device_address(proc_tlas_scratch_buffer).value();
+
+    // Set the TLAS buffer
+    tlas_build_info.dst_tlas = tlas;
+
+    // Set Task TLAS
+    task_tlas.set_tlas({.tlas = std::array{tlas}});
+
+    return true;
+  }
+
+  bool update_TLAS_resources(daxa::BufferId dispatch_buffer, daxa::BufferId sim_config)
+  {
+    if(!initialized)
+    {
+      return !initialized;
+    }
+
+    task_dispatch_buffer.set_buffers({.buffers = std::array{dispatch_buffer}});
+    task_sim_config.set_buffers({.buffers = std::array{sim_config}});
+
+    return initialized;
+  }
+
 
 private: 
-  void record_accel_struct_tasks(daxa::TaskGraph &build_AS_task_graph)
+  void record_accel_struct_tasks(daxa::TaskGraph &AS_TG)
   {
-    build_AS_task_graph.use_persistent_buffer(task_rigid_body_buffer);
-    build_AS_task_graph.use_persistent_buffer(task_aabb_buffer);
-    build_AS_task_graph.use_persistent_blas(task_blas);
-    build_AS_task_graph.use_persistent_tlas(task_tlas);
-    build_AS_task_graph.add_task({
+    AS_TG.use_persistent_buffer(task_rigid_body_buffer);
+    AS_TG.use_persistent_buffer(task_aabb_buffer);
+    AS_TG.use_persistent_blas(task_blas);
+    AS_TG.use_persistent_tlas(task_tlas);
+    AS_TG.add_task({
         .attachments = {
             daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_rigid_body_buffer),
             daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_aabb_buffer),
@@ -452,8 +549,9 @@ private:
         },
         .name = "copy rigid bodies and primitives",
     });
-    build_AS_task_graph.add_task({
+    AS_TG.add_task({
         .attachments = {
+            daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_rigid_body_buffer),
             daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_aabb_buffer),
             daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_WRITE, task_blas),
         },
@@ -466,7 +564,7 @@ private:
         },
         .name = "blas build",
     });
-    build_AS_task_graph.add_task({
+    AS_TG.add_task({
         .attachments = {
             daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_READ, task_blas),
             daxa::inl_attachment(daxa::TaskTlasAccess::BUILD_WRITE, task_tlas),
@@ -479,6 +577,43 @@ private:
           });
         },
         .name = "tlas build",
+    });
+  }
+
+  void record_update_TLAS_tasks(daxa::TaskGraph &TLAS_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline)
+  {
+    TLAS_TG.use_persistent_buffer(task_dispatch_buffer);
+    TLAS_TG.use_persistent_buffer(task_sim_config);
+    TLAS_TG.use_persistent_buffer(task_blas_instance_data);
+    TLAS_TG.use_persistent_buffer(task_rigid_body_buffer);
+    TLAS_TG.use_persistent_buffer(task_aabb_buffer);
+    TLAS_TG.use_persistent_blas(task_blas);
+    TLAS_TG.use_persistent_tlas(task_tlas);
+    TLAS_TG.add_task(UpdateInstancesTask{
+        .views = std::array{
+            daxa::attachment_view(UpdateInstancesTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+            daxa::attachment_view(UpdateInstancesTaskHead::AT.sim_config, task_sim_config),
+            daxa::attachment_view(UpdateInstancesTaskHead::AT.blas_instance_data, task_blas_instance_data),
+            daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_bodies, task_rigid_body_buffer),
+            daxa::attachment_view(UpdateInstancesTaskHead::AT.aabbs, task_aabb_buffer),
+        },
+        .pipeline = update_AS_pipeline,
+    });
+    TLAS_TG.add_task({
+        .attachments = {
+            daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_rigid_body_buffer),
+            daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_aabb_buffer),
+            daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_READ, task_blas),
+            daxa::inl_attachment(daxa::TaskTlasAccess::BUILD_WRITE, task_tlas),
+        },
+        .task = [this](daxa::TaskInterface const &ti)
+        {
+          // build tlas
+          ti.recorder.build_acceleration_structures({
+              .tlas_build_infos = std::array{tlas_build_info},
+          });
+        },
+        .name = "tlas update",
     });
   }
 

@@ -14,6 +14,9 @@ using namespace daxa::types;
 
 BB_NAMESPACE_BEGIN
 
+const f32 TIME_STEP = 0.001f;
+const f32 GRAVITY = 9.81f;
+
 enum StageIndex : u32
 {
   RAYGEN,
@@ -52,40 +55,42 @@ std::string to_string(StageIndex index)
   }
 }
 
-auto shader_file_string = "ray_tracing.slang";
+auto RT_shader_file_string = "ray_tracing.slang";
+auto RB_sim_shader_file_string = "RB_sim.slang";
+auto AS_shader_file_string = "AS_mngr.slang";
 
 struct MainRayTracingPipeline
 {
   daxa::ShaderCompileInfo rt_gen_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{shader_file_string},
+      .source = daxa::ShaderFile{RT_shader_file_string},
       .compile_options = {
           .entry_point = to_string(RAYGEN),
       },
   };
 
   daxa::ShaderCompileInfo rt_miss_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{shader_file_string},
+      .source = daxa::ShaderFile{RT_shader_file_string},
       .compile_options = {
           .entry_point = to_string(MISS),
       },
   };
 
   daxa::ShaderCompileInfo rt_miss_shadow_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{shader_file_string},
+      .source = daxa::ShaderFile{RT_shader_file_string},
       .compile_options = {
           .entry_point = to_string(MISS2),
       },
   };
 
   daxa::ShaderCompileInfo rt_closest_hit_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{shader_file_string},
+      .source = daxa::ShaderFile{RT_shader_file_string},
       .compile_options = {
           .entry_point = to_string(CLOSE_HIT),
       },
   };
 
   daxa::ShaderCompileInfo rt_intersection_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{shader_file_string},
+      .source = daxa::ShaderFile{RT_shader_file_string},
       .compile_options = {
           .entry_point = to_string(INTERSECTION),
       },
@@ -152,10 +157,44 @@ struct MainRayTracingPipeline
         .stages = stages,
         .groups = groups,
         .max_ray_recursion_depth = 2,
-        .push_constant_size = sizeof(PushConstants),
+        .push_constant_size = sizeof(RTPushConstants),
         .name = "main ray tracing pipeline",
     };
   }
+};
+
+
+struct RigidBodySim
+{
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = "entry_rigid_body_sim",
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodySimPushConstants),
+      .name = "rigid body simulation",
+  };
+};
+
+
+struct UpdateAccelerationStructures
+{
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{AS_shader_file_string},
+      .compile_options = {
+          .entry_point = "entry_update_acceleration_structures",
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(UpdateInstancesPushConstants),
+      .name = "update acceleration structures",
+  };
 };
 
 BB_NAMESPACE_END

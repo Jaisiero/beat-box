@@ -23,7 +23,7 @@ struct SceneManager
 
   bool load_scene() {
     // TODO: temporary scene
-    rigid_bodies = {{.primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, 0.0, 1.0), .rotation = daxa_f32vec4(1.0, 0.0, 0.0, 0.0)}, {.primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, 2.0, 1.0), .rotation = daxa_f32vec4(1.0, 0.0, 0.0, 0.0)}};
+    rigid_bodies = {{.primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, 0.0, 1.0), .rotation = daxa_f32vec4(1.0, 0.0, 0.0, 0.0), .min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5)}, {.primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, 2.0, 1.0), .rotation = daxa_f32vec4(1.0, 0.0, 0.0, 0.0), .min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5)}};
     aabb = {{.min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5)}, {.min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5)}};
 
     return true;

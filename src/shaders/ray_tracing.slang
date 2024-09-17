@@ -1,5 +1,7 @@
 #include "shared.inl"
 
+[[vk::push_constant]] RTPushConstants p;
+
 [shader("raygeneration")] void ray_generation()
 {
   const daxa_u32vec2 thread_idx = DispatchRaysIndex().xy;

@@ -13,6 +13,8 @@ struct RigidBody
   daxa_u32 primitive_offset;
   daxa_f32vec3 position;
   daxa_f32vec4 rotation;
+  daxa_f32vec3 min;
+  daxa_f32vec3 max;
   // TODO: Add more rigid body properties
 };
 DAXA_DECL_BUFFER_PTR(RigidBody)
@@ -38,10 +40,68 @@ static const daxa_f32 T_MIN = 1e-3f;
 static const daxa_f32 T_MAX = 1e9f;
 static const daxa_f32 PI = 3.14159265359f;
 
+struct SimConfig
+{
+  daxa_u32 rigid_body_count;
+  daxa_f32 dt;
+  daxa_f32 gravity;
+};
+DAXA_DECL_BUFFER_PTR(SimConfig)
 
-struct PushConstants
+struct DispatchBuffer
+{
+  daxa_u32 dispatch_x;
+  daxa_u32 dispatch_y;
+  daxa_u32 dispatch_z;
+};
+DAXA_DECL_BUFFER_PTR(DispatchBuffer)
+
+
+struct RTPushConstants
 {
   DAXA_TH_BLOB(RayTracingTaskHead, task_head)
+};
+
+static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 64;
+
+
+DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
+DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
+DAXA_DECL_TASK_HEAD_END
+
+struct RigidBodySimPushConstants
+{
+  DAXA_TH_BLOB(RigidBodySimTaskHead, task_head)
+};
+
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+// TODO: Add Daxa version of this?
+typedef struct
+{
+    daxa_f32mat3x4 transform;
+    daxa::u32 instance_custom_index : 24;
+    daxa::u32 mask : 8;
+    daxa::u32 instance_shader_binding_table_record_offset : 24;
+    daxa::u32 flags : 8;
+    daxa::u64 blas_device_address;
+} daxa_BlasInstanceData;
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+DAXA_DECL_BUFFER_PTR(daxa_BlasInstanceData)
+
+DAXA_DECL_TASK_HEAD_BEGIN(UpdateInstancesTaskHead)
+DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_RWBufferPtr(daxa_BlasInstanceData), blas_instance_data)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
+DAXA_DECL_TASK_HEAD_END
+
+struct UpdateInstancesPushConstants
+{
+  DAXA_TH_BLOB(UpdateInstancesTaskHead, task_head)
 };
 
 
@@ -50,27 +110,23 @@ daxa_f32mat3x4 rigid_body_get_transform_matrix(const RigidBody &rigid_body) {
     daxa_f32vec3 translation = rigid_body.position;
     daxa_f32vec4 rotation = rigid_body.rotation;
 
-    // // transform quaternion to matrix
-    // daxa_f32 x2 = rotation.x + rotation.x;
-    // daxa_f32 y2 = rotation.y + rotation.y;
-    // daxa_f32 z2 = rotation.z + rotation.z;
-    // daxa_f32 xx = rotation.x * x2;
-    // daxa_f32 xy = rotation.x * y2;
-    // daxa_f32 xz = rotation.x * z2;
-    // daxa_f32 yy = rotation.y * y2;
-    // daxa_f32 yz = rotation.y * z2;
-    // daxa_f32 zz = rotation.z * z2;
-    // daxa_f32 wx = rotation.w * x2;
-    // daxa_f32 wy = rotation.w * y2;
-    // daxa_f32 wz = rotation.w * z2;
+    // transform quaternion to matrix
+    daxa_f32 x2 = rotation.x + rotation.x;
+    daxa_f32 y2 = rotation.y + rotation.y;
+    daxa_f32 z2 = rotation.z + rotation.z;
+    daxa_f32 xx = rotation.x * x2;
+    daxa_f32 xy = rotation.x * y2;
+    daxa_f32 xz = rotation.x * z2;
+    daxa_f32 yy = rotation.y * y2;
+    daxa_f32 yz = rotation.y * z2;
+    daxa_f32 zz = rotation.z * z2;
+    daxa_f32 wx = rotation.w * x2;
+    daxa_f32 wy = rotation.w * y2;
+    daxa_f32 wz = rotation.w * z2;
 
-    // daxa_f32mat3x3 rotation_matrix = daxa_f32mat3x3(daxa_f32vec3(1.0f - (yy + zz), xy - wz, xz + wy),
-    //                                                 daxa_f32vec3(xy + wz, 1.0f - (xx + zz), yz - wx),
-    //                                                 daxa_f32vec3(xz - wy, yz + wx, 1.0f - (xx + yy)));
-
-    daxa_f32mat3x3 rotation_matrix = daxa_f32mat3x3(daxa_f32vec3(1.0f, 0.0f, 0.0f),
-                                                    daxa_f32vec3(0.0f, 1.0f, 0.0f),
-                                                    daxa_f32vec3(0.0f, 0.0f, 1.0f));
+    daxa_f32mat3x3 rotation_matrix = daxa_f32mat3x3(daxa_f32vec3(1.0f - (yy + zz), xy - wz, xz + wy),
+                                                    daxa_f32vec3(xy + wz, 1.0f - (xx + zz), yz - wx),
+                                                    daxa_f32vec3(xz - wy, yz + wx, 1.0f - (xx + yy)));
 
     return daxa_f32mat3x4(daxa_f32vec4(rotation_matrix.x.x, rotation_matrix.y.x, rotation_matrix.z.x, translation.x),
                         daxa_f32vec4(rotation_matrix.x.y, rotation_matrix.y.y, rotation_matrix.z.y, translation.y),
@@ -96,8 +152,6 @@ struct MyAttributes {
     daxa_f32vec3 normal;
     daxa_f32vec3 position;
 };
-
-[[vk::push_constant]] PushConstants p;
 
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG

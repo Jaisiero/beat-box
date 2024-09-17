@@ -9,6 +9,7 @@
 #include "scene_manager.hpp"
 #include "input_manager.hpp"
 #include "camera_manager.hpp"
+#include "rigid_body_manager.hpp"
 
 #include "shared.inl"
 
@@ -22,30 +23,43 @@ int main(int argc, char const *argv[])
   PipelineManager pipeline_manager("Pipeline Manager", gpu.device);
   SceneManager scene_manager("Scene Manager", gpu.device);
   std::shared_ptr<CameraManager> camera_manager = std::make_shared<CameraManager>(gpu.device);
-
-  camera_manager->create("Camera Manager");
-  input_manager.create(camera_manager);
+  AccelerationStructureManager accel_struct_mngr(gpu.device);
+  RayTracingTaskGraph loop_TG(gpu);
+  RigidBodyManager rigid_body_manager(gpu.device);
 
   auto ray_tracing_pipeline = pipeline_manager.create_ray_tracing(MainRayTracingPipeline{}.info);
   RayTracingSBT rt_pipeline_SBT(ray_tracing_pipeline, gpu.device);
 
-  AccelerationStructureManager accel_struct_mngr(gpu.device);
-  accel_struct_mngr.create();
+  auto RB_pipeline = pipeline_manager.create_compute(RigidBodySim{}.info);
+  auto Update_AS = pipeline_manager.create_compute(UpdateAccelerationStructures{}.info);
 
-  RayTracingTaskGraph loop_TG(gpu);
+  // TODO: refactor all this
+  camera_manager->create("Camera Manager");
+  input_manager.create(camera_manager);
   loop_TG.create("Ray Tracing Task Graph", RayTracingParams{ray_tracing_pipeline, rt_pipeline_SBT.build_SBT()});
+  rigid_body_manager.create("Rigid Body Manager", RB_pipeline);
+  accel_struct_mngr.create(Update_AS);
+  accel_struct_mngr.update_TLAS_resources(rigid_body_manager.dispatch_buffer, rigid_body_manager.sim_config);
 
   {
     scene_manager.load_scene();
     // TODO: Handle error
     if (!accel_struct_mngr.build_accel_structs(scene_manager.rigid_bodies, scene_manager.aabb))
       return -1;
-    accel_struct_mngr.build_accel_struct_execute();
+    accel_struct_mngr.build_AS();
     gpu.synchronize();
   }
 
+  // Update simulation info
+  rigid_body_manager.update_dispatch_buffer(scene_manager.rigid_bodies.size());
+  rigid_body_manager.update_resources(accel_struct_mngr.rigid_body_buffer, accel_struct_mngr.primitive_buffer);
+
   while (!window.should_close())
   {
+    rigid_body_manager.simulate();
+    accel_struct_mngr.update();
+    accel_struct_mngr.update_TLAS();
+
     if (!window.update())
       continue;
 
