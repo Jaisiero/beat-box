@@ -28,6 +28,11 @@ struct SceneManager
 
     return true;
   }
+
+
+  daxa_u32 get_rigid_body_count() {
+    return rigid_bodies.size();
+  }
 };
 
 BB_NAMESPACE_END

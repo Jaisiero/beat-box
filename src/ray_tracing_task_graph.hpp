@@ -1,6 +1,10 @@
 #pragma once
 #include "defines.hpp"
 #include <daxa/utils/task_graph.hpp>
+#include "acceleration_structure_manager.hpp"
+#include "camera_manager.hpp"
+#include "rigid_body_manager.hpp"
+#include "ray_tracing_SBT.hpp"
 
 BB_NAMESPACE_BEGIN
 
@@ -18,6 +22,16 @@ struct RendererManager
   bool initialized = false;
   // Task manager reference
   TaskManager &task_manager;
+  // Window reference
+  AppWindow& window;
+  // Camera manager reference
+  std::shared_ptr<CameraManager> camera_manager;
+  // Acceleration structure manager reference
+  AccelerationStructureManager& accel_struct_mngr;
+  // Rigid body manager reference
+  RigidBodyManager& rigid_body_manager;
+  // Ray tracing pipeline
+  RayTracingPipeline RT_pipeline;
 
   // Task graph information for ray tracing
   TaskGraph RT_TG;
@@ -27,7 +41,8 @@ struct RendererManager
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "rigid_bodies"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "aabbs"}};
 
-  explicit RendererManager(GPUcontext &gpu, TaskManager& task_manager) : gpu(gpu), task_manager(task_manager)
+  explicit RendererManager(GPUcontext &gpu, TaskManager& task_manager, AppWindow& window, std::shared_ptr<CameraManager> camera_manager, AccelerationStructureManager& accel_struct_mngr, RigidBodyManager& rigid_body_manager, RayTracingPipeline RT_pipeline)
+      : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), RT_pipeline(RT_pipeline)
   {
   }
 
@@ -115,6 +130,48 @@ struct RendererManager
 
     return true;
   }
+
+
+  void render() {
+    while (!window.should_close())
+    {
+      rigid_body_manager.simulate();
+      accel_struct_mngr.update();
+      accel_struct_mngr.update_TLAS();
+
+      if (!window.update())
+        continue;
+
+      if (window.swapchain_out_of_date)
+      {
+        gpu.swapchain_resize();
+        window.swapchain_out_of_date = false;
+      }
+
+      auto handle_reload_result = [&](daxa::PipelineReloadResult reload_error, std::shared_ptr<daxa::RayTracingPipeline> RT_pipeline, RayTracingPipeline& RT_SBT, RendererManager* TG) -> void
+      {
+        if (auto error = daxa::get_if<daxa::PipelineReloadError>(&reload_error)) {
+              std::cout << "Failed to reload " << error->message << std::endl;
+        } else if (daxa::get_if<daxa::PipelineReloadSuccess>(&reload_error)) {
+          TG->destroy();
+          TG->create("Ray Tracing Task Graph", RT_pipeline, RT_SBT.rebuild_SBT());
+          std::cout << "Successfully reloaded!" << std::endl;
+        }
+      };
+
+      auto swapchain_image = gpu.swapchain_acquire_next_image();
+      if (!swapchain_image.is_empty())
+      {
+        handle_reload_result(task_manager.reload(), RT_pipeline.pipeline, RT_pipeline, this);
+        
+        camera_manager->update(gpu.swapchain_get_extent());
+        update_resources(swapchain_image, *camera_manager, accel_struct_mngr.tlas, accel_struct_mngr.rigid_body_buffer, accel_struct_mngr.primitive_buffer);
+        execute();
+        gpu.garbage_collector();
+      }
+    }
+  }
+
 };
 
 BB_NAMESPACE_END
