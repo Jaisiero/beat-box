@@ -3,11 +3,11 @@
 
 BB_NAMESPACE_BEGIN
 
-struct RayTracingSBT
+struct RayTracingPipeline
 {
 
   // Daxa Ray Tracing Pipeline
-  std::shared_ptr<daxa::RayTracingPipeline> ray_tracing_pipeline;
+  std::shared_ptr<daxa::RayTracingPipeline> pipeline;
 
   // Daxa device
   daxa::Device& device;
@@ -15,12 +15,12 @@ struct RayTracingSBT
   // Shader Binding Table
   daxa::RayTracingPipeline::SbtPair sbt_pair;
 
-  explicit RayTracingSBT(std::shared_ptr<daxa::RayTracingPipeline> ray_tracing_pipeline, daxa::Device &device) : ray_tracing_pipeline(ray_tracing_pipeline), device(device)
+  explicit RayTracingPipeline(std::shared_ptr<daxa::RayTracingPipeline> pipeline, daxa::Device &device) : pipeline(pipeline), device(device)
   {
-    sbt_pair = ray_tracing_pipeline->create_default_sbt();
+    sbt_pair = pipeline->create_default_sbt();
   };
 
-  ~RayTracingSBT()
+  ~RayTracingPipeline()
   {
     free_SBT();
   };
@@ -46,7 +46,7 @@ struct RayTracingSBT
     {
       free_SBT();
     }
-    sbt_pair = ray_tracing_pipeline->create_default_sbt();
+    sbt_pair = pipeline->create_default_sbt();
     return build_SBT();
   }
 

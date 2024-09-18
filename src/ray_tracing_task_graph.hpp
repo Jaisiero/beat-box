@@ -10,7 +10,7 @@ struct RayTracingParams
   daxa::RayTracingShaderBindingTable SBT;
 };
 
-struct RayTracingTaskGraph
+struct RendererManager
 {
   // Gpu context reference
   GPUcontext &gpu;
@@ -27,11 +27,11 @@ struct RayTracingTaskGraph
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "rigid_bodies"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "aabbs"}};
 
-  explicit RayTracingTaskGraph(GPUcontext &gpu, TaskManager& task_manager) : gpu(gpu), task_manager(task_manager)
+  explicit RendererManager(GPUcontext &gpu, TaskManager& task_manager) : gpu(gpu), task_manager(task_manager)
   {
   }
 
-  ~RayTracingTaskGraph() {}
+  ~RendererManager() {}
 
   bool create(char const *RT_TG_name, 
   std::shared_ptr<daxa::RayTracingPipeline> pipeline,
