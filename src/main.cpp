@@ -2,7 +2,7 @@
 #include "defines.hpp"
 #include "window.hpp"
 #include "gpu_context.hpp"
-#include "pipeline_manager.hpp"
+#include "task_manager.hpp"
 #include "ray_tracing_task_graph.hpp"
 #include "ray_tracing_SBT.hpp"
 #include "acceleration_structure_manager.hpp"
@@ -20,23 +20,23 @@ int main(int argc, char const *argv[])
   InputManager input_manager;
   AppWindow window("Beat Box", input_manager, 860, 640);
   GPUcontext gpu("RT device", "Swapchain", window);
-  PipelineManager pipeline_manager("Pipeline Manager", gpu.device);
+  TaskManager task_manager("Pipeline Manager", gpu);
   SceneManager scene_manager("Scene Manager", gpu.device);
   std::shared_ptr<CameraManager> camera_manager = std::make_shared<CameraManager>(gpu.device);
-  AccelerationStructureManager accel_struct_mngr(gpu.device);
-  RayTracingTaskGraph loop_TG(gpu);
-  RigidBodyManager rigid_body_manager(gpu.device);
+  AccelerationStructureManager accel_struct_mngr(gpu.device, task_manager);
+  RayTracingTaskGraph loop_TG(gpu, task_manager);
+  RigidBodyManager rigid_body_manager(gpu.device, task_manager);
 
-  auto ray_tracing_pipeline = pipeline_manager.create_ray_tracing(MainRayTracingPipeline{}.info);
+  auto ray_tracing_pipeline = task_manager.create_ray_tracing(MainRayTracingPipeline{}.info);
   RayTracingSBT rt_pipeline_SBT(ray_tracing_pipeline, gpu.device);
 
-  auto RB_pipeline = pipeline_manager.create_compute(RigidBodySim{}.info);
-  auto Update_AS = pipeline_manager.create_compute(UpdateAccelerationStructures{}.info);
+  auto RB_pipeline = task_manager.create_compute(RigidBodySim{}.info);
+  auto Update_AS = task_manager.create_compute(UpdateAccelerationStructures{}.info);
 
   // TODO: refactor all this
   camera_manager->create("Camera Manager");
   input_manager.create(camera_manager);
-  loop_TG.create("Ray Tracing Task Graph", RayTracingParams{ray_tracing_pipeline, rt_pipeline_SBT.build_SBT()});
+  loop_TG.create("Ray Tracing Task Graph", ray_tracing_pipeline, rt_pipeline_SBT.build_SBT());
   rigid_body_manager.create("Rigid Body Manager", RB_pipeline);
   accel_struct_mngr.create(Update_AS);
   accel_struct_mngr.update_TLAS_resources(rigid_body_manager.dispatch_buffer, rigid_body_manager.sim_config);
@@ -75,7 +75,7 @@ int main(int argc, char const *argv[])
             std::cout << "Failed to reload " << error->message << std::endl;
       } else if (daxa::get_if<daxa::PipelineReloadSuccess>(&reload_error)) {
         TG.destroy();
-        TG.create("Ray Tracing Task Graph", RayTracingParams{RT_pipeline, RT_SBT.rebuild_SBT()});
+        TG.create("Ray Tracing Task Graph", RT_pipeline, RT_SBT.rebuild_SBT());
         std::cout << "Successfully reloaded!" << std::endl;
       }
     };
@@ -83,7 +83,7 @@ int main(int argc, char const *argv[])
     auto swapchain_image = gpu.swapchain_acquire_next_image();
     if (!swapchain_image.is_empty())
     {
-      handle_reload_result(pipeline_manager.reload(), ray_tracing_pipeline, rt_pipeline_SBT, loop_TG);
+      handle_reload_result(task_manager.reload(), ray_tracing_pipeline, rt_pipeline_SBT, loop_TG);
       
       camera_manager->update(gpu.swapchain_get_extent());
       loop_TG.update_resources(swapchain_image, *camera_manager, accel_struct_mngr.tlas, accel_struct_mngr.rigid_body_buffer, accel_struct_mngr.primitive_buffer);
@@ -92,6 +92,7 @@ int main(int argc, char const *argv[])
     }
   }
 
+  rigid_body_manager.destroy();
   accel_struct_mngr.destroy();
   input_manager.destroy();
   camera_manager->destroy();

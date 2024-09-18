@@ -1,7 +1,7 @@
 #pragma once
 
 #include "defines.hpp"
-#include <daxa/utils/task_graph.hpp>
+#include "task_manager.hpp"
 
 BB_NAMESPACE_BEGIN
 
@@ -10,18 +10,22 @@ struct RigidBodyManager{
   daxa::Device& device;
   // Initialization flag
   bool initialized = false;
+  // Task manager reference
+  TaskManager& task_manager;
+
+  TaskGraph RB_TG;
 
   daxa::BufferId dispatch_buffer;
   daxa::BufferId sim_config;
 
   // Task graph information for rigid body simulation
-  daxa::TaskGraph rigid_body_task_graph;  
   daxa::TaskBuffer task_dispatch_buffer{{.initial_buffers = {}, .name = "RB_dispatch_buffer"}};
   daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "RB_aabb_task"}};
 
-  explicit RigidBodyManager(daxa::Device& device) : device(device) {}
+  explicit RigidBodyManager(daxa::Device& device, TaskManager task_manager) : device(device), task_manager(task_manager) {
+  }
 
   ~RigidBodyManager() {
     destroy();
@@ -33,11 +37,6 @@ struct RigidBodyManager{
     {
       return false;
     }
-
-    rigid_body_task_graph = daxa::TaskGraph({
-        .device = device,
-        .name = name,
-    });
 
     dispatch_buffer = device.create_buffer({
         .size = sizeof(daxa_u32vec3),
@@ -59,30 +58,35 @@ struct RigidBodyManager{
       .gravity = -GRAVITY,
     };
 
-    rigid_body_task_graph.use_persistent_buffer(task_dispatch_buffer);
-    rigid_body_task_graph.use_persistent_buffer(task_sim_config);
-    rigid_body_task_graph.use_persistent_buffer(task_rigid_bodies);
-    rigid_body_task_graph.use_persistent_buffer(task_aabbs);
-
     auto user_callback = [pipeline](daxa::TaskInterface ti, auto& self) {
         ti.recorder.set_pipeline(*pipeline);
         ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
         ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySimTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
     };
 
+    using TTask = TaskTemplate<RigidBodySimTaskHead::Task, decltype(user_callback)>;
+
     // Instantiate the task using the template class
-    TaskTemplate<RigidBodySimTaskHead::Task, decltype(user_callback)> task(std::array{
+    TTask task(std::array{
         daxa::attachment_view(RigidBodySimTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
         daxa::attachment_view(RigidBodySimTaskHead::AT.sim_config, task_sim_config),
         daxa::attachment_view(RigidBodySimTaskHead::AT.rigid_bodies, task_rigid_bodies),
         daxa::attachment_view(RigidBodySimTaskHead::AT.aabbs, task_aabbs),
       }, user_callback);
 
-    // Add the task to the task graph
-    rigid_body_task_graph.add_task(task);
+    std::array<TTask, 1> tasks = { task };
 
-    rigid_body_task_graph.submit({});
-    rigid_body_task_graph.complete({});
+    std::array<daxa::TaskBuffer, 4> buffers = {
+        task_dispatch_buffer,
+        task_sim_config,
+        task_rigid_bodies,
+        task_aabbs
+    };
+
+    RB_TG = task_manager.create_task_graph(name, std::span<TTask>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+
+    RB_TG.submit();
+    RB_TG.complete();
 
     return initialized = true;
   }
@@ -107,7 +111,7 @@ struct RigidBodyManager{
       return !initialized;
     }
 
-    rigid_body_task_graph.execute({});
+    RB_TG.execute();
 
     return initialized;
   }

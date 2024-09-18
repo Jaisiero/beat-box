@@ -55,9 +55,13 @@ std::string to_string(StageIndex index)
   }
 }
 
-auto RT_shader_file_string = "ray_tracing.slang";
-auto RB_sim_shader_file_string = "RB_sim.slang";
-auto AS_shader_file_string = "AS_mngr.slang";
+const auto RT_shader_file_string = "ray_tracing.slang";
+const auto RB_sim_shader_file_string = "RB_sim.slang";
+const auto AS_shader_file_string = "AS_mngr.slang";
+
+const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
+const auto RB_sim_pipeline_name = "Rigid Body Simulation";
+const auto AS_update_pipeline_name = "Update Acceleration Structures";
 
 struct MainRayTracingPipeline
 {
@@ -158,7 +162,7 @@ struct MainRayTracingPipeline
         .groups = groups,
         .max_ray_recursion_depth = 2,
         .push_constant_size = sizeof(RTPushConstants),
-        .name = "main ray tracing pipeline",
+        .name = RT_main_pipeline_name,
     };
   }
 };
@@ -176,7 +180,7 @@ struct RigidBodySim
   daxa::ComputePipelineCompileInfo info = {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(RigidBodySimPushConstants),
-      .name = "rigid body simulation",
+      .name = RB_sim_pipeline_name,
   };
 };
 
@@ -193,7 +197,7 @@ struct UpdateAccelerationStructures
   daxa::ComputePipelineCompileInfo info = {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(UpdateInstancesPushConstants),
-      .name = "update acceleration structures",
+      .name = AS_update_pipeline_name,
   };
 };
 
