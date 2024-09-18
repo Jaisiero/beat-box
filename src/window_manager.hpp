@@ -16,14 +16,14 @@ using HWND = void *;
 
 BB_NAMESPACE_BEGIN  
 
-struct AppWindow{
+struct WindowManager{
     GLFWwindow * glfw_window_ptr;
     u32 width, height;
     bool minimized = false;
     bool swapchain_out_of_date = false;
     InputManager& input_manager;
 
-    explicit AppWindow(char const * window_name, InputManager& input_manager,  u32 sx = 800, u32 sy = 600) : input_manager{input_manager}, width{sx}, height{sy} {
+    explicit WindowManager(char const * window_name, InputManager& input_manager,  u32 sx = 800, u32 sy = 600) : input_manager{input_manager}, width{sx}, height{sy} {
         // Initialize GLFW
         glfwInit();
 
@@ -41,7 +41,7 @@ struct AppWindow{
 
         // When the window is resized, update the width and height and mark the swapchain as out of date
         glfwSetWindowSizeCallback(glfw_window_ptr, [](GLFWwindow *window, int size_x, int size_y) {
-            auto* win = static_cast<AppWindow*>(glfwGetWindowUserPointer(window));
+            auto* win = static_cast<WindowManager*>(glfwGetWindowUserPointer(window));
             win->width = static_cast<u32>(size_x);
             win->height = static_cast<u32>(size_y);
             win->swapchain_out_of_date = true;
@@ -52,14 +52,14 @@ struct AppWindow{
             glfw_window_ptr,
             [](GLFWwindow * window_ptr, f64 x, f64 y)
             {
-                auto & app = *reinterpret_cast<AppWindow *>(glfwGetWindowUserPointer(window_ptr));
+                auto & app = *reinterpret_cast<WindowManager *>(glfwGetWindowUserPointer(window_ptr));
                 app.input_manager.on_mouse_move(static_cast<f32>(x), static_cast<f32>(y));
             });
         glfwSetMouseButtonCallback(
             glfw_window_ptr,
             [](GLFWwindow * window_ptr, i32 button, i32 action, i32)
             {
-                auto & app = *reinterpret_cast<AppWindow *>(glfwGetWindowUserPointer(window_ptr));
+                auto & app = *reinterpret_cast<WindowManager *>(glfwGetWindowUserPointer(window_ptr));
                 f64 mouse_x, mouse_y;
                 glfwGetCursorPos(window_ptr, &mouse_x, &mouse_y);
                 app.input_manager.on_mouse_button(button, action, static_cast<f32>(mouse_x), static_cast<f32>(mouse_y));
@@ -68,7 +68,7 @@ struct AppWindow{
             glfw_window_ptr,
             [](GLFWwindow * window_ptr, i32 key, i32, i32 action, i32)
             {
-                auto & app = *reinterpret_cast<AppWindow *>(glfwGetWindowUserPointer(window_ptr));
+                auto & app = *reinterpret_cast<WindowManager *>(glfwGetWindowUserPointer(window_ptr));
                 app.input_manager.on_key(key, action);
             });
 
@@ -76,12 +76,12 @@ struct AppWindow{
             glfw_window_ptr,
             [](GLFWwindow * window_ptr, f64 x, f64 y)
             {
-                auto & app = *reinterpret_cast<AppWindow *>(glfwGetWindowUserPointer(window_ptr));
+                auto & app = *reinterpret_cast<WindowManager *>(glfwGetWindowUserPointer(window_ptr));
                 app.input_manager.on_scroll(static_cast<f32>(x), static_cast<f32>(y));
             });
     }
 
-    ~AppWindow() {
+    ~WindowManager() {
         glfwDestroyWindow(glfw_window_ptr);
         glfwTerminate();
     }

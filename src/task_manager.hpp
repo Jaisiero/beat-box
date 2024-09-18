@@ -112,18 +112,18 @@ struct TaskGraph
 
 struct TaskManager
 {
-  // The device
-  GPUcontext &gpu;
+  // Gpu context
+  std::shared_ptr<GPUcontext> gpu;
   // The pipeline manager
   daxa::PipelineManager pipeline_manager;
   // Task graphs
   // std::map<std::string, TaskGraph> task_graphs;
   std::vector<TaskGraph> task_graphs;
 
-  explicit TaskManager(char const *pipeline_mngr_name, GPUcontext& gpu) : gpu(gpu)
+  explicit TaskManager(char const *pipeline_mngr_name, std::shared_ptr<GPUcontext> gpu) : gpu(gpu)
   {
     pipeline_manager = daxa::PipelineManager({
-        .device = gpu.device,
+        .device = gpu->device,
         .shader_compile_options = {
             .root_paths = paths,
             .language = daxa::ShaderLanguage::SLANG,
@@ -153,8 +153,8 @@ struct TaskManager
   TaskGraph& create_task_graph(char const *name, std::span<daxa::TaskBuffer> buffers, std::span<daxa::TaskImage> images, std::span<daxa::TaskBlas> blases, std::span<daxa::TaskTlas> tlases, bool is_swapchain = false)
   {
     auto TG = TaskGraph(daxa::TaskGraph({
-        .device = gpu.device,
-        .swapchain = is_swapchain? gpu.swapchain : std::optional<daxa::Swapchain>(),
+        .device = gpu->device,
+        .swapchain = is_swapchain? gpu->swapchain : std::optional<daxa::Swapchain>(),
         .name = name,
     }));
     for (auto buffer : buffers)
@@ -181,8 +181,8 @@ struct TaskManager
   std::span<daxa::TaskBuffer> buffers, std::span<daxa::TaskImage> images, std::span<daxa::TaskBlas> blases, std::span<daxa::TaskTlas> tlases, bool is_swapchain = false)
   {
     auto TG = TaskGraph(daxa::TaskGraph({
-        .device = gpu.device,
-        .swapchain = is_swapchain? gpu.swapchain : std::optional<daxa::Swapchain>(),
+        .device = gpu->device,
+        .swapchain = is_swapchain? gpu->swapchain : std::optional<daxa::Swapchain>(),
         .name = name,
     }));
     for (auto buffer : buffers)

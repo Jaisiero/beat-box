@@ -12,7 +12,7 @@ struct AccelerationStructureManager
   // Initialization flag
   bool initialized = false;
   // Task manager reference
-  TaskManager &task_manager;
+  std::shared_ptr<TaskManager> task_manager;
   // Compute pipeline for updating acceleration structures
   std::shared_ptr<daxa::ComputePipeline> update_pipeline;
 
@@ -103,13 +103,13 @@ struct AccelerationStructureManager
   daxa::TaskBuffer task_sim_config{{.name = "sim_config"}};
   daxa::TaskBuffer task_blas_instance_data{{.name = "blas_instance_data"}};
 
-  explicit AccelerationStructureManager(daxa::Device &device, TaskManager task_manager) : device(device), task_manager(task_manager)
+  explicit AccelerationStructureManager(daxa::Device &device, std::shared_ptr<TaskManager> task_manager) : device(device), task_manager(task_manager)
   {
     if (device.is_valid())
     {
       acceleration_structure_scratch_offset_alignment = device.properties().acceleration_structure_properties.value().min_acceleration_structure_scratch_offset_alignment;
 
-      update_pipeline = task_manager.create_compute(UpdateAccelerationStructures{}.info);
+      update_pipeline = task_manager->create_compute(UpdateAccelerationStructures{}.info);
     }
   }
 
@@ -570,7 +570,7 @@ private:
         task_tlas,
     };
 
-    AS_TG = task_manager.create_task_graph("Build Acceleration Structures", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(tlas));
+    AS_TG = task_manager->create_task_graph("Build Acceleration Structures", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(tlas));
   }
 
   void record_update_TLAS_tasks(TaskGraph &TLAS_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline)
@@ -630,7 +630,7 @@ private:
         task_tlas,
     };
 
-    TLAS_TG = task_manager.create_task_graph("Update TLAS",std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(tlas));
+    TLAS_TG = task_manager->create_task_graph("Update TLAS",std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(tlas));
 
     TLAS_TG.add_task(task1);
     TLAS_TG.add_task(task2);

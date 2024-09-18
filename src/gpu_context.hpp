@@ -1,7 +1,7 @@
 #pragma once
 
 #include "defines.hpp"
-#include "window.hpp"
+#include "window_manager.hpp"
 
 BB_NAMESPACE_BEGIN
 
@@ -16,7 +16,7 @@ struct GPUcontext{
   // Swapchain
   daxa::Swapchain swapchain;
 
-  explicit GPUcontext(char const * dev_name, char const * swapchain_name, AppWindow &window) {
+  explicit GPUcontext(char const * dev_name, char const * swapchain_name, WindowManager &window) {
     instance = daxa::create_instance({});
 
     // Create a device

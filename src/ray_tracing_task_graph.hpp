@@ -17,13 +17,13 @@ struct RayTracingParams
 struct RendererManager
 {
   // Gpu context reference
-  GPUcontext &gpu;
+  std::shared_ptr<GPUcontext> gpu;
   // Initialization flag
   bool initialized = false;
   // Task manager reference
-  TaskManager &task_manager;
+  std::shared_ptr<TaskManager> task_manager;
   // Window reference
-  AppWindow& window;
+  WindowManager& window;
   // Camera manager reference
   std::shared_ptr<CameraManager> camera_manager;
   // Acceleration structure manager reference
@@ -31,7 +31,7 @@ struct RendererManager
   // Rigid body manager reference
   RigidBodyManager& rigid_body_manager;
   // Ray tracing pipeline
-  RayTracingPipeline RT_pipeline;
+  std::shared_ptr<RayTracingPipeline> RT_pipeline;
 
   // Task graph information for ray tracing
   TaskGraph RT_TG;
@@ -41,25 +41,25 @@ struct RendererManager
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "rigid_bodies"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "aabbs"}};
 
-  explicit RendererManager(GPUcontext &gpu, TaskManager& task_manager, AppWindow& window, std::shared_ptr<CameraManager> camera_manager, AccelerationStructureManager& accel_struct_mngr, RigidBodyManager& rigid_body_manager, RayTracingPipeline RT_pipeline)
-      : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), RT_pipeline(RT_pipeline)
+  explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, AccelerationStructureManager& accel_struct_mngr, RigidBodyManager& rigid_body_manager)
+      : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager)
   {
   }
 
   ~RendererManager() {}
 
-  bool create(char const *RT_TG_name, 
-  std::shared_ptr<daxa::RayTracingPipeline> pipeline,
-  daxa::RayTracingShaderBindingTable SBT)
+  bool create(char const *RT_TG_name, std::shared_ptr<RayTracingPipeline> pipeline, daxa::RayTracingShaderBindingTable SBT)
   {
     if (initialized)
     {
       return false;
     }
 
-    auto user_callback = [pipeline, SBT](daxa::TaskInterface ti, auto& self) {
+    RT_pipeline = pipeline;
+
+    auto user_callback = [this, SBT](daxa::TaskInterface ti, auto& self) {
         auto const image_info = ti.device.info_image(ti.get(RayTracingTaskHead::AT.swapchain).ids[0]).value();
-        ti.recorder.set_pipeline(*pipeline);
+        ti.recorder.set_pipeline(*RT_pipeline->pipeline);
         ti.recorder.push_constant(RTPushConstants{.task_head = ti.attachment_shader_blob});
         ti.recorder.trace_rays({
             .width = image_info.size.x,
@@ -88,7 +88,7 @@ struct RendererManager
     
     std::array<TTask, 1> tasks = {task1};
 
-    RT_TG = task_manager.create_task_graph(RT_TG_name, std::span<TTask>(tasks), buffers, images, {}, tlases, true);
+    RT_TG = task_manager->create_task_graph(RT_TG_name, std::span<TTask>(tasks), buffers, images, {}, tlases, true);
 
     RT_TG.submit();
     RT_TG.present();
@@ -144,34 +144,35 @@ struct RendererManager
 
       if (window.swapchain_out_of_date)
       {
-        gpu.swapchain_resize();
+        gpu->swapchain_resize();
         window.swapchain_out_of_date = false;
       }
 
-      auto handle_reload_result = [&](daxa::PipelineReloadResult reload_error, std::shared_ptr<daxa::RayTracingPipeline> RT_pipeline, RayTracingPipeline& RT_SBT, RendererManager* TG) -> void
+      auto handle_reload_result = [&](daxa::PipelineReloadResult reload_error, std::shared_ptr<RayTracingPipeline> RT_pipeline, RendererManager* TG) -> void
       {
         if (auto error = daxa::get_if<daxa::PipelineReloadError>(&reload_error)) {
               std::cout << "Failed to reload " << error->message << std::endl;
         } else if (daxa::get_if<daxa::PipelineReloadSuccess>(&reload_error)) {
           TG->destroy();
-          TG->create("Ray Tracing Task Graph", RT_pipeline, RT_SBT.rebuild_SBT());
+          TG->create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->rebuild_SBT());
           std::cout << "Successfully reloaded!" << std::endl;
         }
       };
 
-      auto swapchain_image = gpu.swapchain_acquire_next_image();
+      auto swapchain_image = gpu->swapchain_acquire_next_image();
       if (!swapchain_image.is_empty())
       {
-        handle_reload_result(task_manager.reload(), RT_pipeline.pipeline, RT_pipeline, this);
+        handle_reload_result(task_manager->reload(), RT_pipeline, this);
         
-        camera_manager->update(gpu.swapchain_get_extent());
+        camera_manager->update(gpu->swapchain_get_extent());
         update_resources(swapchain_image, *camera_manager, accel_struct_mngr.tlas, accel_struct_mngr.rigid_body_buffer, accel_struct_mngr.primitive_buffer);
         execute();
-        gpu.garbage_collector();
+        gpu->garbage_collector();
       }
     }
+    gpu->synchronize();
+    gpu->garbage_collector();
   }
-
 };
 
 BB_NAMESPACE_END
