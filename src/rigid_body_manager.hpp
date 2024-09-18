@@ -12,6 +12,8 @@ struct RigidBodyManager{
   bool initialized = false;
   // Task manager reference
   TaskManager& task_manager;
+  // Compute pipeline reference
+  std::shared_ptr<daxa::ComputePipeline> pipeline;
 
   TaskGraph RB_TG;
 
@@ -25,13 +27,17 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "RB_aabb_task"}};
 
   explicit RigidBodyManager(daxa::Device& device, TaskManager task_manager) : device(device), task_manager(task_manager) {
+    if(device.is_valid())
+    {
+      pipeline = task_manager.create_compute(RigidBodySim{}.info);
+    }
   }
 
   ~RigidBodyManager() {
     destroy();
   }
 
-  bool create(char const* name, std::shared_ptr<daxa::ComputePipeline> pipeline)
+  bool create(char const* name)
   {
     if (initialized)
     {
@@ -58,7 +64,7 @@ struct RigidBodyManager{
       .gravity = -GRAVITY,
     };
 
-    auto user_callback = [pipeline](daxa::TaskInterface ti, auto& self) {
+    auto user_callback = [this](daxa::TaskInterface ti, auto& self) {
         ti.recorder.set_pipeline(*pipeline);
         ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
         ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySimTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});

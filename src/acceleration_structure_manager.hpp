@@ -13,6 +13,8 @@ struct AccelerationStructureManager
   bool initialized = false;
   // Task manager reference
   TaskManager &task_manager;
+  // Compute pipeline for updating acceleration structures
+  std::shared_ptr<daxa::ComputePipeline> update_pipeline;
 
   // TODO: temporary
   static constexpr u32 MAX_ACCELERATION_STRUCTURE_COUNT = 1024;
@@ -106,6 +108,8 @@ struct AccelerationStructureManager
     if (device.is_valid())
     {
       acceleration_structure_scratch_offset_alignment = device.properties().acceleration_structure_properties.value().min_acceleration_structure_scratch_offset_alignment;
+
+      update_pipeline = task_manager.create_compute(UpdateAccelerationStructures{}.info);
     }
   }
 
@@ -114,7 +118,7 @@ struct AccelerationStructureManager
     destroy();
   }
 
-  bool create(std::shared_ptr<daxa::ComputePipeline> update_pipeline)
+  bool create()
   {
     if (device.is_valid() && !initialized)
     {

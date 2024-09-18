@@ -43,7 +43,7 @@ struct RayTracingTaskGraph
     }
 
     auto user_callback = [pipeline, SBT](daxa::TaskInterface ti, auto& self) {
-        auto const image_info = ti.device.info_image(ti.get(RayTracingTask::AT.swapchain).ids[0]).value();
+        auto const image_info = ti.device.info_image(ti.get(RayTracingTaskHead::AT.swapchain).ids[0]).value();
         ti.recorder.set_pipeline(*pipeline);
         ti.recorder.push_constant(RTPushConstants{.task_head = ti.attachment_shader_blob});
         ti.recorder.trace_rays({

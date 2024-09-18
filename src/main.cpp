@@ -30,15 +30,12 @@ int main(int argc, char const *argv[])
   auto ray_tracing_pipeline = task_manager.create_ray_tracing(MainRayTracingPipeline{}.info);
   RayTracingSBT rt_pipeline_SBT(ray_tracing_pipeline, gpu.device);
 
-  auto RB_pipeline = task_manager.create_compute(RigidBodySim{}.info);
-  auto Update_AS = task_manager.create_compute(UpdateAccelerationStructures{}.info);
-
   // TODO: refactor all this
   camera_manager->create("Camera Manager");
   input_manager.create(camera_manager);
   loop_TG.create("Ray Tracing Task Graph", ray_tracing_pipeline, rt_pipeline_SBT.build_SBT());
-  rigid_body_manager.create("Rigid Body Manager", RB_pipeline);
-  accel_struct_mngr.create(Update_AS);
+  rigid_body_manager.create("Rigid Body Manager");
+  accel_struct_mngr.create();
   accel_struct_mngr.update_TLAS_resources(rigid_body_manager.dispatch_buffer, rigid_body_manager.sim_config);
 
   {
