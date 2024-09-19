@@ -127,6 +127,7 @@ struct RigidBodyManager{
     }
 
     device.destroy_buffer(sim_config);
+    device.destroy_buffer(collisions);
 
     initialized = false;
   }
@@ -170,6 +171,7 @@ struct RigidBodyManager{
       .rigid_body_count = rigid_body_count,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
+      .collision_count = 0,
     };
 
     return initialized;
