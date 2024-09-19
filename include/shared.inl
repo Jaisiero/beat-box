@@ -6,7 +6,10 @@
 
 #include <math.hpp>
 
+static const daxa_f32 LINEAR_DAMPING = 0.1f;
+static const daxa_f32 ANGULAR_DAMPING = 0.1f;
 
+// RigidBody struct is 156 bytes
 struct RigidBody
 {
   daxa_u32 primitive_count;
@@ -15,7 +18,78 @@ struct RigidBody
   daxa_f32vec4 rotation;
   daxa_f32vec3 min;
   daxa_f32vec3 max;
+  daxa_f32 mass;
+  daxa_f32 inv_mass;
+  daxa_f32vec3 velocity;
+  daxa_f32vec3 omega;
+  daxa_f32vec3 tmp_velocity;
+  daxa_f32vec3 tmp_omega;
+  daxa_f32mat3x3 inv_inertia;
+  daxa_f32 restitution;
+  daxa_f32 friction;
   // TODO: Add more rigid body properties
+  // daxa_f32 drag;
+  // daxa_f32 angular_drag;
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+  [mutating]
+  void advect(Ptr<SimConfig> sim_config) {
+    apply_temporal_velocity();
+    advance(sim_config->dt, LINEAR_DAMPING, ANGULAR_DAMPING);
+    let impulse = this.mass * daxa_f32vec3(0, sim_config->gravity, 0) * sim_config->dt;
+    apply_impulse(impulse, this.position);
+    reset_state();
+  }
+
+  [mutating]
+  void apply_temporal_velocity() {
+    this.velocity += this.tmp_velocity;
+    this.omega += this.tmp_omega;
+  }
+
+  [mutating]
+  void advance(daxa_f32 dt, daxa_f32 linear_damping, daxa_f32 angular_damping) {
+    this.velocity *= exp(-dt * linear_damping);
+    this.position += this.velocity * dt;
+    this.omega *= exp(-dt * angular_damping);
+    this.rotation = apply_angular_velocity(this.rotation, this.omega, dt);
+  }
+
+  [mutating]
+  daxa_f32vec4 apply_angular_velocity(daxa_f32vec4 rotation, daxa_f32vec3 omega, daxa_f32 dt) {
+    daxa_f32 angle = length(omega) * dt;
+    if (angle > 0.0001f) {
+        daxa_f32vec3 axis = normalize(omega);
+        daxa_f32 half_angle = angle / 2.0f;
+        daxa_f32 sin_half_angle = sin(half_angle);
+        daxa_f32 cos_half_angle = cos(half_angle);
+        daxa_f32vec4 q = daxa_f32vec4(axis * sin_half_angle, cos_half_angle);
+        return mul(q, rotation);
+    } else {
+        // For small angles, use approximation
+        daxa_f32vec3 delta_rotation = omega * dt * 0.5f;
+        daxa_f32vec4 q = daxa_f32vec4(delta_rotation, 1.0f);
+        return mul(q, rotation);
+    }
+  }
+
+  [mutating]
+  void apply_impulse(daxa_f32vec3 impulse, daxa_f32vec3 point) {
+    daxa_f32vec3 torque = cross(point - this.position, impulse);
+    daxa_f32vec3 linear_velocity = impulse * this.inv_mass;
+    daxa_f32vec3 angular_velocity = mul(torque, this.inv_inertia);
+
+    this.velocity += linear_velocity;
+    this.omega += angular_velocity;
+  }
+
+  [mutating]
+  void reset_state() {
+    this.tmp_velocity = daxa_f32vec3(0, 0, 0);
+    this.tmp_omega = daxa_f32vec3(0, 0, 0);
+  }
+
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+
 };
 DAXA_DECL_BUFFER_PTR(RigidBody)
 

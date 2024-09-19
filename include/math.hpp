@@ -43,6 +43,11 @@ bool operator<(const daxa_f32vec3& a, const daxa_f32vec3& b)
   return lenght_a < lenght_b;
 }
 
+daxa_f32vec3 operator*(const daxa_f32& a, const daxa_f32vec3& b)
+{
+    return {a * b.x, a * b.y, a * b.z};
+}
+
 daxa_f32mat4x4 daxa_mat4_from_glm_mat4(glm::mat4 const& m)
 {
     return {
@@ -51,6 +56,37 @@ daxa_f32mat4x4 daxa_mat4_from_glm_mat4(glm::mat4 const& m)
         m[2][0], m[2][1], m[2][2], m[2][3],
         m[3][0], m[3][1], m[3][2], m[3][3]
     };
+}
+
+daxa_f32mat3x3 daxa_mat3_from_glm_mat3(glm::mat3 const& m)
+{
+    return {
+        m[0][0], m[0][1], m[0][2],
+        m[1][0], m[1][1], m[1][2],
+        m[2][0], m[2][1], m[2][2]
+    };
+}
+
+auto cuboid_get_inverse_intertia(daxa_f32 mass, daxa_f32vec3 min, daxa_f32vec3 max) -> daxa_f32mat3x3
+{
+    daxa_f32vec3 size = max - min; // (width, height, depth)
+    daxa_f32 w = size.x;
+    daxa_f32 h = size.y;
+    daxa_f32 d = size.z;
+
+    daxa_f32 Ixx = (1.0f / 12.0f) * mass * (h * h + d * d);
+    daxa_f32 Iyy = (1.0f / 12.0f) * mass * (w * w + d * d);
+    daxa_f32 Izz = (1.0f / 12.0f) * mass * (w * w + h * h);
+
+    daxa_f32 inv_Ixx = 1.0f / Ixx;
+    daxa_f32 inv_Iyy = 1.0f / Iyy;
+    daxa_f32 inv_Izz = 1.0f / Izz;
+
+    return daxa_f32mat3x3(
+        daxa_f32vec3(inv_Ixx, 0.0f, 0.0f),
+        daxa_f32vec3(0.0f, inv_Iyy, 0.0f),
+        daxa_f32vec3(0.0f, 0.0f, inv_Izz)
+    );
 }
 
 #else 

@@ -15,7 +15,7 @@
   }
 
   Ptr<RigidBody> rigid_body =
-      Ptr<RigidBody>(p.task_head.rigid_bodies + pixel_i.x);
+      Ptr<RigidBody>(&p.task_head.rigid_bodies[pixel_i.x]);
 
-  rigid_body->position.y += sim_config->dt * sim_config->gravity;
+  rigid_body->advect(sim_config);
 }
