@@ -17,11 +17,10 @@ struct RigidBodyManager{
 
   TaskGraph RB_TG;
 
-  daxa::BufferId dispatch_buffer;
   daxa::BufferId sim_config;
 
   // Task graph information for rigid body simulation
-  daxa::TaskBuffer task_dispatch_buffer{{.initial_buffers = {}, .name = "RB_dispatch_buffer"}};
+  daxa::TaskBuffer task_dispatch_buffer{{.initial_buffers = {}, .name = "RB_dispatch"}};
   daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "RB_aabb_task"}};
@@ -44,14 +43,6 @@ struct RigidBodyManager{
     {
       return false;
     }
-
-    dispatch_buffer = device.create_buffer({
-        .size = sizeof(daxa_u32vec3),
-        .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
-        .name = "RB_dispatch_buffer",
-    });
-
-    *device.buffer_host_address_as<daxa_u32vec3>(dispatch_buffer).value() = daxa_u32vec3(1, 1, 1);
 
     sim_config = device.create_buffer({
         .size = sizeof(SimConfig),
@@ -105,7 +96,6 @@ struct RigidBodyManager{
       return;
     }
 
-    device.destroy_buffer(dispatch_buffer);
     device.destroy_buffer(sim_config);
 
     initialized = false;
@@ -123,7 +113,7 @@ struct RigidBodyManager{
     return initialized;
   }
 
-  bool update_resources(daxa::BufferId rigid_bodies, daxa::BufferId aabbs)
+  bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId rigid_bodies, daxa::BufferId aabbs)
   {
     if (!initialized)
     {
@@ -138,14 +128,12 @@ struct RigidBodyManager{
     return initialized;
   }
 
-  bool update_dispatch_buffer(daxa_u32 rigid_body_count)
+  bool update_sim(daxa_u32 rigid_body_count)
   {
     if (!initialized)
     {
       return !initialized;
     }
-
-    *device.buffer_host_address_as<daxa_u32vec3>(dispatch_buffer).value() = daxa_u32vec3((rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X, 1, 1);
 
     *device.buffer_host_address_as<SimConfig>(sim_config).value() = SimConfig{
       .rigid_body_count = rigid_body_count,

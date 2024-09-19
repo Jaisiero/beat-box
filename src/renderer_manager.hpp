@@ -6,6 +6,7 @@
 #include "rigid_body_manager.hpp"
 #include "ray_tracing_pipeline.hpp"
 #include "scene_manager.hpp"
+#include "status_manager.hpp"
 
 BB_NAMESPACE_BEGIN
 
@@ -35,6 +36,8 @@ struct RendererManager
   std::shared_ptr<RayTracingPipeline> RT_pipeline;
   // Scene manager reference
   std::shared_ptr<SceneManager> scene_manager;
+  // Status manager reference
+  std::shared_ptr<StatusManager> status_manager;
 
   // Task graph information for ray tracing
   TaskGraph RT_TG;
@@ -44,8 +47,8 @@ struct RendererManager
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "rigid_bodies"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "aabbs"}};
 
-  explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager)
-      : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), scene_manager(scene_manager)
+  explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager)
+      : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), scene_manager(scene_manager), status_manager(status_manager)
   {
   }
 
