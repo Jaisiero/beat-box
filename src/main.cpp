@@ -4,7 +4,7 @@
 #include "gpu_context.hpp"
 #include "task_manager.hpp"
 #include "ray_tracing_task_graph.hpp"
-#include "ray_tracing_SBT.hpp"
+#include "ray_tracing_pipeline.hpp"
 #include "acceleration_structure_manager.hpp"
 #include "scene_manager.hpp"
 #include "input_manager.hpp"
@@ -27,16 +27,16 @@ int main(int argc, char const *argv[])
   auto task_manager = std::make_shared<TaskManager>("Pipeline Manager", gpu);
   // Camera manager
   auto camera_manager = std::make_shared<CameraManager>(gpu->device);
-  AccelerationStructureManager accel_struct_mngr(gpu->device, task_manager);
+  auto accel_struct_mngr = std::make_shared<AccelerationStructureManager>(gpu->device, task_manager);
   // Rigid body simulator pipeline
-  RigidBodyManager rigid_body_manager(gpu->device, task_manager);
+  auto rigid_body_manager = std::make_shared<RigidBodyManager>(gpu->device, task_manager);
   // Scene manager
-  SceneManager scene_manager("Scene Manager", gpu->device, accel_struct_mngr, rigid_body_manager);
+  auto scene_manager = std::make_shared<SceneManager>("Scene Manager", gpu->device, accel_struct_mngr, rigid_body_manager);
 
   // Primary tracing pipeline
   auto RT_pipeline = std::make_shared<RayTracingPipeline>(task_manager->create_ray_tracing(MainRayTracingPipeline{}.info), gpu->device);
   // Renderer
-  RendererManager renderer(gpu, task_manager, window, camera_manager, accel_struct_mngr, rigid_body_manager);
+  RendererManager renderer(gpu, task_manager, window, camera_manager, accel_struct_mngr, rigid_body_manager, scene_manager);
 
   // Create camera manager
   camera_manager->create("Camera Manager");
@@ -45,12 +45,12 @@ int main(int argc, char const *argv[])
   // Create task graph
   renderer.create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->build_SBT());
   // Create rigid body simulator
-  rigid_body_manager.create("Rigid Body Manager");
+  rigid_body_manager->create("Rigid Body Manager");
   // Create acceleration structure manager
-  accel_struct_mngr.create();
+  accel_struct_mngr->create();
 
   // Load scene
-  if(!scene_manager.load_scene()) {
+  if(!scene_manager->load_scene()) {
     return -1;
   }
 
@@ -58,8 +58,8 @@ int main(int argc, char const *argv[])
   renderer.render();
 
   // Cleanup
-  rigid_body_manager.destroy();
-  accel_struct_mngr.destroy();
+  rigid_body_manager->destroy();
+  accel_struct_mngr->destroy();
   input_manager.destroy();
   camera_manager->destroy();
 

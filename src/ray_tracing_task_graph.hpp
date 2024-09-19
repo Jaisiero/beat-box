@@ -4,7 +4,8 @@
 #include "acceleration_structure_manager.hpp"
 #include "camera_manager.hpp"
 #include "rigid_body_manager.hpp"
-#include "ray_tracing_SBT.hpp"
+#include "ray_tracing_pipeline.hpp"
+#include "scene_manager.hpp"
 
 BB_NAMESPACE_BEGIN
 
@@ -27,11 +28,13 @@ struct RendererManager
   // Camera manager reference
   std::shared_ptr<CameraManager> camera_manager;
   // Acceleration structure manager reference
-  AccelerationStructureManager& accel_struct_mngr;
+  std::shared_ptr<AccelerationStructureManager> accel_struct_mngr;
   // Rigid body manager reference
-  RigidBodyManager& rigid_body_manager;
+  std::shared_ptr<RigidBodyManager> rigid_body_manager;
   // Ray tracing pipeline
   std::shared_ptr<RayTracingPipeline> RT_pipeline;
+  // Scene manager reference
+  std::shared_ptr<SceneManager> scene_manager;
 
   // Task graph information for ray tracing
   TaskGraph RT_TG;
@@ -41,8 +44,8 @@ struct RendererManager
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "rigid_bodies"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "aabbs"}};
 
-  explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, AccelerationStructureManager& accel_struct_mngr, RigidBodyManager& rigid_body_manager)
-      : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager)
+  explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager)
+      : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), scene_manager(scene_manager)
   {
   }
 
@@ -135,9 +138,9 @@ struct RendererManager
   void render() {
     while (!window.should_close())
     {
-      rigid_body_manager.simulate();
-      accel_struct_mngr.update();
-      accel_struct_mngr.update_TLAS();
+      rigid_body_manager->simulate();
+      accel_struct_mngr->update();
+      accel_struct_mngr->update_TLAS();
 
       if (!window.update())
         continue;
@@ -165,7 +168,7 @@ struct RendererManager
         handle_reload_result(task_manager->reload(), RT_pipeline, this);
         
         camera_manager->update(gpu->swapchain_get_extent());
-        update_resources(swapchain_image, *camera_manager, accel_struct_mngr.tlas, accel_struct_mngr.rigid_body_buffer, accel_struct_mngr.primitive_buffer);
+        update_resources(swapchain_image, *camera_manager, accel_struct_mngr->tlas, accel_struct_mngr->rigid_body_buffer, accel_struct_mngr->primitive_buffer);
         execute();
         gpu->garbage_collector();
       }
