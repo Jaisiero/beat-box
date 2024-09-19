@@ -119,6 +119,7 @@ struct SimConfig
   daxa_u32 rigid_body_count;
   daxa_f32 dt;
   daxa_f32 gravity;
+  daxa_u32 collision_count;
 };
 DAXA_DECL_BUFFER_PTR(SimConfig)
 
@@ -137,6 +138,26 @@ struct RTPushConstants
 };
 
 static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 64;
+
+struct Collision {
+  daxa_f32vec3 normal;
+  daxa_f32 depth;
+};
+DAXA_DECL_BUFFER_PTR(Collision)
+
+
+DAXA_DECL_TASK_HEAD_BEGIN(GJKTaskHead)
+DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Collision), collisions)
+DAXA_DECL_TASK_HEAD_END
+
+struct GJKPushConstants
+{
+  DAXA_TH_BLOB(GJKTaskHead, task_head)
+};
 
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)

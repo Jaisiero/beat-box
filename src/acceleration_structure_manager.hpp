@@ -18,8 +18,6 @@ struct AccelerationStructureManager
 
   // TODO: temporary
   static constexpr u32 MAX_ACCELERATION_STRUCTURE_COUNT = 1024;
-  static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
-  static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
   static constexpr u32 AVERAGE_AS_SIZE = 1024 * 1024;
 
   // Alignment of the acceleration structure build offset

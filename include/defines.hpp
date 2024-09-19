@@ -14,8 +14,10 @@ using namespace daxa::types;
 
 BB_NAMESPACE_BEGIN
 
-const f32 TIME_STEP = 0.001f;
-const f32 GRAVITY = 9.81f;
+static constexpr f32 TIME_STEP = 0.001f;
+static constexpr f32 GRAVITY = 9.81f;
+static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
+static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
 
 enum StageIndex : u32
 {
@@ -59,7 +61,13 @@ const auto RT_shader_file_string = "ray_tracing.slang";
 const auto RB_sim_shader_file_string = "RB_sim.slang";
 const auto AS_shader_file_string = "AS_mngr.slang";
 
+
+const auto entry_gjk_sim = "entry_GJK";
+const auto entry_rigid_body_sim = "entry_rigid_body_sim";
+const auto entry_update_acceleration_structures = "entry_update_acceleration_structures";
+
 const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
+const auto GJK_sim_pipeline_name = "GJK Simulation";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
 const auto AS_update_pipeline_name = "Update Acceleration Structures";
 
@@ -167,13 +175,28 @@ struct MainRayTracingPipeline
   }
 };
 
+struct GJKSim {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_gjk_sim,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GJKPushConstants),
+      .name = GJK_sim_pipeline_name,
+  };
+};
+
 
 struct RigidBodySim
 {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
       .compile_options = {
-          .entry_point = "entry_rigid_body_sim",
+          .entry_point = entry_rigid_body_sim,
       },
   };
 
@@ -190,7 +213,7 @@ struct UpdateAccelerationStructures
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{AS_shader_file_string},
       .compile_options = {
-          .entry_point = "entry_update_acceleration_structures",
+          .entry_point = entry_update_acceleration_structures,
       },
   };
 
