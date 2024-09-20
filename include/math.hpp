@@ -1,5 +1,10 @@
 #pragma once
 
+#if !defined(DAXA_RAY_TRACING)
+#define DAXA_RAY_TRACING 1
+#endif // DAXA_RAY_TRACING
+#include "daxa/daxa.inl"
+
 struct Aabb
 {
     daxa_f32vec3 min;
@@ -92,6 +97,9 @@ auto cuboid_get_inverse_intertia(daxa_f32 mass, daxa_f32vec3 min, daxa_f32vec3 m
 #else 
 #define MAX max
 #define MIN min
+
+static const daxa_f32 FLT_MAX = 3.402823466e+38F;
+static const daxa_f32 EPSILON = 1.192092896e-07F;
 #endif // __cplusplus
 
 

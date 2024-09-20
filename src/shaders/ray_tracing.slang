@@ -34,6 +34,7 @@
 static const daxa_f32vec3 light_position = daxa_f32vec3(2, 5, -3);
 static const daxa_f32vec3 light_intensity = daxa_f32vec3(2.5);
 static const daxa_f32vec3 material_color = daxa_f32vec3(0.5, 0.0, 0.5);
+static const daxa_f32vec3 collision_material_color = daxa_f32vec3(0.0, 0.5, 0.5);
 static const daxa_f32vec3 material_specular = daxa_f32vec3(0.0, 0.5, 1.0);
 static const daxa_f32 shininess = 10.0;
 
@@ -53,6 +54,15 @@ static const daxa_f32 shininess = 10.0;
   daxa_f32vec3 center = (aabb.min + aabb.max) * 0.5;
 
   center = mul(obj2world, daxa_f32vec4(center, 1.0)).xyz;
+  
+  Ptr<RigidBody> rigid_body = Ptr<RigidBody>(&p.task_head.rigid_bodies[prim_index]);
+
+  daxa_f32vec3 color = material_color;
+  if(rigid_body.has_flag(RigidBodyFlag::COLLIDING))
+  {
+    color = collision_material_color;
+  }
+
 
   // Computing the normal at hit position
   daxa_f32vec3 normal = normalize(hit_location - center);
@@ -72,7 +82,7 @@ static const daxa_f32 shininess = 10.0;
   daxa_f32vec3 L = normalize(light_position - daxa_f32vec3(0));
 
   // Diffuse
-  daxa_f32vec3 diffuse = compute_diffuse(material_color, normal, L);
+  daxa_f32vec3 diffuse = compute_diffuse(color, normal, L);
   daxa_f32vec3 specular = daxa_f32vec3(0);
   daxa_f32 attenuation = 0.5;
 
