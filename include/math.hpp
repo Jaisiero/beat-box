@@ -99,6 +99,7 @@ auto cuboid_get_inverse_intertia(daxa_f32 mass, daxa_f32vec3 min, daxa_f32vec3 m
 #define MIN min
 
 static const daxa_f32 FLT_MAX = 3.402823466e+38F;
+static const daxa_f32 FLT_MIN = 1.175494351e-38F;
 static const daxa_f32 EPSILON = 1.192092896e-07F;
 #endif // __cplusplus
 

@@ -58,17 +58,18 @@ std::string to_string(StageIndex index)
 }
 
 const auto RT_shader_file_string = "ray_tracing.slang";
-const auto RB_sim_shader_file_string = "RB_sim.slang";
-const auto AS_shader_file_string = "AS_mngr.slang";
-
-
-const auto entry_gjk_sim = "entry_GJK";
-const auto entry_rigid_body_sim = "entry_rigid_body_sim";
-const auto entry_update_acceleration_structures = "entry_update_acceleration_structures";
-
 const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
+
+const auto RB_sim_shader_file_string = "RB_sim.slang";
+const auto entry_gjk_sim = "entry_GJK";
+const auto GJK_define = "GJK_SIM";
 const auto GJK_sim_pipeline_name = "GJK Simulation";
+const auto entry_rigid_body_sim = "entry_rigid_body_sim";
+const auto RB_define = "RIGID_BODY_SIM";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
+
+const auto AS_shader_file_string = "AS_mngr.slang";
+const auto entry_update_acceleration_structures = "entry_update_acceleration_structures";
 const auto AS_update_pipeline_name = "Update Acceleration Structures";
 
 struct MainRayTracingPipeline
@@ -180,6 +181,9 @@ struct GJKSim {
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
       .compile_options = {
           .entry_point = entry_gjk_sim,
+          .defines = {
+              {daxa::ShaderDefine{GJK_define, "1"}},
+          },
       },
   };
 
@@ -197,6 +201,9 @@ struct RigidBodySim
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
       .compile_options = {
           .entry_point = entry_rigid_body_sim,
+          .defines = {
+              {daxa::ShaderDefine{RB_define, "1"}},
+          },
       },
   };
 

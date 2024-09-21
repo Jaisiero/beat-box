@@ -1,6 +1,10 @@
 #include "shared.inl"
 
+#if defined(GJK_SIM)
+[[vk::push_constant]] GJKPushConstants p;
+#elif defined(RIGID_BODY_SIM)
 [[vk::push_constant]] RigidBodySimPushConstants p;
+#endif
 
 extension RigidBody
 {
@@ -83,7 +87,7 @@ extension RigidBody
     this.tmp_omega = daxa_f32vec3(0, 0, 0);
   }
 
-  daxa_f32vec3 rotate_vector(daxa_f32vec3 v)
+  daxa_f32vec3 rotate_vector(const daxa_f32vec3 v)
   {
     daxa_f32vec3 u = daxa_f32vec3(this.rotation.x, this.rotation.y, this.rotation.z);
     daxa_f32 s = this.rotation.w;
@@ -92,146 +96,10 @@ extension RigidBody
          + (s * s - dot(u, u)) * v
          + 2.0f * s * cross(u, v);
   }
-
-  static const daxa_u32 CUBOID_VERTEX_COUNT = 8;
-
-  daxa_f32vec3 find_furthest_point(daxa_f32vec3 dir)
-  {
-    daxa_f32 max_dist = -FLT_MAX;
-
-    // TODO: optimize this
-    // Get vertices from r.min and r.max
-    daxa_f32vec3 vertices[CUBOID_VERTEX_COUNT] = {
-        daxa_f32vec3(this.min.x, this.min.y, this.min.z),
-        daxa_f32vec3(this.min.x, this.min.y, this.max.z),
-        daxa_f32vec3(this.min.x, this.max.y, this.min.z),
-        daxa_f32vec3(this.min.x, this.max.y, this.max.z),
-        daxa_f32vec3(this.max.x, this.min.y, this.min.z),
-        daxa_f32vec3(this.max.x, this.min.y, this.max.z),
-        daxa_f32vec3(this.max.x, this.max.y, this.min.z),
-        daxa_f32vec3(this.max.x, this.max.y, this.max.z),
-    };
-
-    for (daxa_u32 i = 0; i < CUBOID_VERTEX_COUNT; i++)
-    {
-      vertices[i] = rotate_vector(vertices[i]);
-      vertices[i] += this.position;
-    }
-
-    daxa_f32vec3 furthest_point = daxa_f32vec3(0, 0, 0);
-    for (daxa_u32 i = 0; i < CUBOID_VERTEX_COUNT; i++)
-    {
-      daxa_f32vec3 vertex = vertices[i];
-      daxa_f32 dist = dot(vertex, dir);
-      if (dist > max_dist)
-      {
-        max_dist = dist;
-        furthest_point = vertex;
-      }
-    }
-    return furthest_point;
-  }
-};
-
-struct SupportPoint
-{
-  daxa_f32vec3 point;  // Minkowski difference point
-  daxa_f32vec3 pointA; // Original point from A
-  daxa_f32vec3 pointB; // Original point from B
-
-  __init()
-  {
-  }
-  __init(const daxa_f32vec3 p, const daxa_f32vec3 a, const daxa_f32vec3 b)
-  {
-    point = p;
-    pointA = a;
-    pointB = b;
-  }
-};
-
-struct Simplex
-{
-  const static daxa_u32 MAX_SUPPORT_POINTS = 4;
-  SupportPoint points[MAX_SUPPORT_POINTS];
-
-  daxa_u32 count;
-
-  __init()
-  {
-    count = 0;
-  }
-
-  __init(const SupportPoint point)
-  {
-    count = 1;
-    points[0] = point;
-  }
-
-  __init(const SupportPoint point1, const SupportPoint point2)
-  {
-    count = 2;
-    points[0] = point1;
-    points[1] = point2;
-  }
-
-  __init(const SupportPoint point1, const SupportPoint point2, const SupportPoint point3)
-  {
-    count = 3;
-    points[0] = point1;
-    points[1] = point2;
-    points[2] = point3;
-  }
-
-  __init(const SupportPoint point1, const SupportPoint point2, const SupportPoint point3, const SupportPoint point4)
-  {
-    count = 4;
-    points[0] = point1;
-    points[1] = point2;
-    points[2] = point3;
-    points[3] = point4;
-  }
-
-  [mutating] void add(const SupportPoint point)
-  {
-    points[count++] = point;
-  }
-
-      [mutating] void remove(daxa_u32 index)
-  {
-    for (daxa_u32 i = index; i < count - 1; ++i)
-    {
-      points[i] = points[i + 1];
-    }
-    --count;
-  }
-};
-
-struct Edge
-{
-  daxa_f32vec3 normal;
-  float distance;
-  // Relevant data for the edge
-};
-
-struct Polytope
-{
-  const static daxa_u32 MAX_SUPPORT_POINTS = 4;
-  SupportPoint vertices[MAX_SUPPORT_POINTS];
-  Edge edges[MAX_SUPPORT_POINTS];
-  // Relevant data for the polytope
-};
-
-func support(const Ptr<RigidBody> r, const Ptr<RigidBody> r2, const daxa_f32vec3 dir) -> SupportPoint
-{
-  daxa_f32vec3 support_r1 = r.find_furthest_point(dir);
-  daxa_f32vec3 support_r2 = r2.find_furthest_point(-dir);
-  daxa_f32vec3 point = support_r1 - support_r2;
-  return SupportPoint(point, support_r1, support_r2);
 }
 
 func GJK(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
-         const Ptr<SimConfig> sim_config) -> void
+         Ptr<SimConfig> sim_config, Ptr<Collision> collisions) -> void
 {
   var any_collision = false;
   r.clear_flag(RigidBodyFlag::COLLIDING);
@@ -241,19 +109,29 @@ func GJK(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     {
         continue;
     }
-    Simplex simplex;
+    // Simplex simplex;
     Ptr<RigidBody> r2 = Ptr<RigidBody>(&p.task_head.rigid_bodies[i]);
-    // daxa_u32 iter_count;
-    // Verify collision between r and r2
-    let collision = GJK_pair(r, r2, simplex);
 
-    // EPA
+    Aabb aabb1 = Aabb(r.min, r.max);
+    aabb1.min = r.rotate_vector(aabb1.min) + r.position;  
+    aabb1.max = r.rotate_vector(aabb1.max) + r.position;
+
+    Aabb aabb2 = Aabb(r2.min, r2.max);
+    aabb2.min = r2.rotate_vector(aabb2.min) + r2.position;
+    aabb2.max = r2.rotate_vector(aabb2.max) + r2.position;
+
+    daxa_f32vec3 penetration;
+
+    let collision = AABB_intersection(aabb1, aabb2, penetration);
+
+    // 
     if (collision)
     {
       any_collision = true;
-      // Compute the Minimum Translation Vector (MTV)
-      // daxa_f32vec3 mtv = EPA(r, r2, simplex);
-      InterlockedAdd(sim_config->collision_count, 1);
+      daxa_u32 index = 0;
+      InterlockedAdd(sim_config->collision_count, 1u, index);
+
+      collisions[index] = Collision(rigid_body_index, i, penetration);
     }
   }
 
@@ -263,208 +141,38 @@ func GJK(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   }
 }
 
-func GJK_pair(const Ptr<RigidBody> r, const Ptr<RigidBody> r2, out Simplex simplex) -> bool
+func AABB_intersection(const Aabb aabb1, const Aabb aabb2, out daxa_f32vec3 penetration)->bool
 {
-
-  daxa_f32vec3 initial_dir = normalize(r2.position - r.position);
-  if (length(initial_dir) < 0.0001f)
+  // get the minkowski difference between the two
+  var difference = minkowski_difference(aabb1, aabb2);
+  if (difference.min.x <= 0 && difference.max.x >= 0 && 
+      difference.min.y <= 0 && difference.max.y >= 0 && 
+      difference.min.z <= 0 && difference.max.z >= 0)
   {
-    initial_dir = daxa_f32vec3(1, 0, 0); // Random initial direction
-  }
+    penetration = closest_point_on_bounds_to_point(difference, daxa_f32vec3(0, 0, 0));
 
-  simplex.add(support(r, r2, initial_dir));
-
-  daxa_f32vec3 dir = -simplex.points[0].point;
-
-  const daxa_u32 MAX_ITERATIONS = 64;
-  daxa_u32 iterations = 0;
-  while (iterations++ < MAX_ITERATIONS)
-  {
-    SupportPoint new_point = support(r, r2, dir);
-
-    if (dot(new_point.point, dir) < 0) // TODO: Check if equal to zero
-    {
-      return false; // There is no collision
-    }
-
-    simplex.add(new_point);
-
-    if (handle_simplex(simplex, dir))
-    {
-      return true; // Collision detected
-    }
-  }
-
-  return false;
-}
-
-// Function to handle the simplex based on its dimension
-func handle_simplex(inout Simplex simplex, inout daxa_f32vec3 dir) -> bool
-{
-  switch (simplex.count)
-  {
-  case 2:
-    // Segment: Check if the origin is inside the segment
-    return handle_segment(simplex, dir);
-  case 3:
-    // Triangle: Check if the origin is inside the triangle
-    return handle_triangle(simplex, dir);
-  case 4:
-    // Tetrahedron: Check if the origin is inside the tetrahedron
-    return handle_tetrahedron(simplex, dir);
+    return true;
   }
   return false;
 }
 
-func handle_segment(inout Simplex simplex, inout daxa_f32vec3 dir) -> bool
+func minkowski_difference(const Aabb aabb1, const Aabb aabb2) -> Aabb
 {
-  daxa_f32vec3 A = simplex.points[0].point;
-  daxa_f32vec3 B = simplex.points[1].point;
-  daxa_f32vec3 AB = B - A;
-  daxa_f32vec3 AO = -A;
-
-  if (dot(AB, AO) > 0)
-  {
-    // Origin is outside the segment
-    dir = cross(cross(AB, AO), AB);
-  }
-  else
-  {
-    // Origin is inside the segment
-    simplex.remove(1);
-    dir = AO;
-  }
-  dir = normalize(dir);
-
-  return false;
+    var difference_min = aabb1.min - aabb2.max;
+    var difference_max = aabb1.max - aabb2.min;
+    return Aabb(difference_min, difference_max);
 }
 
-func handle_triangle(inout Simplex simplex, inout daxa_f32vec3 dir) -> bool
+func closest_point_on_bounds_to_point(const Aabb bounds, const daxa_f32vec3 point) -> daxa_f32vec3
 {
-  daxa_f32vec3 A = simplex.points[0].point;
-  daxa_f32vec3 B = simplex.points[1].point;
-  daxa_f32vec3 C = simplex.points[2].point;
-  daxa_f32vec3 AB = B - A;
-  daxa_f32vec3 AC = C - A;
-  daxa_f32vec3 AO = -A;
-
-  daxa_f32vec3 ABC = cross(AB, AC);
-
-  if (dot(cross(ABC, AC), AO) > 0)
-  {
-    if (dot(AC, AO) > 0)
-    {
-      simplex.remove(1);
-      dir = cross(cross(AC, AO), AC);
-    }
-    else
-    {
-      simplex.remove(2);
-      return handle_segment(simplex, dir);
-    }
-  }
-  else
-  {
-    if (dot(cross(AB, ABC), AO) > 0)
-    {
-      simplex.remove(2);
-      return handle_segment(simplex, dir);
-    }
-    else
-    {
-      if (dot(ABC, AO) > 0)
-      {
-        dir = ABC;
-      }
-      else
-      {
-        simplex = Simplex(simplex.points[0], simplex.points[2], simplex.points[1]);
-        dir = -ABC;
-      }
-    }
-  }
-  dir = normalize(dir);
-
-  return false;
+    var closest_point = daxa_f32vec3(0, 0, 0);
+    closest_point.x = clamp(point.x, bounds.min.x, bounds.max.x);
+    closest_point.y = clamp(point.y, bounds.min.y, bounds.max.y);
+    closest_point.z = clamp(point.z, bounds.min.z, bounds.max.z);
+    return closest_point;
 }
 
-func handle_tetrahedron(inout Simplex simplex, inout daxa_f32vec3 dir) -> bool
-{
-  daxa_f32vec3 A = simplex.points[0].point;
-  daxa_f32vec3 B = simplex.points[1].point;
-  daxa_f32vec3 C = simplex.points[2].point;
-  daxa_f32vec3 D = simplex.points[3].point;
-
-  daxa_f32vec3 AB = B - A;
-  daxa_f32vec3 AC = C - A;
-  daxa_f32vec3 AD = D - A;
-  daxa_f32vec3 AO = -A;
-
-  daxa_f32vec3 ABC = cross(AB, AC);
-  daxa_f32vec3 ACD = cross(AC, AD);
-  daxa_f32vec3 ADB = cross(AD, AB);
-
-  if (dot(ABC, AO) > 0)
-  {
-    simplex.remove(3);
-    return handle_triangle(simplex, dir);
-  }
-  else if (dot(ACD, AO) > 0)
-  {
-    simplex.remove(1);
-    return handle_triangle(simplex, dir);
-  }
-  else if (dot(ADB, AO) > 0)
-  {
-    return handle_triangle(simplex = Simplex(simplex.points[0], simplex.points[3], simplex.points[1]), dir);
-  }
-
-  return true;
-}
-
-func EPA(const Ptr<RigidBody> r, const Ptr<RigidBody> r2, Simplex simplex) -> daxa_f32vec3
-{
-  // Construir el poliedro inicial a partir del simplex
-  Polytope polytope;
-  // Agregar vértices y caras al poliedro
-
-  while (true)
-  {
-    // Encontrar la cara más cercana al origen
-    Edge closest_edge = find_closest_edge(polytope);
-
-    // Obtener un nuevo punto de soporte en la dirección de la normal de la cara
-    SupportPoint new_point = support(r, r2, closest_edge.normal);
-
-    float distance = dot(new_point.point, closest_edge.normal);
-    float diff = distance - closest_edge.distance;
-
-    if (diff < EPSILON)
-    {
-      // Convergencia alcanzada
-      // Devolver el vector mínimo de traslación (MTV)
-      return closest_edge.normal * distance;
-    }
-    else
-    {
-      // Expandir el poliedro con el nuevo punto
-      // Actualizar caras y bordes
-    }
-  }
-}
-
-Edge find_closest_edge(const Polytope polytope)
-{
-  Edge closest_edge;
-  // Inicializar con un valor grande
-  closest_edge.distance = FLT_MAX;
-
-  // Recorrer las caras del poliedro
-  // Calcular la distancia al origen y actualizar 'closest_edge' si es más cercano
-
-  return closest_edge;
-}
-
+#if defined(GJK_SIM)
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_GJK(uint3 pixel_i : SV_DispatchThreadID)
@@ -477,11 +185,15 @@ Edge find_closest_edge(const Polytope polytope)
     return;
   }
 
-  Ptr<RigidBody> rigid_body =
+  Ptr<RigidBody> r =
       Ptr<RigidBody>(&p.task_head.rigid_bodies[pixel_i.x]);
 
-  GJK(pixel_i.x, rigid_body, sim_config);
+  Ptr<Collision> collisions =
+      Ptr<Collision>(p.task_head.collisions);
+
+  GJK(pixel_i.x, r, sim_config, collisions);
 }
+# elif defined(RIGID_BODY_SIM)
 
     [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_rigid_body_sim(uint3 pixel_i : SV_DispatchThreadID)
@@ -498,9 +210,10 @@ Edge find_closest_edge(const Polytope polytope)
       Ptr<RigidBody>(&p.task_head.rigid_bodies[pixel_i.x]);
 
   if (pixel_i.x == 1) {
-    // rigid_body->advect(sim_config);
-    r->position  = daxa_f32vec3(0.0, 0.4, 0.0);
+    r->advect(sim_config);
+    // r->position  = daxa_f32vec3(0.5, 2.0, -0.5);
   } else {
-    r->position = daxa_f32vec3(0.5, 0.1, 0.1);
+    // r->position = daxa_f32vec3(0.0, 0.0, 0.0);
   }
 }
+#endif // RIGID_BODY_SIM

@@ -168,8 +168,9 @@ static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 64;
 
 struct Collision
 {
-  daxa_f32vec3 normal;
-  daxa_f32 depth;
+  daxa_u32 a;
+  daxa_u32 b;
+  daxa_f32vec3 penetration;
 };
 DAXA_DECL_BUFFER_PTR(Collision)
 
