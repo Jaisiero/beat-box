@@ -297,7 +297,7 @@ struct AccelerationStructureManager
     {
 
       // Get the rigid body
-      auto rigid_body = rigid_bodies[i];
+      auto &rigid_body = rigid_bodies[i];
 
       blas_geometries.at(i).push_back({
           .data = device.device_address(primitive_buffer).value() + current_primitive_count * sizeof(Aabb),

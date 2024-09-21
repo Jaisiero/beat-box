@@ -50,7 +50,7 @@ struct SceneManager
     }
 
     // TODO: temporary scene
-    rigid_bodies = {{.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, 0.0, 0.0), .rotation = daxa_f32vec4(0.0, 0.0, 0.0, 1.0), .min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 1.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5, .iter = 0}, {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.5, 2.0, -0.5), .rotation = daxa_f32vec4(0.0, 0.0, 0.0, 1.0), .min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7, .friction = 0.3, .iter = 0}};
+    rigid_bodies = {{.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, -5.0, 0.0), .rotation = daxa_f32vec4(0.0, 0.0, 0.0, 1.0), .min = daxa_f32vec3(-5.0, -5.0, -5.0), .max = daxa_f32vec3(5.0, 5.0, 5.0), .mass = 1.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5, .iter = 0}, {.flags = (RigidBodyFlag::DYNAMIC | RigidBodyFlag::KINEMATIC), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5, 2.0, -0.5), .rotation = daxa_f32vec4(0.0, 0.0, 0.0, 1.0), .min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7, .friction = 0.3, .iter = 0}};
 
 
     for(auto &rigid_body : rigid_bodies)
@@ -59,7 +59,7 @@ struct SceneManager
       rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.min, rigid_body.max);
     }
 
-    aabb = {{.min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5)}, {.min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5)}};
+    aabb = {{.min = daxa_f32vec3(-5.0, -5.0, -5.0), .max = daxa_f32vec3(5.0, 5.0, 5.0)}, {.min = daxa_f32vec3(-0.5, -0.5, -0.5), .max = daxa_f32vec3(0.5, 0.5, 0.5)}};
 
     // TODO: Handle error
     if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb))

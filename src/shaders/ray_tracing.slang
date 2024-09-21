@@ -45,17 +45,19 @@ static const daxa_f32 shininess = 10.0;
 
   payload.position = hit_location;
 
+  daxa_u32 instance_index = InstanceID();
   daxa_u32 prim_index = PrimitiveIndex();
 
   daxa_f32mat4x4 obj2world = transpose(Convert3x4To4x4(ObjectToWorld4x3()));
-
-  Aabb aabb = p.task_head.aabbs[prim_index];
+  
+  Ptr<RigidBody> rigid_body = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
+  
+  Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
+  Aabb aabb = rigid_body->get_aabb_by_index(prim_index, aabbs);
 
   daxa_f32vec3 center = (aabb.min + aabb.max) * 0.5;
 
   center = mul(obj2world, daxa_f32vec4(center, 1.0)).xyz;
-  
-  Ptr<RigidBody> rigid_body = Ptr<RigidBody>(&p.task_head.rigid_bodies[prim_index]);
 
   daxa_f32vec3 color = material_color;
   if(rigid_body.has_flag(RigidBodyFlag::COLLIDING))
@@ -108,10 +110,15 @@ static const daxa_f32 shininess = 10.0;
 [shader("intersection")] void intersection() {
   daxa_f32 THit = RayTCurrent();
   MyAttributes params = {};
-
+  
+  daxa_u32 instance_index = InstanceID();
   daxa_u32 prim_index = PrimitiveIndex();
-  // Get Aabb
-  Aabb aabb = p.task_head.aabbs[prim_index];
+
+  Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
+
+  Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
+  Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);
+
 
   daxa_f32mat4x4 obj2world = transpose(Convert3x4To4x4(ObjectToWorld4x3()));
 

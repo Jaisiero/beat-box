@@ -4,7 +4,7 @@
 #include "math.hpp"
 
 const glm::vec3 INIT_FORWARD = {0, 0, 1};
-const glm::vec3 INIT_CAMERA_POS = {0, 0, -2.5};
+const glm::vec3 INIT_CAMERA_POS = {0, 1, -4.5};
 const glm::vec3 INIT_CAMERA_UP = {0, 1, 0};
 
 const float INIT_CAMERA_FOV = 45.0f;

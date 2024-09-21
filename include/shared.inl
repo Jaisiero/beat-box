@@ -15,6 +15,8 @@ static const daxa_f32 ANGULAR_DAMPING = 0.1f;
 enum RigidBodyFlag : daxa_u32 {
   NONE = 0,
   COLLIDING = 1 << 0,
+  DYNAMIC = 1 << 1,
+  KINEMATIC = 1 << 2,
 };
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
@@ -38,6 +40,17 @@ void operator&=(inout RigidBodyFlag a, RigidBodyFlag b)
 {
     a = a & b;
 }
+#elif defined(__cplusplus)
+inline RigidBodyFlag operator|(RigidBodyFlag a, RigidBodyFlag b)
+{
+    return RigidBodyFlag((daxa_u32)a | (daxa_u32)b);
+}
+
+inline void operator|=(RigidBodyFlag &a, RigidBodyFlag b)
+{
+    a = a | b;
+}
+
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 
 
@@ -103,6 +116,11 @@ struct RigidBody
   }
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+  Aabb get_aabb_by_index(daxa_u32 index, Ptr<Aabb> aabbs)
+  {
+    return aabbs[primitive_offset + index];
+  }
+
   [mutating] bool has_flag(RigidBodyFlag flag)
   {
     return (this.flags & flag) != 0;
@@ -175,10 +193,10 @@ struct Collision
 DAXA_DECL_BUFFER_PTR(Collision)
 
 DAXA_DECL_TASK_HEAD_BEGIN(GJKTaskHead)
-DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(HOST_TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(HOST_TRANSFER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Collision), collisions)
 DAXA_DECL_TASK_HEAD_END
 
@@ -188,10 +206,10 @@ struct GJKPushConstants
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
-DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
 DAXA_DECL_TASK_HEAD_END
 
 struct RigidBodySimPushConstants

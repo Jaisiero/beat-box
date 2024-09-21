@@ -139,6 +139,8 @@ struct RigidBodyManager{
       return !initialized;
     }
 
+    device.buffer_host_address_as<SimConfig>(sim_config).value()->collision_count = 0;
+
     RB_TG.execute();
 
     return initialized;

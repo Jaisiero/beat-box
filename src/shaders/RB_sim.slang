@@ -98,7 +98,7 @@ extension RigidBody
   }
 }
 
-func GJK(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
+func GJK(const daxa_u32 rigid_body_index, inout Ptr<RigidBody> r,
          Ptr<SimConfig> sim_config, Ptr<Collision> collisions) -> void
 {
   var any_collision = false;
@@ -132,6 +132,11 @@ func GJK(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       InterlockedAdd(sim_config->collision_count, 1u, index);
 
       collisions[index] = Collision(rigid_body_index, i, penetration);
+      if(r->has_flag(RigidBodyFlag::KINEMATIC))
+      {
+        let impulse = -penetration * r.mass * sim_config->dt * 1000.0f;
+        r->apply_impulse(impulse, r->position);
+      }
     }
   }
 
@@ -165,11 +170,34 @@ func minkowski_difference(const Aabb aabb1, const Aabb aabb2) -> Aabb
 
 func closest_point_on_bounds_to_point(const Aabb bounds, const daxa_f32vec3 point) -> daxa_f32vec3
 {
-    var closest_point = daxa_f32vec3(0, 0, 0);
-    closest_point.x = clamp(point.x, bounds.min.x, bounds.max.x);
-    closest_point.y = clamp(point.y, bounds.min.y, bounds.max.y);
-    closest_point.z = clamp(point.z, bounds.min.z, bounds.max.z);
-    return closest_point;
+    daxa_f32 closest_distance = abs(point.x - bounds.min.x);
+    daxa_f32vec3 bounds_point = daxa_f32vec3(bounds.min.x, point.y, point.z);
+    if(abs(point.x - bounds.max.x) < closest_distance)
+    {
+        closest_distance = abs(point.x - bounds.max.x);
+        bounds_point = daxa_f32vec3(bounds.max.x, point.y, point.z);
+    }
+    if(abs(point.y - bounds.min.y) < closest_distance)
+    {
+        closest_distance = abs(point.y - bounds.min.y);
+        bounds_point = daxa_f32vec3(point.x, bounds.min.y, point.z);
+    }
+    if(abs(point.y - bounds.max.y) < closest_distance)
+    {
+        closest_distance = abs(point.y - bounds.max.y);
+        bounds_point = daxa_f32vec3(point.x, bounds.max.y, point.z);
+    }
+    if(abs(point.z - bounds.min.z) < closest_distance)
+    {
+        closest_distance = abs(point.z - bounds.min.z);
+        bounds_point = daxa_f32vec3(point.x, point.y, bounds.min.z);
+    }
+    if(abs(point.z - bounds.max.z) < closest_distance)
+    {
+        closest_distance = abs(point.z - bounds.max.z);
+        bounds_point = daxa_f32vec3(point.x, point.y, bounds.max.z);
+    }
+    return bounds_point;
 }
 
 #if defined(GJK_SIM)
@@ -193,6 +221,8 @@ func closest_point_on_bounds_to_point(const Aabb bounds, const daxa_f32vec3 poin
 
   GJK(pixel_i.x, r, sim_config, collisions);
 }
+#elif defined(SET_COLLISION_COUNT)
+
 # elif defined(RIGID_BODY_SIM)
 
     [shader("compute")]
@@ -209,11 +239,9 @@ func closest_point_on_bounds_to_point(const Aabb bounds, const daxa_f32vec3 poin
   Ptr<RigidBody> r =
       Ptr<RigidBody>(&p.task_head.rigid_bodies[pixel_i.x]);
 
-  if (pixel_i.x == 1) {
+  if (r.has_flag(RigidBodyFlag::KINEMATIC)){
     r->advect(sim_config);
     // r->position  = daxa_f32vec3(0.5, 2.0, -0.5);
-  } else {
-    // r->position = daxa_f32vec3(0.0, 0.0, 0.0);
-  }
+  } 
 }
 #endif // RIGID_BODY_SIM
