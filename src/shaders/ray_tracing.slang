@@ -77,6 +77,8 @@ static const daxa_f32 shininess = 10.0;
                  (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) : daxa_f32vec3(0, 0, sign(normal.z));
   }
 
+  normal = r->rotate_vector(normal);
+
   payload.normal = normal;
 
   // Vector toward the light
@@ -85,23 +87,23 @@ static const daxa_f32 shininess = 10.0;
   // Diffuse
   daxa_f32vec3 diffuse = compute_diffuse(color, normal, L);
   daxa_f32vec3 specular = daxa_f32vec3(0);
-  daxa_f32 attenuation = 1.0;
+  daxa_f32 attenuation = 0.5;
 
-  // // Tracing shadow ray only if the light is visible from the surface
-  // if (dot(normal, L) > 0)
-  // {
-  //   daxa_f32vec3 ray_dir = L;
-  //   RayDesc ray = {hit_location, T_MIN, ray_dir, T_MAX};
-  //   daxa_u32 flags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE  | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER;
-  //   ShadowRayPayload shadowPayload = { 0.0f };
+  // Tracing shadow ray only if the light is visible from the surface
+  if (dot(normal, L) > 0)
+  {
+    daxa_f32vec3 ray_dir = L;
+    RayDesc ray = {hit_location, T_MIN, ray_dir, T_MAX};
+    daxa_u32 flags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE  | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER;
+    ShadowRayPayload shadowPayload = { 0.0f };
 
-  //   TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), flags, ~0, 1, 0, 0, ray, shadowPayload);
+    TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), flags, ~0, 1, 0, 0, ray, shadowPayload);
 
-  //   let shadow_result = (shadowPayload.shadow);
+    let shadow_result = (shadowPayload.shadow);
 
-  //   attenuation =  1.0 - shadow_result;
-  //   specular = compute_specular(shininess, material_specular, WorldRayDirection(), normal, L);
-  // }
+    attenuation =  1.0 - shadow_result;
+    specular = compute_specular(shininess, material_specular, WorldRayDirection(), normal, L);
+  }
 
   payload.hit_value = daxa_f32vec3(light_intensity * attenuation * (diffuse + specular));
 }

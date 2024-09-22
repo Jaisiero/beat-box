@@ -231,7 +231,7 @@ func closest_point_on_bounds_to_point(const Aabb bounds, const daxa_f32vec3 poin
       Ptr<RigidBody>(&p.task_head.rigid_bodies[pixel_i.x]);
 
   if (r.has_flag(RigidBodyFlag::KINEMATIC)){
-    // r->advect(sim_config);
+    r->advect(sim_config);
   } 
 }
 #endif // RIGID_BODY_SIM
