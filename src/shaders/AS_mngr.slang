@@ -14,13 +14,10 @@
     return;
   }
 
-  RigidBody rigid_body =
+  RigidBody r =
       p.task_head.rigid_bodies[pixel_i.x];
 
-  Ptr<daxa_BlasInstanceData> instance = Ptr<daxa_BlasInstanceData>(p.task_head.blas_instance_data + pixel_i.x);
-  
-  // Set the translation components
-  instance->transform[3][0] = rigid_body.position.x;
-  instance->transform[3][1] = rigid_body.position.y;
-  instance->transform[3][2] = rigid_body.position.z;
+  Ptr<daxa_BlasInstanceData> instance = Ptr<daxa_BlasInstanceData>(&p.task_head.blas_instance_data[pixel_i.x]);
+
+  instance->transform = r.get_instance_transform();
 }

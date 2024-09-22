@@ -114,4 +114,11 @@ daxa_f32 hitAabb(const Aabb aabb, const Ray r)
   daxa_f32 t0     = MAX(tmin.x, MAX(tmin.y, tmin.z));
   daxa_f32 t1     = MIN(tmax.x, MIN(tmax.y, tmax.z));
   return t1 > MAX(t0, 0.0f) ? t0 : -1.0f;
+  // if (t1 < 0.0f || t0 > t1)
+  //   return -1.0f; // No intersection
+
+  // if (t0 < 0.0f)
+  //   return t1; // Ray origin inside AABB, return exit point
+
+  // return t0; // Ray intersects AABB, return entry point
 }

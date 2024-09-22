@@ -363,7 +363,7 @@ struct AccelerationStructureManager
       proc_blas_buffer_offset += blas_instance_offset;
 
       blas_instances_data[i] = {
-          .transform = rigid_body_get_transform_matrix(rigid_body),
+          .transform = rigid_body.get_instance_transform(),
           .instance_custom_index = i,
           .mask = 0xFF,
           .instance_shader_binding_table_record_offset = 0,

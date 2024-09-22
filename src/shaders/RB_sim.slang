@@ -86,16 +86,6 @@ extension RigidBody
     this.tmp_velocity = daxa_f32vec3(0, 0, 0);
     this.tmp_omega = daxa_f32vec3(0, 0, 0);
   }
-
-  daxa_f32vec3 rotate_vector(const daxa_f32vec3 v)
-  {
-    daxa_f32vec3 u = daxa_f32vec3(this.rotation.x, this.rotation.y, this.rotation.z);
-    daxa_f32 s = this.rotation.w;
-
-    return 2.0f * dot(u, v) * u
-         + (s * s - dot(u, u)) * v
-         + 2.0f * s * cross(u, v);
-  }
 }
 
 func GJK(const daxa_u32 rigid_body_index, inout Ptr<RigidBody> r,
@@ -113,12 +103,12 @@ func GJK(const daxa_u32 rigid_body_index, inout Ptr<RigidBody> r,
     Ptr<RigidBody> r2 = Ptr<RigidBody>(&p.task_head.rigid_bodies[i]);
 
     Aabb aabb1 = Aabb(r.min, r.max);
-    aabb1.min = r.rotate_vector(aabb1.min) + r.position;  
-    aabb1.max = r.rotate_vector(aabb1.max) + r.position;
+    aabb1.min = r.object_to_world(aabb1.min);
+    aabb1.max = r.object_to_world(aabb1.max);
 
     Aabb aabb2 = Aabb(r2.min, r2.max);
-    aabb2.min = r2.rotate_vector(aabb2.min) + r2.position;
-    aabb2.max = r2.rotate_vector(aabb2.max) + r2.position;
+    aabb2.min = r2.object_to_world(aabb2.min);
+    aabb2.max = r2.object_to_world(aabb2.max);
 
     daxa_f32vec3 penetration;
 
@@ -130,12 +120,13 @@ func GJK(const daxa_u32 rigid_body_index, inout Ptr<RigidBody> r,
       any_collision = true;
       daxa_u32 index = 0;
       InterlockedAdd(sim_config->collision_count, 1u, index);
+      daxa_f32vec3 collision_point = r.world_to_object(penetration);
 
       collisions[index] = Collision(rigid_body_index, i, penetration);
       if(r->has_flag(RigidBodyFlag::KINEMATIC))
       {
-        let impulse = -penetration * r.mass * sim_config->dt * 1000.0f;
-        r->apply_impulse(impulse, r->position);
+        let impulse = normalize(penetration) * r.mass * sim_config->dt * length(penetration) * 1000.0f;
+        r->apply_impulse(impulse, collision_point);
       }
     }
   }
@@ -163,8 +154,8 @@ func AABB_intersection(const Aabb aabb1, const Aabb aabb2, out daxa_f32vec3 pene
 
 func minkowski_difference(const Aabb aabb1, const Aabb aabb2) -> Aabb
 {
-    var difference_min = aabb1.min - aabb2.max;
-    var difference_max = aabb1.max - aabb2.min;
+    var difference_min = aabb2.min - aabb1.max;
+    var difference_max = aabb2.max - aabb1.min;
     return Aabb(difference_min, difference_max);
 }
 
@@ -240,8 +231,7 @@ func closest_point_on_bounds_to_point(const Aabb bounds, const daxa_f32vec3 poin
       Ptr<RigidBody>(&p.task_head.rigid_bodies[pixel_i.x]);
 
   if (r.has_flag(RigidBodyFlag::KINEMATIC)){
-    r->advect(sim_config);
-    // r->position  = daxa_f32vec3(0.5, 2.0, -0.5);
+    // r->advect(sim_config);
   } 
 }
 #endif // RIGID_BODY_SIM

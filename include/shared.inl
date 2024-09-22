@@ -73,8 +73,6 @@ struct RigidBody
   daxa_f32mat3x3 inv_inertia;
   daxa_f32 restitution;
   daxa_f32 friction;
-  // DEBUG
-  daxa_u32 iter;
   // TODO: Add more rigid body properties
   // daxa_f32 drag;
   // daxa_f32 angular_drag;
@@ -105,13 +103,25 @@ struct RigidBody
 #if defined(__cplusplus)
     return daxa_f32mat4x4(daxa_f32vec4(rotation_matrix.x.x, rotation_matrix.y.x, rotation_matrix.z.x, translation.x),
                           daxa_f32vec4(rotation_matrix.x.y, rotation_matrix.y.y, rotation_matrix.z.y, translation.y),
-                          daxa_f32vec4(rotation_matrix.x.z, rotation_matrix.y.z, rotation_matrix.z.z, translation.z));
+                          daxa_f32vec4(rotation_matrix.x.z, rotation_matrix.y.z, rotation_matrix.z.z, translation.z),
+                          daxa_f32vec4(0.0f, 0.0f, 0.0f, 1.0f));
 #else // defined(__cplusplus)
-    return daxa_f32mat4x4(rotation_matrix[0][0], rotation_matrix[1][0], rotation_matrix[2][0], 0.0f,
-                          rotation_matrix[0][1], rotation_matrix[1][1], rotation_matrix[2][1], 0.0f,
-                          rotation_matrix[0][2], rotation_matrix[1][2], rotation_matrix[2][2], 0.0f,
-                          translation.x, translation.y, translation.z, 1.0f);
+    return daxa_f32mat4x4(daxa_f32vec4(rotation_matrix[0], translation.x),
+                          daxa_f32vec4(rotation_matrix[1], translation.y),
+                          daxa_f32vec4(rotation_matrix[2], translation.z),
+                          daxa_f32vec4(0.0f, 0.0f, 0.0f, 1.0f));
 
+#endif // defined(__cplusplus)
+  }
+
+
+  daxa_f32mat3x4 get_instance_transform() {
+    daxa_f32mat4x4 transform = get_transform_matrix();
+#if defined(__cplusplus)
+    return daxa_f32mat3x4(transform.x, transform.y, transform.z);
+#else // defined(__cplusplus)
+  transform = transpose(transform);
+  return daxa_f32mat3x4(daxa_f32vec3(transform[0].xyz), daxa_f32vec3(transform[1].xyz), daxa_f32vec3(transform[2].xyz), daxa_f32vec3(transform[3].xyz));
 #endif // defined(__cplusplus)
   }
 
@@ -134,6 +144,35 @@ struct RigidBody
   [mutating] void clear_flag(RigidBodyFlag flag)
   {
     this.flags &= ~flag;
+  }
+  daxa_f32vec3 rotate_vector(const daxa_f32vec3 v)
+  {
+    daxa_f32vec3 u = daxa_f32vec3(this.rotation.x, this.rotation.y, this.rotation.z);
+    daxa_f32 s = this.rotation.w;
+
+    return 2.0f * dot(u, v) * u
+         + (s * s - dot(u, u)) * v
+         + 2.0f * s * cross(u, v);
+  }
+
+  daxa_f32vec3 rotate_vector_inverse(const daxa_f32vec3 v)
+  {
+    daxa_f32vec3 u = daxa_f32vec3(-this.rotation.x, -this.rotation.y, -this.rotation.z);
+    daxa_f32 s = this.rotation.w;
+
+    return 2.0f * dot(u, v) * u
+         + (s * s - dot(u, u)) * v
+         + 2.0f * s * cross(u, v);
+  }
+
+  daxa_f32vec3 object_to_world(const daxa_f32vec3 v)
+  {
+    return rotate_vector(v) + this.position;
+  }
+
+  daxa_f32vec3 world_to_object(const daxa_f32vec3 v)
+  {
+    return rotate_vector_inverse(v - this.position);
   }
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 };
@@ -244,36 +283,6 @@ struct UpdateInstancesPushConstants
   DAXA_TH_BLOB(UpdateInstancesTaskHead, task_head)
 };
 
-#if defined(__cplusplus)
-daxa_f32mat3x4 rigid_body_get_transform_matrix(const RigidBody &rigid_body)
-{
-  daxa_f32vec3 translation = rigid_body.position;
-  daxa_f32vec4 rotation = rigid_body.rotation;
-
-  // transform quaternion to matrix
-  daxa_f32 x2 = rotation.x + rotation.x;
-  daxa_f32 y2 = rotation.y + rotation.y;
-  daxa_f32 z2 = rotation.z + rotation.z;
-  daxa_f32 xx = rotation.x * x2;
-  daxa_f32 xy = rotation.x * y2;
-  daxa_f32 xz = rotation.x * z2;
-  daxa_f32 yy = rotation.y * y2;
-  daxa_f32 yz = rotation.y * z2;
-  daxa_f32 zz = rotation.z * z2;
-  daxa_f32 wx = rotation.w * x2;
-  daxa_f32 wy = rotation.w * y2;
-  daxa_f32 wz = rotation.w * z2;
-
-  daxa_f32mat3x3 rotation_matrix = daxa_f32mat3x3(daxa_f32vec3(1.0f - (yy + zz), xy - wz, xz + wy),
-                                                  daxa_f32vec3(xy + wz, 1.0f - (xx + zz), yz - wx),
-                                                  daxa_f32vec3(xz - wy, yz + wx, 1.0f - (xx + yy)));
-
-  return daxa_f32mat3x4(daxa_f32vec4(rotation_matrix.x.x, rotation_matrix.y.x, rotation_matrix.z.x, translation.x),
-                        daxa_f32vec4(rotation_matrix.x.y, rotation_matrix.y.y, rotation_matrix.z.y, translation.y),
-                        daxa_f32vec4(rotation_matrix.x.z, rotation_matrix.y.z, rotation_matrix.z.z, translation.z));
-}
-#endif // defined(__cplusplus)
-
 // RT STRUCTS
 struct HitPayload
 {
@@ -311,24 +320,6 @@ RayDesc create_ray(daxa_f32mat4x4 inv_view, daxa_f32mat4x4 inv_proj, daxa_u32vec
   ray.TMin = tmin;
   ray.TMax = tmax;
   return ray;
-}
-
-daxa_f32mat4x4 Convert3x4To4x4(
-#if DAXA_SHADERLANG == DAXA_SHADERLANG_GLSL
-    daxa_f32mat4x3
-#elif DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
-    daxa_f32mat3x4
-#endif // DAXA_SHADERLANG
-        obj_to_world_4x3)
-{
-  daxa_f32mat4x4 obj_to_world_4x4;
-
-  obj_to_world_4x4[0] = daxa_f32vec4(obj_to_world_4x3[0], 0.0f);
-  obj_to_world_4x4[1] = daxa_f32vec4(obj_to_world_4x3[1], 0.0f);
-  obj_to_world_4x4[2] = daxa_f32vec4(obj_to_world_4x3[2], 0.0f);
-  obj_to_world_4x4[3] = daxa_f32vec4(obj_to_world_4x3[3], 1.0f);
-
-  return obj_to_world_4x4;
 }
 
 daxa_f32vec3 compute_diffuse(daxa_f32vec3 mat_color, daxa_f32vec3 normal, daxa_f32vec3 light_dir)
