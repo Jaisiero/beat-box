@@ -7,9 +7,77 @@
 
 struct Aabb
 {
-    daxa_f32vec3 min;
-    daxa_f32vec3 max;
+    daxa_f32vec3 minimum;
+    daxa_f32vec3 maximum;
+#if !defined(__cplusplus)
+  daxa_f32vec3 center() {
+    return (this.minimum + this.maximum) * 0.5;
+  }
+
+  daxa_f32vec3 size() {
+    return this.maximum - this.minimum;
+  }
+
+  daxa_f32vec3 get_corner(daxa_u32 index) {
+    daxa_f32vec3 result;
+    result.x = (index & 1) == 0 ? this.minimum.x : this.maximum.x;
+    result.y = (index & 2) == 0 ? this.minimum.y : this.maximum.y;
+    result.z = (index & 4) == 0 ? this.minimum.z : this.maximum.z;
+    return result;
+  }
+#endif // __cplusplus
 };
+
+static const daxa_u32 MAX_INCIDENT_VERTEX_COUNT = 4;
+static const daxa_u32 MAX_CONTACT_POINT_COUNT = 8;
+
+struct Transform {
+  daxa_f32vec3 position;
+  daxa_f32mat3x3 rotation;
+};
+
+struct FeaturePair {
+  daxa_u32 in_reference;
+  daxa_u32 out_reference;
+  daxa_u32 in_incident;
+  daxa_u32 out_incident;
+};
+
+struct ClipVertex {
+  daxa_f32vec3 v;
+  FeaturePair f;
+};
+
+struct Contact {
+  daxa_f32vec3 position;
+  daxa_f32 penetration;
+  daxa_f32 normal_impulse;
+  daxa_f32 tangent_impulse[2];
+  daxa_f32 bias;
+  daxa_f32 normal_mass;
+  daxa_f32 tangent_mass[2];
+  FeaturePair fp;
+};
+
+struct Manifold {
+  daxa_u32 obb1_index;
+  daxa_u32 obb2_index;
+  daxa_i32 key;
+
+  daxa_i32 error;
+
+  // DEBUG
+  Transform rtx;
+  Transform itx;
+  daxa_f32vec3 e_r;
+  daxa_f32vec3 e_i;
+
+  daxa_f32vec3 normal;
+  daxa_f32vec3 tangent_vectors[2];
+  Contact contacts[MAX_CONTACT_POINT_COUNT];
+  daxa_i32 contact_count;
+};
+DAXA_DECL_BUFFER_PTR(Manifold)
 
 struct Ray {
     daxa_f32vec3 origin;
@@ -107,8 +175,8 @@ static const daxa_f32 EPSILON = 1.192092896e-07F;
 daxa_f32 hitAabb(const Aabb aabb, const Ray r)
 {
   daxa_f32vec3  invDir = 1.0f / r.direction;
-  daxa_f32vec3  tbot   = invDir * (aabb.min - r.origin);
-  daxa_f32vec3  ttop   = invDir * (aabb.max - r.origin);
+  daxa_f32vec3  tbot   = invDir * (aabb.minimum - r.origin);
+  daxa_f32vec3  ttop   = invDir * (aabb.maximum - r.origin);
   daxa_f32vec3  tmin   = MIN(ttop, tbot);
   daxa_f32vec3  tmax   = MAX(ttop, tbot);
   daxa_f32 t0     = MAX(tmin.x, MAX(tmin.y, tmin.z));

@@ -53,7 +53,7 @@ static const daxa_f32 shininess = 10.0;
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
   Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);
 
-  daxa_f32vec3 center = (aabb.min + aabb.max) * 0.5;
+  daxa_f32vec3 center = aabb.center();
   center = r->object_to_world(center);
 
   daxa_f32vec3 color = material_color;

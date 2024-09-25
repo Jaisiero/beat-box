@@ -62,8 +62,8 @@ struct RigidBody
   daxa_u32 primitive_offset;
   daxa_f32vec3 position;
   daxa_f32vec4 rotation;
-  daxa_f32vec3 min;
-  daxa_f32vec3 max;
+  daxa_f32vec3 minimum;
+  daxa_f32vec3 maximum;
   daxa_f32 mass;
   daxa_f32 inv_mass;
   daxa_f32vec3 velocity;
@@ -198,6 +198,8 @@ DAXA_DECL_TASK_HEAD_END
 static const daxa_f32 T_MIN = 1e-3f;
 static const daxa_f32 T_MAX = 1e9f;
 static const daxa_f32 PI = 3.14159265359f;
+static const daxa_f32 COLLISION_GUARD = 1e-3f;
+static const daxa_u32 AABB_CORNER_COUNT = 8;
 
 struct SimConfig
 {
@@ -223,20 +225,16 @@ struct RTPushConstants
 
 static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 64;
 
-struct Collision
-{
-  daxa_u32 a;
-  daxa_u32 b;
-  daxa_f32vec3 penetration;
-};
-DAXA_DECL_BUFFER_PTR(Collision)
+
+
+DAXA_DECL_BUFFER_PTR(Manifold)
 
 DAXA_DECL_TASK_HEAD_BEGIN(GJKTaskHead)
 DAXA_TH_BUFFER_PTR(HOST_TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(HOST_TRANSFER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Collision), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
 DAXA_DECL_TASK_HEAD_END
 
 struct GJKPushConstants

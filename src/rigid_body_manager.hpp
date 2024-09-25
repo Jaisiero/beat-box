@@ -55,7 +55,7 @@ struct RigidBodyManager{
     });
 
     collisions = device.create_buffer({
-        .size = sizeof(Collision) * MAX_RIGID_BODY_COUNT * MAX_RIGID_BODY_COUNT, // TODO: Change to a more reasonable size
+        .size = sizeof(Manifold) * MAX_RIGID_BODY_COUNT * MAX_RIGID_BODY_COUNT, // TODO: Change to a more reasonable size
         .name = "collisions",
     });
 
