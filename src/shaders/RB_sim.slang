@@ -412,7 +412,7 @@ struct OBBvsOBBCollision {
     }
   }
 
-  static void compute_reference_edges_and_basis(const daxa_f32vec3 e, const Transform rtx, daxa_f32vec3 n, daxa_i32 axis, out daxa_u32 clip_edges[MAX_INCIDENT_VERTEX_COUNT], out daxa_f32mat3x3 basis, out daxa_f32vec3 e_r) {
+  static void compute_reference_edges_and_basis(const daxa_f32vec3 e_r, const Transform rtx, daxa_f32vec3 n, daxa_i32 axis, out daxa_u32 clip_edges[MAX_INCIDENT_VERTEX_COUNT], out daxa_f32mat3x3 basis, out daxa_f32vec3 e) {
     n = rtx.rotate_transpose(n);
 
     if(axis > A_AXIS_NUM) {
@@ -431,7 +431,7 @@ struct OBBvsOBBCollision {
           clip_edges[2] = Edge::NEG_X_NEG_Z;
           clip_edges[3] = Edge::POS_Y_NEG_Z;
 
-          e_r = daxa_f32vec3(e.y, e.z, e.x);
+          e = daxa_f32vec3(e_r.y, e_r.z, e_r.x);
           basis = daxa_f32mat3x3(r[1], r[2], r[0]);
         } else {
           clip_edges[0] = Edge::NEG_Y_NEG_Z;
@@ -439,7 +439,7 @@ struct OBBvsOBBCollision {
           clip_edges[2] = Edge::NEG_Y_POS_Z;
           clip_edges[3] = Edge::NEG_X_NEG_Y;
 
-          e_r = daxa_f32vec3(e.z, e.y, e.x);
+          e = daxa_f32vec3(e_r.z, e_r.y, e_r.x);
           basis = daxa_f32mat3x3(r[2], r[1], -r[0]);
         }
       }
@@ -452,7 +452,7 @@ struct OBBvsOBBCollision {
           clip_edges[2] = Edge::POS_X_POS_Z;
           clip_edges[3] = Edge::POS_X_NEG_Z;
 
-          e_r = daxa_f32vec3(e.z, e.x, e.y);
+          e = daxa_f32vec3(e_r.z, e_r.x, e_r.y);
           basis = daxa_f32mat3x3(r[2], r[0], r[1]);
         } else {
           clip_edges[0] = Edge::NEG_X_POS_Y;
@@ -460,7 +460,7 @@ struct OBBvsOBBCollision {
           clip_edges[2] = Edge::NEG_X_POS_Z;
           clip_edges[3] = Edge::NEG_X_NEG_Z;
 
-          e_r = daxa_f32vec3(e.z, e.x, e.y);
+          e = daxa_f32vec3(e_r.z, e_r.x, e_r.y);
           basis = daxa_f32mat3x3(r[2], -r[0], -r[1]);
         }
 
@@ -474,7 +474,7 @@ struct OBBvsOBBCollision {
           clip_edges[2] = Edge::POS_Y_POS_Z;
           clip_edges[3] = Edge::POS_X_POS_Y;
 
-          e_r = daxa_f32vec3(e.y, e.x, e.z);
+          e = daxa_f32vec3(e_r.y, e_r.x, e_r.z);
           basis = daxa_f32mat3x3(-r[1], r[0], r[2]);
         } else {
           clip_edges[0] = Edge::NEG_X_POS_Z;
@@ -482,7 +482,7 @@ struct OBBvsOBBCollision {
           clip_edges[2] = Edge::POS_X_POS_Z;
           clip_edges[3] = Edge::POS_Y_NEG_Z;
 
-          e_r = daxa_f32vec3(e.y, e.x, e.z);
+          e = daxa_f32vec3(e_r.y, e_r.x, e_r.z);
           basis = daxa_f32mat3x3(-r[1], -r[0], -r[2]);
         }
 
@@ -508,14 +508,14 @@ struct OBBvsOBBCollision {
     return (v < CLIP_THRESHOLD) && (v > -CLIP_THRESHOLD);
   }
 
-  static daxa_i32 ortographic_clip(daxa_f32 sign, daxa_f32 e, daxa_i32 axis, daxa_u32 clip_edge, const ClipVertex incident[MAX_CONTACT_POINT_COUNT], daxa_i32 in_count, out ClipVertex clipped[MAX_CONTACT_POINT_COUNT]) 
+  static daxa_i32 ortographic_clip(daxa_f32 sign, daxa_f32 e, daxa_i32 axis, daxa_u32 clip_edge, const ClipVertex in[MAX_CONTACT_POINT_COUNT], daxa_i32 in_count, out ClipVertex out[MAX_CONTACT_POINT_COUNT]) 
   {
     daxa_i32 out_count = 0;
-    ClipVertex a = incident[in_count - 1];
+    ClipVertex a = in[in_count - 1];
     
     for(daxa_i32 i = 0; i < in_count; ++i) 
     {
-      ClipVertex b = incident[i];
+      ClipVertex b = in[i];
 
       daxa_f32 da = sign * a.v[axis] - e;
       daxa_f32 db = sign * b.v[axis] - e;
@@ -524,7 +524,7 @@ struct OBBvsOBBCollision {
       
       if((in_front(da) && in_front(db)) || on(da) || on(db)) 
       {
-        clipped[out_count++] = b;
+        out[out_count++] = b;
       } 
       else if(in_front(da) && behind(db)) 
       {
@@ -532,7 +532,7 @@ struct OBBvsOBBCollision {
         cv.v = a.v + (b.v - a.v) * (da / (da - db));
         cv.f.out_reference = clip_edge;
         cv.f.out_incident = 0;
-        clipped[out_count++] = cv;
+        out[out_count++] = cv;
       } 
       else if(behind(da) && in_front(db)) 
       {
@@ -540,8 +540,8 @@ struct OBBvsOBBCollision {
         cv.v = a.v + (b.v - a.v) * (da / (da - db));
         cv.f.in_reference = clip_edge;
         cv.f.in_incident = 0;
-        clipped[out_count++] = cv;
-        clipped[out_count++] = b;
+        out[out_count++] = cv;
+        out[out_count++] = b;
       }
       a = b;
     }
@@ -549,7 +549,7 @@ struct OBBvsOBBCollision {
     return out_count;
   }
 
-  static daxa_i32 clip(const daxa_f32vec3 position, const daxa_f32vec3 e, const daxa_u32 clip_edges[MAX_INCIDENT_VERTEX_COUNT], const daxa_f32mat3x3 basis, const ClipVertex incident[MAX_INCIDENT_VERTEX_COUNT], out ClipVertex clipped[MAX_CONTACT_POINT_COUNT], out daxa_f32 depths[MAX_CONTACT_POINT_COUNT], out daxa_i32 error) {
+  static daxa_i32 clip(const daxa_f32vec3 position, const daxa_f32vec3 e, const daxa_u32 clip_edges[MAX_INCIDENT_VERTEX_COUNT], const daxa_f32mat3x3 basis, const ClipVertex incident[MAX_INCIDENT_VERTEX_COUNT], out ClipVertex out_vertices[MAX_CONTACT_POINT_COUNT], out daxa_f32 depths[MAX_CONTACT_POINT_COUNT], out daxa_i32 error) {
     daxa_i32 in_count = MAX_INCIDENT_VERTEX_COUNT;
     daxa_i32 out_count = 0;
     ClipVertex in[MAX_CONTACT_POINT_COUNT];
@@ -568,6 +568,15 @@ struct OBBvsOBBCollision {
     if(out_count == 0) {
       // DEBUGGING
       error = 10;
+      // ClipVertex a = in[in_count - 1];
+      for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
+        ClipVertex b = in[i];
+        daxa_f32 da = 1.0 * b.v[0] - e.x;
+        daxa_f32 db = 1.0 * b.v[1] - e.y;
+        out_vertices[i] = in[i];
+        depths[i] = da;
+        depths[i+MAX_INCIDENT_VERTEX_COUNT] = db;
+      }
       return 0;
     }
 
@@ -575,7 +584,16 @@ struct OBBvsOBBCollision {
 
     if(in_count == 0) {
       // DEBUGGING
-      error = 11;
+      error = 11; 
+      // ClipVertex a = in[in_count - 1];
+      for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
+        ClipVertex b = in[i];
+        daxa_f32 da = 1.0 * b.v[0] - e.x;
+        daxa_f32 db = 1.0 * b.v[1] - e.y;
+        out_vertices[i] = in[i];
+        depths[i] = da;
+        depths[i+MAX_INCIDENT_VERTEX_COUNT] = db;
+      }
       return 0;
     }
     error = in_count;
@@ -595,8 +613,8 @@ struct OBBvsOBBCollision {
     for(daxa_i32 i = 0; i < in_count; ++i) {
       daxa_f32 d = in[i].v.z - e.z;
       if(d <= 0.0f) {
-        clipped[out_count].v = mul(basis, in[i].v) + position;
-        clipped[out_count].f = in[i].f;
+        out_vertices[out_count].v = mul(basis, in[i].v) + position;
+        out_vertices[out_count].f = in[i].f;
         depths[out_count] = d;
         ++out_count;
       }
@@ -707,18 +725,26 @@ struct OBBvsOBBCollision {
     // Calculate vector from center of OBB1 to center of OBB2 in OBB1's coordinate frame
     daxa_f32vec3 t = A->rotate_vector_inverse(B->position - A->position);
 
-    // Define axes for OBB1 and OBB2
-    Axis OBB1_Axes[3] = {
-        { A_X_AXIS, daxa_f32vec3(r_A[0][0], r_A[1][0], r_A[2][0]) }, // A_X_AXIS
-        { A_Y_AXIS, daxa_f32vec3(r_A[0][1], r_A[1][1], r_A[2][1]) }, // A_Y_AXIS
-        { A_Z_AXIS, daxa_f32vec3(r_A[0][2], r_A[1][2], r_A[2][2]) }  // A_Z_AXIS
-    };
+    Axis OBB1_Axes[3];
+    Axis OBB2_Axes[3];
 
-    Axis OBB2_Axes[3] = {
-        { B_X_AXIS, daxa_f32vec3(r_B[0][0], r_B[1][0], r_B[2][0]) }, // B_X_AXIS
-        { B_Y_AXIS, daxa_f32vec3(r_B[0][1], r_B[1][1], r_B[2][1]) }, // B_Y_AXIS
-        { B_Z_AXIS, daxa_f32vec3(r_B[0][2], r_B[1][2], r_B[2][2]) }  // B_Z_AXIS
-    };
+    {
+      let r_A_t = transpose(r_A);
+      let r_B_t = transpose(r_B);
+
+      // Define axes for OBB1 and OBB2
+      OBB1_Axes = {
+          { A_X_AXIS, daxa_f32vec3(r_A_t[0]) }, // A_X_AXIS
+          { A_Y_AXIS, daxa_f32vec3(r_A_t[1]) }, // A_Y_AXIS
+          { A_Z_AXIS, daxa_f32vec3(r_A_t[2]) }  // A_Z_AXIS
+      };
+
+      OBB2_Axes= {
+          { B_X_AXIS, daxa_f32vec3(r_B_t[0]) }, // B_X_AXIS
+          { B_Y_AXIS, daxa_f32vec3(r_B_t[1]) }, // B_Y_AXIS
+          { B_Z_AXIS, daxa_f32vec3(r_B_t[2]) }  // B_Z_AXIS
+      };
+    }
 
     // Initialize tracking variables
     daxa_f32 a_max = -FLT_MAX;
@@ -749,7 +775,8 @@ struct OBBvsOBBCollision {
     // Iterate through OBB2's axes
     for(int i = 0; i < 3; ++i) {
         // Compute the projection using dot product
-        float projection = t.x * C[0][i] + t.y * C[1][i] + t.z * C[2][i];
+        // dot(t, C[i]) = t.x * C[0][i] + t.y * C[1][i] + t.z * C[2][i]
+        float projection = t.x * C[0][i] + t.y * C[1][i] + t.z * C[2][i]; 
         float s = abs(projection) - (e_B[i] + 
                                       e_A.x * abs_C[0][i] + 
                                       e_A.y * abs_C[1][i] + 
@@ -968,12 +995,15 @@ struct OBBvsOBBCollision {
       compute_reference_edges_and_basis(e_r, rtx, normal, axis, clip_edges, basis, e);
 
       // TODO: DEBUGGING
-      manifold.normal = -itx.rotate_transpose(normal);
+      manifold.normal = normal;
       manifold.key = axis;
+      manifold.s_max = s_max;
       manifold.itx = itx;
       manifold.rtx = rtx;
       manifold.e_i = e_i;
       manifold.e_r = e_r;
+      manifold.e = e;
+      manifold.basis = basis;
       manifold.contacts[0].position = incident[0].v;
       manifold.contacts[0].fp = incident[0].f;
       manifold.contacts[0].bias = daxa_f32(clip_edges[0]);
@@ -989,16 +1019,35 @@ struct OBBvsOBBCollision {
       // TODO: DEBUGGING
 
       // Clip the incident face against the reference face
-      ClipVertex clipped[MAX_CONTACT_POINT_COUNT];
+      ClipVertex out_vertices[MAX_CONTACT_POINT_COUNT];
       daxa_f32 depths[MAX_CONTACT_POINT_COUNT];
       // DEBUGGING
       daxa_i32 error;
-      daxa_i32 out_num = clip(rtx.position, e, clip_edges, basis, incident, clipped, depths, error);
+      daxa_i32 out_num = clip(rtx.position, e, clip_edges, basis, incident, out_vertices, depths, error);
 
       // DEBUGGING
       if(error != 0) {
         manifold.contact_count = 0;
         manifold.error = error;
+
+        for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
+          manifold.contacts[4].position = out_vertices[0].v;
+          manifold.contacts[4].fp = out_vertices[0].f;
+          manifold.contacts[4].penetration = depths[0];
+          manifold.contacts[4].normal_impulse = depths[4];
+          manifold.contacts[5].position = out_vertices[1].v;
+          manifold.contacts[5].fp = out_vertices[1].f;
+          manifold.contacts[5].penetration = depths[1];
+          manifold.contacts[5].normal_impulse = depths[5];
+          manifold.contacts[6].position = out_vertices[2].v;
+          manifold.contacts[6].fp = out_vertices[2].f;
+          manifold.contacts[6].penetration = depths[2];
+          manifold.contacts[6].normal_impulse = depths[6];
+          manifold.contacts[7].position = out_vertices[3].v;
+          manifold.contacts[7].fp = out_vertices[3].f;
+          manifold.contacts[7].penetration = depths[3];
+          manifold.contacts[7].normal_impulse = depths[7];
+        }
         return true; // FAIL
       }
 
@@ -1009,13 +1058,13 @@ struct OBBvsOBBCollision {
         for(daxa_i32 i = 0; i < out_num; ++i) {
           
           if(flip) {
-            let tmp = clipped[i].f.in_reference;
-            clipped[i].f.in_reference = clipped[i].f.out_reference;
-            clipped[i].f.out_reference = tmp;
+            let tmp = out_vertices[i].f.in_reference;
+            out_vertices[i].f.in_reference = out_vertices[i].f.out_reference;
+            out_vertices[i].f.out_reference = tmp;
           }
 
-          manifold.contacts[i].fp = clipped[i].f;
-          manifold.contacts[i].position = clipped[i].v;
+          manifold.contacts[i].fp = out_vertices[i].f;
+          manifold.contacts[i].position = out_vertices[i].v;
           manifold.contacts[i].penetration = depths[i];
         }
       }
