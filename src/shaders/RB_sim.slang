@@ -188,19 +188,19 @@ extension RigidBody
 extension Transform {
 
     daxa_f32vec3 rotate(daxa_f32vec3 v) {
-      return mul(rotation, v);
+      return mul(v, rotation);
     }
 
     daxa_f32vec3 rotate_transpose(daxa_f32vec3 v) {
-      return mul(transpose(rotation), v);
+      return mul(v, transpose(rotation));
     }
 
     daxa_f32vec3 transform(daxa_f32vec3 v) {
-      return mul(rotation, v) + position;
+      return mul(v, rotation) + position;
     }
 
     daxa_f32vec3 transform_transpose(daxa_f32vec3 v) {
-      return mul(transpose(rotation), v - position);
+      return mul(v - position, transpose(rotation));
     }
 };
 
@@ -517,8 +517,8 @@ struct OBBvsOBBCollision {
     {
       ClipVertex b = in[i];
 
-      daxa_f32 da = sign * a.v[axis] - e;
-      daxa_f32 db = sign * b.v[axis] - e;
+      daxa_f32 da = e - sign * a.v[axis];
+      daxa_f32 db = e - sign * b.v[axis];
 
       ClipVertex cv;
       
@@ -560,7 +560,7 @@ struct OBBvsOBBCollision {
     let transpose_basis = transpose(basis);
 
     for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
-      in[i].v = mul(transpose_basis, incident[i].v - position);
+      in[i].v = mul(incident[i].v - position, transpose_basis);
     }
 
     out_count = ortographic_clip(1.0f, e.x, 0, clip_edges[0], in, in_count, out);
@@ -568,15 +568,15 @@ struct OBBvsOBBCollision {
     if(out_count == 0) {
       // DEBUGGING
       error = 10;
-      // ClipVertex a = in[in_count - 1];
-      for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
-        ClipVertex b = in[i];
-        daxa_f32 da = 1.0 * b.v[0] - e.x;
-        daxa_f32 db = 1.0 * b.v[1] - e.y;
-        out_vertices[i] = in[i];
-        depths[i] = da;
-        depths[i+MAX_INCIDENT_VERTEX_COUNT] = db;
-      }
+      // // ClipVertex a = in[in_count - 1];
+      // for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
+      //   ClipVertex b = in[i];
+      //   daxa_f32 da = e.x - 1.0 * b.v[0];
+      //   daxa_f32 db = e.y - 1.0 * b.v[1];
+      //   out_vertices[i] = in[i];
+      //   depths[i] = da;
+      //   depths[i+MAX_INCIDENT_VERTEX_COUNT] = db;
+      // }
       return 0;
     }
 
@@ -585,18 +585,17 @@ struct OBBvsOBBCollision {
     if(in_count == 0) {
       // DEBUGGING
       error = 11; 
-      // ClipVertex a = in[in_count - 1];
-      for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
-        ClipVertex b = in[i];
-        daxa_f32 da = 1.0 * b.v[0] - e.x;
-        daxa_f32 db = 1.0 * b.v[1] - e.y;
-        out_vertices[i] = in[i];
-        depths[i] = da;
-        depths[i+MAX_INCIDENT_VERTEX_COUNT] = db;
-      }
+      // // ClipVertex a = in[in_count - 1];
+      // for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
+      //   ClipVertex b = in[i];
+      //   daxa_f32 da = e.x - 1.0 * b.v[0];
+      //   daxa_f32 db = e.y - 1.0 * b.v[1];
+      //   out_vertices[i] = in[i];
+      //   depths[i] = da;
+      //   depths[i+MAX_INCIDENT_VERTEX_COUNT] = db;
+      // }
       return 0;
     }
-    error = in_count;
 
     out_count = ortographic_clip(-1.0f, e.x, 0, clip_edges[2], in, in_count, out);
 
@@ -613,7 +612,7 @@ struct OBBvsOBBCollision {
     for(daxa_i32 i = 0; i < in_count; ++i) {
       daxa_f32 d = in[i].v.z - e.z;
       if(d <= 0.0f) {
-        out_vertices[out_count].v = mul(basis, in[i].v) + position;
+        out_vertices[out_count].v = mul(in[i].v, basis) + position;
         out_vertices[out_count].f = in[i].f;
         depths[out_count] = d;
         ++out_count;
@@ -698,7 +697,7 @@ struct OBBvsOBBCollision {
     CB = PB + DB * TB;
   }
 
-  static daxa_b32 collision_detection(Ptr<RigidBody> A, Ptr<RigidBody> B, inout Manifold manifold) {
+  static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, inout Manifold manifold) {
 
     // Transform the OBBs to world space
     daxa_f32mat3x3 r_A = A->quat_to_mat3x3();
@@ -1024,30 +1023,31 @@ struct OBBvsOBBCollision {
       // DEBUGGING
       daxa_i32 error;
       daxa_i32 out_num = clip(rtx.position, e, clip_edges, basis, incident, out_vertices, depths, error);
+        
+      manifold.error = error;
 
       // DEBUGGING
       if(error != 0) {
         manifold.contact_count = 0;
-        manifold.error = error;
 
-        for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
-          manifold.contacts[4].position = out_vertices[0].v;
-          manifold.contacts[4].fp = out_vertices[0].f;
-          manifold.contacts[4].penetration = depths[0];
-          manifold.contacts[4].normal_impulse = depths[4];
-          manifold.contacts[5].position = out_vertices[1].v;
-          manifold.contacts[5].fp = out_vertices[1].f;
-          manifold.contacts[5].penetration = depths[1];
-          manifold.contacts[5].normal_impulse = depths[5];
-          manifold.contacts[6].position = out_vertices[2].v;
-          manifold.contacts[6].fp = out_vertices[2].f;
-          manifold.contacts[6].penetration = depths[2];
-          manifold.contacts[6].normal_impulse = depths[6];
-          manifold.contacts[7].position = out_vertices[3].v;
-          manifold.contacts[7].fp = out_vertices[3].f;
-          manifold.contacts[7].penetration = depths[3];
-          manifold.contacts[7].normal_impulse = depths[7];
-        }
+        // for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
+        //   manifold.contacts[4].position = out_vertices[0].v;
+        //   manifold.contacts[4].fp = out_vertices[0].f;
+        //   manifold.contacts[4].penetration = depths[0];
+        //   manifold.contacts[4].normal_impulse = depths[4];
+        //   manifold.contacts[5].position = out_vertices[1].v;
+        //   manifold.contacts[5].fp = out_vertices[1].f;
+        //   manifold.contacts[5].penetration = depths[1];
+        //   manifold.contacts[5].normal_impulse = depths[5];
+        //   manifold.contacts[6].position = out_vertices[2].v;
+        //   manifold.contacts[6].fp = out_vertices[2].f;
+        //   manifold.contacts[6].penetration = depths[2];
+        //   manifold.contacts[6].normal_impulse = depths[6];
+        //   manifold.contacts[7].position = out_vertices[3].v;
+        //   manifold.contacts[7].fp = out_vertices[3].f;
+        //   manifold.contacts[7].penetration = depths[3];
+        //   manifold.contacts[7].normal_impulse = depths[7];
+        // }
         return true; // FAIL
       }
 
@@ -1058,9 +1058,12 @@ struct OBBvsOBBCollision {
         for(daxa_i32 i = 0; i < out_num; ++i) {
           
           if(flip) {
-            let tmp = out_vertices[i].f.in_reference;
-            out_vertices[i].f.in_reference = out_vertices[i].f.out_reference;
-            out_vertices[i].f.out_reference = tmp;
+            var tmp = out_vertices[i].f.in_reference;
+            out_vertices[i].f.in_reference = out_vertices[i].f.in_incident;
+            out_vertices[i].f.in_incident = tmp;
+            tmp = out_vertices[i].f.out_reference;
+            out_vertices[i].f.out_reference = out_vertices[i].f.out_incident;
+            out_vertices[i].f.out_incident = tmp;
           }
 
           manifold.contacts[i].fp = out_vertices[i].f;
@@ -1106,7 +1109,7 @@ struct OBBvsOBBCollision {
 
 
 
-func GJK(const daxa_u32 rigid_body_index, inout Ptr<RigidBody> r,
+func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
          Ptr<SimConfig> sim_config, Ptr<Manifold> collisions) -> void
 {
   var any_collision = false;
@@ -1136,16 +1139,16 @@ func GJK(const daxa_u32 rigid_body_index, inout Ptr<RigidBody> r,
       InterlockedAdd(sim_config->collision_count, 1u, index);
 
       collisions[index] = manifold;
-      if(r->has_flag(RigidBodyFlag::KINEMATIC))
-      {
-        for(daxa_u32 c = 0u; i < manifold.contact_count; ++c)
-        {
-          Contact contact = manifold.contacts[c];
-          daxa_f32vec3 collision_point = contact.position;
-          daxa_f32vec3 normal = normalize(manifold.normal);
-          r->apply_contact(collision_point, normal);
-        }
-      }
+      // if(r->has_flag(RigidBodyFlag::KINEMATIC))
+      // {
+      //   for(daxa_u32 c = 0u; c < manifold.contact_count; ++c)
+      //   {
+      //     Contact contact = manifold.contacts[c];
+      //     daxa_f32vec3 collision_point = contact.position;
+      //     daxa_f32vec3 normal = normalize(manifold.normal);
+      //     r->apply_contact(collision_point, normal);
+      //   }
+      // }
     }
   }
 
@@ -1174,7 +1177,7 @@ func GJK(const daxa_u32 rigid_body_index, inout Ptr<RigidBody> r,
   Ptr<Manifold> collisions =
       Ptr<Manifold>(p.task_head.collisions);
 
-  GJK(pixel_i.x, r, sim_config, collisions);
+  broad_phase(pixel_i.x, r, sim_config, collisions);
 }
 #elif defined(SET_COLLISION_COUNT)
 
