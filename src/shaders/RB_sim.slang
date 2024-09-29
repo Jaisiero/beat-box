@@ -72,7 +72,7 @@ extension RigidBody
 
   [mutating] void apply_impulse(daxa_f32vec3 impulse, daxa_f32vec3 point)
   {
-    daxa_f32vec3 torque = cross(point - this.position, impulse);
+    daxa_f32vec3 torque = cross(impulse, point - this.position);
     daxa_f32vec3 linear_velocity = impulse * this.inv_mass;
     daxa_f32vec3 angular_velocity = mul(this.inv_inertia, torque);
 
@@ -88,7 +88,7 @@ extension RigidBody
 
   daxa_f32vec3 get_velocity_at(daxa_f32vec3 point)
   {
-    return this.velocity + cross(this.omega, point - this.position);
+    return this.velocity + cross(point - this.position, this.omega);
   }
 
   daxa_f32mat3x3 quat_to_mat3x3() {
@@ -202,6 +202,22 @@ extension Transform {
       return mul(v - position, transpose(rotation));
     }
 };
+
+extension Manifold {
+  [mutating] void compute_basis() 
+  {
+    daxa_f32vec3 normal = this.normal;
+
+    if (abs(normal.x) > abs(normal.y)) {
+      tangent_vectors[0] = daxa_f32vec3(normal.z, 0, -normal.x);
+    } else {
+      tangent_vectors[0] = daxa_f32vec3(0, -normal.z, normal.y);
+    }
+
+    tangent_vectors[0] = normalize(tangent_vectors[0]);
+    tangent_vectors[1] = cross(tangent_vectors[0], normal);
+  }
+}
 
 // credits: https://github.com/RandyGaul/qu3e
 struct OBBvsOBBCollision {
@@ -1136,7 +1152,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       any_collision = true;
       daxa_u32 index = 0;
       InterlockedAdd(sim_config->collision_count, 1u, index);
-
+      manifold.compute_basis();
       collisions[index] = manifold;
     }
   }
