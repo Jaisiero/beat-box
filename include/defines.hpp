@@ -61,11 +61,14 @@ const auto RT_shader_file_string = "ray_tracing.slang";
 const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
 
 const auto RB_sim_shader_file_string = "RB_sim.slang";
-const auto entry_gjk_sim = "entry_GJK";
-const auto GJK_define = "GJK_SIM";
-const auto GJK_sim_pipeline_name = "GJK Simulation";
+// broad phase
+const auto entry_broad_phase_sim = "entry_broad_phase";
+const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
+// collision solver
+const auto entry_collision_solver = "entry_collision_solver";
+const auto collision_solver_pipeline_name = "Collision Solver";
+// sim
 const auto entry_rigid_body_sim = "entry_rigid_body_sim";
-const auto RB_define = "RIGID_BODY_SIM";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
 
 const auto AS_shader_file_string = "AS_mngr.slang";
@@ -176,34 +179,42 @@ struct MainRayTracingPipeline
   }
 };
 
-struct GJKSim {
+struct BroadPhaseInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
       .compile_options = {
-          .entry_point = entry_gjk_sim,
-          .defines = {
-              {daxa::ShaderDefine{GJK_define, "1"}},
-          },
+          .entry_point = entry_broad_phase_sim
       },
   };
 
   daxa::ComputePipelineCompileInfo info = {
       .shader_info = compute_shader,
-      .push_constant_size = sizeof(GJKPushConstants),
-      .name = GJK_sim_pipeline_name,
+      .push_constant_size = sizeof(BroadPhasePushConstants),
+      .name = broad_phase_sim_pipeline_name,
   };
 };
 
+struct CollisionSolverInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_collision_solver
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(CollisionSolverPushConstants),
+      .name = collision_solver_pipeline_name,
+  };
+};
 
 struct RigidBodySim
 {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
       .compile_options = {
-          .entry_point = entry_rigid_body_sim,
-          .defines = {
-              {daxa::ShaderDefine{RB_define, "1"}},
-          },
+          .entry_point = entry_rigid_body_sim
       },
   };
 

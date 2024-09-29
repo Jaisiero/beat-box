@@ -64,15 +64,15 @@ struct Manifold {
   daxa_u32 obb2_index;
   daxa_i32 key;
 
-  // DEBUG
   daxa_i32 error;
-  daxa_f32 s_max;
-  Transform rtx;
-  daxa_f32vec3 e_r;
-  Transform itx;
-  daxa_f32vec3 e_i;
-  daxa_f32vec3 e;
-  daxa_f32mat3x3 basis;
+  // // DEBUG
+  // daxa_f32 s_max;
+  // Transform rtx;
+  // daxa_f32vec3 e_r;
+  // Transform itx;
+  // daxa_f32vec3 e_i;
+  // daxa_f32vec3 e;
+  // daxa_f32mat3x3 basis;
 
   daxa_f32vec3 normal;
   daxa_f32vec3 tangent_vectors[2];

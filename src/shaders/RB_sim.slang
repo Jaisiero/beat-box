@@ -1,10 +1,8 @@
 #include "shared.inl"
 
-#if defined(GJK_SIM)
-[[vk::push_constant]] GJKPushConstants p;
-#elif defined(RIGID_BODY_SIM)
-[[vk::push_constant]] RigidBodySimPushConstants p;
-#endif
+[[vk::push_constant]] BroadPhasePushConstants BP;
+[[vk::push_constant]] CollisionSolverPushConstants CS;
+[[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 
 extension RigidBody
 {
@@ -993,29 +991,29 @@ struct OBBvsOBBCollision {
       daxa_f32vec3 e;
       compute_reference_edges_and_basis(e_r, rtx, normal, axis, clip_edges, basis, e);
 
-      // TODO: DEBUGGING
-      manifold.normal = normal;
-      manifold.key = axis;
-      manifold.s_max = s_max;
-      manifold.itx = itx;
-      manifold.rtx = rtx;
-      manifold.e_i = e_i;
-      manifold.e_r = e_r;
-      manifold.e = e;
-      manifold.basis = basis;
-      manifold.contacts[0].position = incident[0].v;
-      manifold.contacts[0].fp = incident[0].f;
-      manifold.contacts[0].bias = daxa_f32(clip_edges[0]);
-      manifold.contacts[1].position = incident[1].v;
-      manifold.contacts[1].fp = incident[1].f;
-      manifold.contacts[1].bias = daxa_f32(clip_edges[1]);
-      manifold.contacts[2].position = incident[2].v;
-      manifold.contacts[2].fp = incident[2].f;
-      manifold.contacts[2].bias = daxa_f32(clip_edges[2]);
-      manifold.contacts[3].position = incident[3].v;
-      manifold.contacts[3].fp = incident[3].f;
-      manifold.contacts[3].bias = daxa_f32(clip_edges[3]);
-      // TODO: DEBUGGING
+      // // TODO: DEBUGGING
+      // manifold.normal = normal;
+      // manifold.key = axis;
+      // manifold.s_max = s_max;
+      // manifold.itx = itx;
+      // manifold.rtx = rtx;
+      // manifold.e_i = e_i;
+      // manifold.e_r = e_r;
+      // manifold.e = e;
+      // manifold.basis = basis;
+      // manifold.contacts[0].position = incident[0].v;
+      // manifold.contacts[0].fp = incident[0].f;
+      // manifold.contacts[0].bias = daxa_f32(clip_edges[0]);
+      // manifold.contacts[1].position = incident[1].v;
+      // manifold.contacts[1].fp = incident[1].f;
+      // manifold.contacts[1].bias = daxa_f32(clip_edges[1]);
+      // manifold.contacts[2].position = incident[2].v;
+      // manifold.contacts[2].fp = incident[2].f;
+      // manifold.contacts[2].bias = daxa_f32(clip_edges[2]);
+      // manifold.contacts[3].position = incident[3].v;
+      // manifold.contacts[3].fp = incident[3].f;
+      // manifold.contacts[3].bias = daxa_f32(clip_edges[3]);
+      // // TODO: DEBUGGING
 
       // Clip the incident face against the reference face
       ClipVertex out_vertices[MAX_CONTACT_POINT_COUNT];
@@ -1121,7 +1119,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
         continue;
     }
     // Simplex simplex;
-    Ptr<RigidBody> r2 = Ptr<RigidBody>(&p.task_head.rigid_bodies[i]);
+    Ptr<RigidBody> r2 = Ptr<RigidBody>(&BP.task_head.rigid_bodies[i]);
 
     Manifold manifold;
     manifold.obb1_index = rigid_body_index;
@@ -1139,16 +1137,6 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       InterlockedAdd(sim_config->collision_count, 1u, index);
 
       collisions[index] = manifold;
-      // if(r->has_flag(RigidBodyFlag::KINEMATIC))
-      // {
-      //   for(daxa_u32 c = 0u; c < manifold.contact_count; ++c)
-      //   {
-      //     Contact contact = manifold.contacts[c];
-      //     daxa_f32vec3 collision_point = contact.position;
-      //     daxa_f32vec3 normal = normalize(manifold.normal);
-      //     r->apply_contact(collision_point, normal);
-      //   }
-      // }
     }
   }
 
@@ -1158,13 +1146,12 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   }
 }
 
-#if defined(GJK_SIM)
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_GJK(uint3 pixel_i : SV_DispatchThreadID)
+    entry_broad_phase(uint3 pixel_i : SV_DispatchThreadID)
 {
   Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(p.task_head.sim_config);
+      Ptr<SimConfig>(BP.task_head.sim_config);
 
   if (pixel_i.x >= sim_config->rigid_body_count)
   {
@@ -1172,22 +1159,54 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   }
 
   Ptr<RigidBody> r =
-      Ptr<RigidBody>(&p.task_head.rigid_bodies[pixel_i.x]);
+      Ptr<RigidBody>(&BP.task_head.rigid_bodies[pixel_i.x]);
 
   Ptr<Manifold> collisions =
-      Ptr<Manifold>(p.task_head.collisions);
+      Ptr<Manifold>(BP.task_head.collisions);
 
   broad_phase(pixel_i.x, r, sim_config, collisions);
 }
-#elif defined(SET_COLLISION_COUNT)
 
-# elif defined(RIGID_BODY_SIM)
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_collision_solver(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(CS.task_head.sim_config);
+
+  if (pixel_i.x >= sim_config->collision_count)
+  {
+    return;
+  }
+
+  Manifold manifold =
+    CS.task_head.collisions[pixel_i.x];
+
+  if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+
+  Ptr<RigidBody> r =
+      Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb1_index]);
+  if(r->has_flag(RigidBodyFlag::DYNAMIC))
+  {
+    for(daxa_u32 c = 0u; c < manifold.contact_count; ++c)
+    {
+      Contact contact = manifold.contacts[c];
+      daxa_f32vec3 collision_point = contact.position;
+      daxa_f32vec3 normal = normalize(manifold.normal);
+      r->apply_contact(collision_point, -normal);
+    }
+  }
+}
 
     [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_rigid_body_sim(uint3 pixel_i : SV_DispatchThreadID)
 {
   Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(p.task_head.sim_config);
+      Ptr<SimConfig>(RB_sim.task_head.sim_config);
 
   if (pixel_i.x >= sim_config->rigid_body_count)
   {
@@ -1195,10 +1214,9 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   }
 
   Ptr<RigidBody> r =
-      Ptr<RigidBody>(&p.task_head.rigid_bodies[pixel_i.x]);
+      Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[pixel_i.x]);
 
   if (r.has_flag(RigidBodyFlag::KINEMATIC)){
     r->advect(sim_config);
   } 
 }
-#endif // RIGID_BODY_SIM

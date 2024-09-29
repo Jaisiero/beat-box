@@ -13,7 +13,8 @@ struct RigidBodyManager{
   // Task manager reference
   std::shared_ptr<TaskManager> task_manager;
   // Compute pipeline reference
-  std::shared_ptr<daxa::ComputePipeline> pipeline_GJK;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_CS;
   std::shared_ptr<daxa::ComputePipeline> pipeline;
 
   TaskGraph RB_TG;
@@ -32,7 +33,8 @@ struct RigidBodyManager{
   std::shared_ptr<TaskManager> task_manager) : device(device), task_manager(task_manager) {
     if(device.is_valid())
     {
-      pipeline_GJK = task_manager->create_compute(GJKSim{}.info);
+      pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
+      pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
       pipeline = task_manager->create_compute(RigidBodySim{}.info);
     }
   }
@@ -67,21 +69,37 @@ struct RigidBodyManager{
     };
 
     auto user_callback = [this](daxa::TaskInterface ti, auto& self) {
-        ti.recorder.set_pipeline(*pipeline_GJK);
-        ti.recorder.push_constant(GJKPushConstants{.task_head = ti.attachment_shader_blob});
-        ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(GJKTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
+        ti.recorder.set_pipeline(*pipeline_BP);
+        ti.recorder.push_constant(BroadPhasePushConstants{.task_head = ti.attachment_shader_blob});
+        ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(BroadPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
     };
 
-    using TTask = TaskTemplate<GJKTaskHead::Task, decltype(user_callback)>;
+    using TTask = TaskTemplate<BroadPhaseTaskHead::Task, decltype(user_callback)>;
 
     // Instantiate the task using the template class
     TTask task(std::array{
-        daxa::attachment_view(GJKTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
-        daxa::attachment_view(GJKTaskHead::AT.sim_config, task_sim_config),
-        daxa::attachment_view(GJKTaskHead::AT.rigid_bodies, task_rigid_bodies),
-        daxa::attachment_view(GJKTaskHead::AT.aabbs, task_aabbs),
-        daxa::attachment_view(GJKTaskHead::AT.collisions, task_collisions),
+        daxa::attachment_view(BroadPhaseTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+        daxa::attachment_view(BroadPhaseTaskHead::AT.sim_config, task_sim_config),
+        daxa::attachment_view(BroadPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
+        daxa::attachment_view(BroadPhaseTaskHead::AT.aabbs, task_aabbs),
+        daxa::attachment_view(BroadPhaseTaskHead::AT.collisions, task_collisions),
       }, user_callback);
+
+    auto user_callback_CS = [this](daxa::TaskInterface ti, auto& self) {
+        ti.recorder.set_pipeline(*pipeline_CS);
+        ti.recorder.push_constant(CollisionSolverPushConstants{.task_head = ti.attachment_shader_blob});
+        ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
+    };
+
+    using TTask_CS = TaskTemplate<CollisionSolverTaskHead::Task, decltype(user_callback_CS)>;
+
+    // Instantiate the task using the template class
+    TTask_CS task_CS(std::array{
+        daxa::attachment_view(CollisionSolverTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+        daxa::attachment_view(CollisionSolverTaskHead::AT.sim_config, task_sim_config),
+        daxa::attachment_view(CollisionSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
+        daxa::attachment_view(CollisionSolverTaskHead::AT.collisions, task_collisions),
+      }, user_callback_CS);
 
     auto user_callback2 = [this](daxa::TaskInterface ti, auto& self) {
         ti.recorder.set_pipeline(*pipeline);
@@ -110,6 +128,7 @@ struct RigidBodyManager{
     RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
 
     RB_TG.add_task(task);
+    RB_TG.add_task(task_CS);
     RB_TG.add_task(task2);
 
 

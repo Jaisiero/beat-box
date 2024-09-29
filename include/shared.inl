@@ -229,7 +229,7 @@ static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 64;
 
 DAXA_DECL_BUFFER_PTR(Manifold)
 
-DAXA_DECL_TASK_HEAD_BEGIN(GJKTaskHead)
+DAXA_DECL_TASK_HEAD_BEGIN(BroadPhaseTaskHead)
 DAXA_TH_BUFFER_PTR(HOST_TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(HOST_TRANSFER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
@@ -237,9 +237,21 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
 DAXA_DECL_TASK_HEAD_END
 
-struct GJKPushConstants
+struct BroadPhasePushConstants
 {
-  DAXA_TH_BLOB(GJKTaskHead, task_head)
+  DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
+};
+
+DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverTaskHead)
+DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), collisions)
+DAXA_DECL_TASK_HEAD_END
+
+struct CollisionSolverPushConstants
+{
+  DAXA_TH_BLOB(CollisionSolverTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
@@ -248,6 +260,7 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
 DAXA_DECL_TASK_HEAD_END
+
 
 struct RigidBodySimPushConstants
 {
