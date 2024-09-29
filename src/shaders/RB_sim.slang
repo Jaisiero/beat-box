@@ -1,6 +1,7 @@
 #include "shared.inl"
 
 [[vk::push_constant]] BroadPhasePushConstants BP;
+[[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 
@@ -1165,6 +1166,27 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       Ptr<Manifold>(BP.task_head.collisions);
 
   broad_phase(pixel_i.x, r, sim_config, collisions);
+}
+
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_collision_solver_dispatcher(uint3 pixel_i : SV_DispatchThreadID)
+{
+
+  if (pixel_i.x >= 1u)
+  {
+    return;
+  }
+
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(CSD.task_head.sim_config);
+
+  Ptr<DispatchBuffer> dispatch_buffer =
+      Ptr<DispatchBuffer>(CSD.task_head.dispatch_buffer);
+
+  dispatch_buffer->solver_dispatch.x = (sim_config->collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+
 }
 
 

@@ -212,9 +212,8 @@ DAXA_DECL_BUFFER_PTR(SimConfig)
 
 struct DispatchBuffer
 {
-  daxa_u32 dispatch_x;
-  daxa_u32 dispatch_y;
-  daxa_u32 dispatch_z;
+  daxa_u32vec3 dispatch;
+  daxa_u32vec3 solver_dispatch;
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
@@ -240,6 +239,16 @@ DAXA_DECL_TASK_HEAD_END
 struct BroadPhasePushConstants
 {
   DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
+};
+
+DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverDispatcherTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_DECL_TASK_HEAD_END
+
+struct CollisionSolverDispatcherPushConstants
+{
+  DAXA_TH_BLOB(CollisionSolverDispatcherTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverTaskHead)

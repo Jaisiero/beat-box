@@ -64,6 +64,9 @@ const auto RB_sim_shader_file_string = "RB_sim.slang";
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
+// collision solver dispatcher
+const auto entry_collision_solver_dispatcher = "entry_collision_solver_dispatcher";
+const auto collision_solver_dispatcher_pipeline_name = "Collision Solver Dispatcher";
 // collision solver
 const auto entry_collision_solver = "entry_collision_solver";
 const auto collision_solver_pipeline_name = "Collision Solver";
@@ -191,6 +194,21 @@ struct BroadPhaseInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(BroadPhasePushConstants),
       .name = broad_phase_sim_pipeline_name,
+  };
+};
+
+struct CollisionSolverDispatcherInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_collision_solver_dispatcher
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(CollisionSolverDispatcherPushConstants),
+      .name = collision_solver_dispatcher_pipeline_name,
   };
 };
 

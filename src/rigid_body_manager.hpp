@@ -14,6 +14,7 @@ struct RigidBodyManager{
   std::shared_ptr<TaskManager> task_manager;
   // Compute pipeline reference
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS;
   std::shared_ptr<daxa::ComputePipeline> pipeline;
 
@@ -34,6 +35,7 @@ struct RigidBodyManager{
     if(device.is_valid())
     {
       pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
+      pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
       pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
       pipeline = task_manager->create_compute(RigidBodySim{}.info);
     }
@@ -85,10 +87,24 @@ struct RigidBodyManager{
         daxa::attachment_view(BroadPhaseTaskHead::AT.collisions, task_collisions),
       }, user_callback);
 
+    auto user_callback_CS_dispatcher = [this](daxa::TaskInterface ti, auto& self) {
+        ti.recorder.set_pipeline(*pipeline_CS_dispatcher);
+        ti.recorder.push_constant(CollisionSolverDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
+        ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+    };
+
+    using TTask_CS_dispatcher = TaskTemplate<CollisionSolverDispatcherTaskHead::Task, decltype(user_callback_CS_dispatcher)>;
+
+    // Instantiate the task using the template class
+    TTask_CS_dispatcher task_CS_dispatcher(std::array{
+        daxa::attachment_view(CollisionSolverDispatcherTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+        daxa::attachment_view(CollisionSolverDispatcherTaskHead::AT.sim_config, task_sim_config),
+      }, user_callback_CS_dispatcher);
+
     auto user_callback_CS = [this](daxa::TaskInterface ti, auto& self) {
         ti.recorder.set_pipeline(*pipeline_CS);
         ti.recorder.push_constant(CollisionSolverPushConstants{.task_head = ti.attachment_shader_blob});
-        ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
+        ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3)});
     };
 
     using TTask_CS = TaskTemplate<CollisionSolverTaskHead::Task, decltype(user_callback_CS)>;
@@ -128,6 +144,7 @@ struct RigidBodyManager{
     RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
 
     RB_TG.add_task(task);
+    RB_TG.add_task(task_CS_dispatcher);
     RB_TG.add_task(task_CS);
     RB_TG.add_task(task2);
 
