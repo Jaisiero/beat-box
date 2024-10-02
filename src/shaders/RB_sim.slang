@@ -72,11 +72,12 @@ extension RigidBody
 
   [mutating] void apply_impulse(daxa_f32vec3 impulse, daxa_f32vec3 point)
   {
-    daxa_f32vec3 torque = cross(impulse, point - this.position);
     daxa_f32vec3 linear_velocity = impulse * this.inv_mass;
-    daxa_f32vec3 angular_velocity = mul(this.inv_inertia, torque);
-
     this.velocity += linear_velocity;
+
+    daxa_f32vec3 r = point - this.position;
+    daxa_f32vec3 torque = cross(r, impulse);
+    daxa_f32vec3 angular_velocity = mul(torque, this.inv_inertia);
     this.omega += angular_velocity;
   }
 
@@ -88,7 +89,7 @@ extension RigidBody
 
   daxa_f32vec3 get_velocity_at(daxa_f32vec3 point)
   {
-    return this.velocity + cross(point - this.position, this.omega);
+    return this.velocity - cross(point - this.position, this.omega);
   }
 
   daxa_f32mat3x3 quat_to_mat3x3() {
@@ -316,7 +317,7 @@ struct OBBvsOBBCollision {
   }
 
 
-  static void compute_incident_face(const Transform itx, const daxa_f32vec3 e, daxa_f32vec3 n, out ClipVertex incident[MAX_INCIDENT_VERTEX_COUNT]) {
+  static void compute_incident_face(const Transform itx, const daxa_f32vec3 e, daxa_f32vec3 n, out ClipVertex incident[MAX_INCIDENT_VERTEX_COUNT], out BoxFace incident_face) {
     // Transform the incident face to local space and flip the normal because we are interested in the face of the incident box that is facing away from the reference box
     n = -itx.rotate_transpose(n);
     // Abs the normal used to determine which axis the normal is most aligned with
@@ -339,6 +340,8 @@ struct OBBvsOBBCollision {
         incident[2].f.out_incident = Edge::NEG_X_NEG_Z;
         incident[3].f.in_incident = Edge::NEG_X_NEG_Z;
         incident[3].f.out_incident = Edge::POS_Y_NEG_Z;
+
+        incident_face = BoxFace::RIGHT;
       } else { // Negative x face
         incident[0].v = daxa_f32vec3(-e.x, -e.y, e.z);
         incident[1].v = daxa_f32vec3(-e.x, e.y, e.z);
@@ -353,6 +356,7 @@ struct OBBvsOBBCollision {
         incident[2].f.out_incident = Edge::NEG_Y_POS_Z;
         incident[3].f.in_incident = Edge::NEG_Y_POS_Z;
         incident[3].f.out_incident = Edge::NEG_X_NEG_Y;
+        incident_face = BoxFace::LEFT;
       }
     } else if(abs_n.y > abs_n.x && abs_n.y > abs_n.z) {
       // Positive y face
@@ -370,6 +374,8 @@ struct OBBvsOBBCollision {
         incident[2].f.out_incident = Edge::POS_X_POS_Z;
         incident[3].f.in_incident = Edge::POS_X_POS_Z;
         incident[3].f.out_incident = Edge::POS_X_NEG_Z;
+
+        incident_face = BoxFace::TOP;
       } else { // Negative y face
         incident[0].v = daxa_f32vec3(e.x, -e.y, e.z);
         incident[1].v = daxa_f32vec3(-e.x, -e.y, e.z);
@@ -387,6 +393,8 @@ struct OBBvsOBBCollision {
         incident[3].f.in_incident = Edge::NEG_X_POS_Z;
         // incident[3].f.out_incident = NEG_X_POS_Z;
         incident[3].f.out_incident = Edge::NEG_X_NEG_Z;
+
+        incident_face = BoxFace::BOTTOM;
       }
     } else {
       // Positive z face
@@ -404,6 +412,8 @@ struct OBBvsOBBCollision {
         incident[2].f.out_incident = Edge::POS_Y_POS_Z;
         incident[3].f.in_incident = Edge::POS_Y_POS_Z;
         incident[3].f.out_incident = Edge::POS_X_POS_Y;
+
+        incident_face = BoxFace::BACK;
       } else { // Negative z face
         incident[0].v = daxa_f32vec3(e.x, -e.y, -e.z);
         incident[1].v = daxa_f32vec3(-e.x, -e.y, -e.z);
@@ -418,6 +428,8 @@ struct OBBvsOBBCollision {
         incident[2].f.out_incident = Edge::POS_X_POS_Z;
         incident[3].f.in_incident = Edge::POS_X_POS_Z;
         incident[3].f.out_incident = Edge::POS_Y_NEG_Z;
+
+        incident_face = BoxFace::FRONT;
       }
     }
 
@@ -427,7 +439,7 @@ struct OBBvsOBBCollision {
     }
   }
 
-  static void compute_reference_edges_and_basis(const daxa_f32vec3 e_r, const Transform rtx, daxa_f32vec3 n, daxa_i32 axis, out daxa_u32 clip_edges[MAX_INCIDENT_VERTEX_COUNT], out daxa_f32mat3x3 basis, out daxa_f32vec3 e) {
+  static void compute_reference_edges_and_basis(const daxa_f32vec3 e_r, const Transform rtx, daxa_f32vec3 n, daxa_i32 axis, out daxa_u32 clip_edges[MAX_INCIDENT_VERTEX_COUNT], out daxa_f32mat3x3 basis, out daxa_f32vec3 e, out BoxFace reference_face) {
     n = rtx.rotate_transpose(n);
 
     if(axis > A_AXIS_NUM) {
@@ -448,6 +460,8 @@ struct OBBvsOBBCollision {
 
           e = daxa_f32vec3(e_r.y, e_r.z, e_r.x);
           basis = daxa_f32mat3x3(r[1], r[2], r[0]);
+
+          reference_face = BoxFace::RIGHT;
         } else {
           clip_edges[0] = Edge::NEG_Y_NEG_Z;
           clip_edges[1] = Edge::POS_X_NEG_Z;
@@ -456,6 +470,8 @@ struct OBBvsOBBCollision {
 
           e = daxa_f32vec3(e_r.z, e_r.y, e_r.x);
           basis = daxa_f32mat3x3(r[2], r[1], -r[0]);
+
+          reference_face = BoxFace::LEFT;
         }
       }
       break;
@@ -469,6 +485,8 @@ struct OBBvsOBBCollision {
 
           e = daxa_f32vec3(e_r.z, e_r.x, e_r.y);
           basis = daxa_f32mat3x3(r[2], r[0], r[1]);
+
+          reference_face = BoxFace::TOP;
         } else {
           clip_edges[0] = Edge::NEG_X_POS_Y;
           clip_edges[1] = Edge::NEG_X_NEG_Y;
@@ -477,6 +495,8 @@ struct OBBvsOBBCollision {
 
           e = daxa_f32vec3(e_r.z, e_r.x, e_r.y);
           basis = daxa_f32mat3x3(r[2], -r[0], -r[1]);
+
+          reference_face = BoxFace::BOTTOM;
         }
 
       }
@@ -491,6 +511,8 @@ struct OBBvsOBBCollision {
 
           e = daxa_f32vec3(e_r.y, e_r.x, e_r.z);
           basis = daxa_f32mat3x3(-r[1], r[0], r[2]);
+
+          reference_face = BoxFace::BACK;
         } else {
           clip_edges[0] = Edge::NEG_X_POS_Z;
           clip_edges[1] = Edge::NEG_Y_POS_Z;
@@ -499,6 +521,8 @@ struct OBBvsOBBCollision {
 
           e = daxa_f32vec3(e_r.y, e_r.x, e_r.z);
           basis = daxa_f32mat3x3(-r[1], -r[0], -r[2]);
+
+          reference_face = BoxFace::FRONT;
         }
 
       }
@@ -710,6 +734,18 @@ struct OBBvsOBBCollision {
 
     CA = PA + DA * TA;
     CB = PB + DB * TB;
+  }
+
+  static BoxFace get_flip_face(BoxFace face) {
+    switch(face) {
+      case BoxFace::RIGHT: return BoxFace::LEFT;
+      case BoxFace::LEFT: return BoxFace::RIGHT;
+      case BoxFace::TOP: return BoxFace::BOTTOM;
+      case BoxFace::BOTTOM: return BoxFace::TOP;
+      case BoxFace::BACK: return BoxFace::FRONT;
+      case BoxFace::FRONT: return BoxFace::BACK;
+      default: return BoxFace::NO_FACE;
+    }
   }
 
   static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, inout Manifold manifold) {
@@ -1000,13 +1036,16 @@ struct OBBvsOBBCollision {
         normal = -normal;
       }
 
+      BoxFace incident_face = BoxFace::NO_FACE;
+      BoxFace reference_face = BoxFace::NO_FACE;
+
       // Compute reference and incident edge information necessary for clipping
       ClipVertex incident[MAX_INCIDENT_VERTEX_COUNT];
-      compute_incident_face(itx, e_i, normal, incident);
+      compute_incident_face(itx, e_i, normal, incident, incident_face);
       daxa_u32 clip_edges[MAX_INCIDENT_VERTEX_COUNT];
       daxa_f32mat3x3 basis;
       daxa_f32vec3 e;
-      compute_reference_edges_and_basis(e_r, rtx, normal, axis, clip_edges, basis, e);
+      compute_reference_edges_and_basis(e_r, rtx, normal, axis, clip_edges, basis, e, reference_face);
 
       // // TODO: DEBUGGING
       // manifold.normal = normal;
@@ -1069,6 +1108,13 @@ struct OBBvsOBBCollision {
       if(out_num > 0) {
         manifold.contact_count = out_num;
         manifold.normal = flip ? -normal : normal;
+        if(flip) {
+          // flip the faces
+          manifold.faces = incident_face;
+          // manifold.faces = incident_face;
+        } else {
+          manifold.faces = reference_face;
+        }
 
         for(daxa_i32 i = 0; i < out_num; ++i) {
           
@@ -1128,7 +1174,8 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
          Ptr<SimConfig> sim_config, Ptr<Manifold> collisions) -> void
 {
   var any_collision = false;
-  r.clear_flag(RigidBodyFlag::COLLIDING);
+  var face_collided = 0u;
+  // r.clear_flag(RigidBodyFlag::COLLIDING);
   for (daxa_u32 i = 0; i < sim_config->rigid_body_count; i++)
   {
     if (i == rigid_body_index)
@@ -1154,8 +1201,11 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       InterlockedAdd(sim_config->collision_count, 1u, index);
       manifold.compute_basis();
       collisions[index] = manifold;
+      face_collided = manifold.faces;
     }
   }
+
+  r->face_collided = face_collided;
 
   if(any_collision)
   {
@@ -1226,17 +1276,26 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     return;
   }
 
-  Ptr<RigidBody> r =
+  Ptr<RigidBody> r1 =
       Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb1_index]);
-  if(r->has_flag(RigidBodyFlag::DYNAMIC))
+  Ptr<RigidBody> r2 =
+      Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb2_index]);
+  for(daxa_u32 c = 0u; c < manifold.contact_count; ++c)
   {
-    for(daxa_u32 c = 0u; c < manifold.contact_count; ++c)
+    Contact contact = manifold.contacts[c];
+    daxa_f32vec3 collision_point = contact.position;
+    daxa_f32vec3 normal = normalize(manifold.normal);
+
+    if(r1->has_flag(RigidBodyFlag::DYNAMIC))
     {
-      Contact contact = manifold.contacts[c];
-      daxa_f32vec3 collision_point = contact.position;
-      daxa_f32vec3 normal = normalize(manifold.normal);
-      r->apply_contact(collision_point, -normal);
+      r1->apply_contact(collision_point, -normal);
+    } 
+    if(r2->has_flag(RigidBodyFlag::DYNAMIC))
+    {
+      r2->apply_contact(collision_point, normal);
     }
+
+
   }
 }
 

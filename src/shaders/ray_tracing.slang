@@ -31,12 +31,50 @@
   payload.shadow = 1.0f;
 }
 
-static const daxa_f32vec3 light_position = daxa_f32vec3(2, 5, -3);
+static const daxa_u32 LIGHT_NUMBER = 4;
+static const daxa_f32vec3 light_position[LIGHT_NUMBER] = {daxa_f32vec3(2, 1, 2), daxa_f32vec3(-2, 1, 2), daxa_f32vec3(2, 1, -2) , daxa_f32vec3(-2, 1, -2)};
 static const daxa_f32vec3 light_intensity = daxa_f32vec3(2.5);
-static const daxa_f32vec3 material_color = daxa_f32vec3(0.5, 0.0, 0.5);
-static const daxa_f32vec3 collision_material_color = daxa_f32vec3(0.0, 0.5, 0.5);
+static const daxa_f32vec3 face_X = daxa_f32vec3(1.0, 0.0, 0.0); // red
+static const daxa_f32vec3 face_neg_X = daxa_f32vec3(1.0, 1.0, 0.0); // yellow
+static const daxa_f32vec3 face_Y = daxa_f32vec3(0.0, 1.0, 0.0); // green
+static const daxa_f32vec3 face_neg_Y = daxa_f32vec3(0.0, 1.0, 1.0); // light blue
+static const daxa_f32vec3 face_Z = daxa_f32vec3(0.0, 0.0, 1.0); // blue
+static const daxa_f32vec3 face_neg_Z = daxa_f32vec3(1.0, 0.0, 1.0); // purple
+static const daxa_f32vec3 material_color = daxa_f32vec3(0.0, 0.0, 0.0); // black
+static const daxa_f32vec3 collision_material_color = daxa_f32vec3(1.0, 1.0, 1.0); // white
 static const daxa_f32vec3 material_specular = daxa_f32vec3(0.0, 0.5, 1.0);
 static const daxa_f32 shininess = 10.0;
+
+BoxFace get_face_by_normal(daxa_f32vec3 normal)
+{
+  daxa_f32vec3 abs_normal = abs(normal);
+  daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
+  let sign = sign(normal);
+  return (max_component == abs_normal.x) ? (sign.x > 0 ? BoxFace::RIGHT : BoxFace::LEFT) :
+         (max_component == abs_normal.y) ? (sign.y > 0 ? BoxFace::TOP : BoxFace::BOTTOM) :
+         (sign.z > 0 ? BoxFace::FRONT : BoxFace::BACK);
+}
+
+daxa_f32vec3 get_face_color(BoxFace face)
+{
+  switch (face)
+  {
+  case BoxFace::RIGHT:
+    return face_X;
+  case BoxFace::LEFT:
+    return face_neg_X;
+  case BoxFace::TOP:
+    return face_Y;
+  case BoxFace::BOTTOM:
+    return face_neg_Y;
+  case BoxFace::FRONT:
+    return face_Z;
+  case BoxFace::BACK:
+    return face_neg_Z;
+  default:
+    return daxa_f32vec3(0.0);
+  }
+}
 
 [shader("closesthit")] void closest_hit(inout HitPayload payload,
                                             in MyAttributes attr)
@@ -57,10 +95,6 @@ static const daxa_f32 shininess = 10.0;
   center = r->object_to_world(center);
 
   daxa_f32vec3 color = material_color;
-  if(r->has_flag(RigidBodyFlag::COLLIDING))
-  {
-    color = collision_material_color;
-  }
 
 
   // Computing the normal at hit position
@@ -77,35 +111,55 @@ static const daxa_f32 shininess = 10.0;
                  (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) : daxa_f32vec3(0, 0, sign(normal.z));
   }
 
+  // get face by normal
+  BoxFace face = get_face_by_normal(normal);
+  if(r->has_flag(RigidBodyFlag::COLLIDING))
+  {
+    if(r->is_face_colliding(face))
+    {
+      color = collision_material_color;
+    } else {
+      color = get_face_color(face);
+    }
+  } else {
+    color = get_face_color(face);
+  }
+
   normal = r->rotate_vector(normal);
 
   payload.normal = normal;
 
-  // Vector toward the light
-  daxa_f32vec3 L = normalize(light_position - daxa_f32vec3(0));
+  daxa_f32vec3 hit_value = daxa_f32vec3(0.0);
 
-  // Diffuse
-  daxa_f32vec3 diffuse = compute_diffuse(color, normal, L);
-  daxa_f32vec3 specular = daxa_f32vec3(0);
-  daxa_f32 attenuation = 0.5;
+  for(daxa_u32 i = 0; i < LIGHT_NUMBER; i++) {
+    // Vector toward the light
+    daxa_f32vec3 L = normalize(light_position[i] - daxa_f32vec3(0));
 
-  // Tracing shadow ray only if the light is visible from the surface
-  if (dot(normal, L) > 0)
-  {
-    daxa_f32vec3 ray_dir = L;
-    RayDesc ray = {hit_location, T_MIN, ray_dir, T_MAX};
-    daxa_u32 flags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE  | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER;
-    ShadowRayPayload shadowPayload = { 0.0f };
+    // Diffuse
+    daxa_f32vec3 diffuse = compute_diffuse(color, normal, L);
+    daxa_f32vec3 specular = daxa_f32vec3(0);
+    daxa_f32 attenuation = 1.0f;
 
-    TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), flags, ~0, 1, 0, 0, ray, shadowPayload);
+    // Tracing shadow ray only if the light is visible from the surface
+    if (dot(normal, L) > 0)
+    {
+      daxa_f32vec3 ray_dir = L;
+      RayDesc ray = {hit_location, T_MIN, ray_dir, T_MAX};
+      daxa_u32 flags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE  | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER;
+      ShadowRayPayload shadowPayload = { 0.0f };
 
-    let shadow_result = (shadowPayload.shadow);
+      TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), flags, ~0, 1, 0, 0, ray, shadowPayload);
 
-    attenuation =  1.0 - shadow_result;
-    specular = compute_specular(shininess, material_specular, WorldRayDirection(), normal, L);
+      let shadow_result = (shadowPayload.shadow);
+
+      attenuation =  1.0 - shadow_result;
+      // specular = compute_specular(shininess, material_specular, WorldRayDirection(), normal, L);
+    }
+
+    hit_value += daxa_f32vec3(light_intensity * attenuation * (diffuse + specular));
   }
 
-  payload.hit_value = daxa_f32vec3(light_intensity * attenuation * (diffuse + specular));
+  payload.hit_value = hit_value;
 }
 
 [shader("intersection")] void intersection() {

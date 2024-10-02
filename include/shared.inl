@@ -20,6 +20,20 @@ enum RigidBodyFlag : daxa_u32 {
 };
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+[Flags]
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+enum BoxFace : daxa_u32
+{
+  NO_FACE = 0,
+  RIGHT = 1 << 0,
+  LEFT = 1 << 1,
+  TOP = 1 << 2,
+  BOTTOM = 1 << 3,
+  BACK = 1 << 4,
+  FRONT = 1 << 5,
+};
+
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 RigidBodyFlag  operator|(RigidBodyFlag a, RigidBodyFlag b)
 {
     return RigidBodyFlag((daxa_u32)a | (daxa_u32)b);
@@ -58,6 +72,7 @@ inline void operator|=(RigidBodyFlag &a, RigidBodyFlag b)
 struct RigidBody
 {
   RigidBodyFlag flags;
+  daxa_u32 face_collided;
   daxa_u32 primitive_count;
   daxa_u32 primitive_offset;
   daxa_f32vec3 position;
@@ -135,6 +150,12 @@ struct RigidBody
   {
     return (this.flags & flag) != 0;
   }
+
+  [mutating] bool is_face_colliding(BoxFace face)
+  {
+    return (this.face_collided & face) != 0;
+  }
+
 
   [mutating] void set_flag(RigidBodyFlag flag)
   {

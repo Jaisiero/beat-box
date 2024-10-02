@@ -63,6 +63,7 @@ struct Manifold {
   daxa_u32 obb1_index;
   daxa_u32 obb2_index;
   daxa_i32 key;
+  daxa_u32 faces;
 
   daxa_i32 error;
   // // DEBUG
