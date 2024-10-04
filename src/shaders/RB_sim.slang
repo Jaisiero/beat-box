@@ -131,9 +131,9 @@ extension RigidBody
 
   daxa_f32 get_impulse_contribution(daxa_f32vec3 position, daxa_f32vec3 normal)
   {
-    daxa_f32mat3x3 inverse_inertia = get_transformed_inertia();
+    daxa_f32mat3x3 inv_inertia = get_transformed_inertia();
     daxa_f32mat3x3 rn = cross_product_matrix(position);
-    daxa_f32mat3x3 K = mul(rn, mul(inverse_inertia, transpose(rn)));
+    daxa_f32mat3x3 K = mul(rn, mul(inv_inertia, transpose(rn)));
     return (this.inv_mass + dot(normal, mul(K, normal)));
   }
 
@@ -1263,39 +1263,70 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(CS.task_head.sim_config);
 
-  if (pixel_i.x >= sim_config->collision_count)
+  if (pixel_i.x >= 1)
   {
     return;
   }
 
-  Manifold manifold =
-    CS.task_head.collisions[pixel_i.x];
-
-  if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count)
+  for(daxa_u32 m = 0u; m < sim_config->collision_count; ++m)
   {
-    return;
-  }
 
-  Ptr<RigidBody> r1 =
-      Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb1_index]);
-  Ptr<RigidBody> r2 =
-      Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb2_index]);
-  for(daxa_u32 c = 0u; c < manifold.contact_count; ++c)
-  {
-    Contact contact = manifold.contacts[c];
-    daxa_f32vec3 collision_point = contact.position;
-    daxa_f32vec3 normal = normalize(manifold.normal);
+    Manifold manifold =
+      CS.task_head.collisions[m];
 
-    if(r1->has_flag(RigidBodyFlag::DYNAMIC))
+    if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count)
     {
-      r1->apply_contact(collision_point, -normal);
-    } 
-    if(r2->has_flag(RigidBodyFlag::DYNAMIC))
-    {
-      r2->apply_contact(collision_point, normal);
+      return;
     }
 
+    Ptr<RigidBody> r1 =
+        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb1_index]);
+    Ptr<RigidBody> r2 =
+        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb2_index]);
+    for(daxa_u32 c = 0u; c < manifold.contact_count; ++c)
+    {
+      Contact contact = manifold.contacts[c];
+      daxa_f32vec3 collision_point = contact.position;
+      daxa_f32vec3 normal = normalize(manifold.normal);
 
+      // Calculate relative velocity
+      daxa_f32vec3 r1_to_point = collision_point - r1->position;
+      daxa_f32vec3 r2_to_point = collision_point - r2->position;
+
+      daxa_f32vec3 v1 = r1->velocity + cross(r1->omega, r1_to_point);
+      daxa_f32vec3 v2 = r2->velocity + cross(r2->omega, r2_to_point);
+
+      daxa_f32vec3 relative_velocity = v2 - v1;
+
+      // Calculate relative velocity in the normal direction
+      daxa_f32 normal_velocity = dot(relative_velocity, normal);
+
+      if(normal_velocity > 0.0f)
+      {
+        continue;
+      }
+
+      // Calculate restitution
+      daxa_f32 e = min(r1->restitution, r2->restitution);
+
+      // Calculate impulse scalar
+      daxa_f32 j = -(1.0f + e) * normal_velocity;
+      j/= r1->inv_mass + r2->inv_mass;
+
+      // Apply impulse
+      daxa_f32vec3 impulse = j * normal;
+
+      if(r1->flags & RigidBodyFlag::DYNAMIC)
+      {
+        r1->velocity -= r1->inv_mass * impulse;
+      }
+
+      if(r2->flags & RigidBodyFlag::DYNAMIC)
+      {
+        r2->velocity += r2->inv_mass * impulse;
+      }
+
+    }
   }
 }
 
@@ -1313,7 +1344,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   Ptr<RigidBody> r =
       Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[pixel_i.x]);
 
-  if (r.has_flag(RigidBodyFlag::KINEMATIC)){
+  if (r.has_flag(RigidBodyFlag::GRAVITY)){
     r->advect(sim_config);
   } 
 }

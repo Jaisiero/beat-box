@@ -16,7 +16,7 @@ enum RigidBodyFlag : daxa_u32 {
   NONE = 0,
   COLLIDING = 1 << 0,
   DYNAMIC = 1 << 1,
-  KINEMATIC = 1 << 2,
+  GRAVITY = 1 << 2,
 };
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
