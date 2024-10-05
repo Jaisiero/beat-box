@@ -11,7 +11,9 @@ extension RigidBody
   {
     apply_temporal_velocity();
     advance(sim_config->dt, LINEAR_DAMPING, ANGULAR_DAMPING);
-    apply_impulse(this.mass * daxa_f32vec3(0, sim_config->gravity, 0) * sim_config->dt, this.position);
+    if(has_flag(RigidBodyFlag::GRAVITY)){
+      apply_impulse(this.mass * daxa_f32vec3(0, sim_config->gravity, 0) *       sim_config->dt, this.position);
+    }
     reset_state();
   }
 
@@ -1175,7 +1177,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
 {
   var any_collision = false;
   var face_collided = 0u;
-  // r.clear_flag(RigidBodyFlag::COLLIDING);
+  r->clear_flag(RigidBodyFlag::COLLIDING);
   for (daxa_u32 i = 0; i < sim_config->rigid_body_count; i++)
   {
     if (i == rigid_body_index)
@@ -1201,7 +1203,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       InterlockedAdd(sim_config->collision_count, 1u, index);
       manifold.compute_basis();
       collisions[index] = manifold;
-      face_collided = manifold.faces;
+      face_collided |= manifold.faces;
     }
   }
 
@@ -1268,6 +1270,9 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     return;
   }
 
+  // TODO: Implement parallel collision solver
+  // atomicAdd to velocity and omega
+
   for(daxa_u32 m = 0u; m < sim_config->collision_count; ++m)
   {
 
@@ -1293,8 +1298,8 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       daxa_f32vec3 r1_to_point = collision_point - r1->position;
       daxa_f32vec3 r2_to_point = collision_point - r2->position;
 
-      daxa_f32vec3 v1 = r1->velocity + cross(r1->omega, r1_to_point);
-      daxa_f32vec3 v2 = r2->velocity + cross(r2->omega, r2_to_point);
+      daxa_f32vec3 v1 = r1->velocity;
+      daxa_f32vec3 v2 = r2->velocity;
 
       daxa_f32vec3 relative_velocity = v2 - v1;
 
@@ -1309,9 +1314,21 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       // Calculate restitution
       daxa_f32 e = min(r1->restitution, r2->restitution);
 
+      let numerator = -(1.0f + e) * normal_velocity;
+
+      let r1_to_point_cross_n = cross(normal, r1_to_point);
+      let r2_to_point_cross_n = cross(normal, r2_to_point);
+
+      let r1_cross_n_cross_inv_inertia = mul(r1_to_point_cross_n, r1->inv_inertia);
+      let r2_cross_n_cross_inv_inertia = mul(r2_to_point_cross_n, r2->inv_inertia);
+
+      let r1_term = dot(normal, cross(r1_cross_n_cross_inv_inertia, r1_to_point_cross_n));
+      let r2_term = dot(normal, cross(r2_cross_n_cross_inv_inertia, r2_to_point_cross_n));
+
+      let denominator = r1->inv_mass + r2->inv_mass + r1_term + r2_term;
+
       // Calculate impulse scalar
-      daxa_f32 j = -(1.0f + e) * normal_velocity;
-      j/= r1->inv_mass + r2->inv_mass;
+      daxa_f32 j = numerator / denominator;
 
       // Apply impulse
       daxa_f32vec3 impulse = j * normal;
@@ -1319,13 +1336,14 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       if(r1->flags & RigidBodyFlag::DYNAMIC)
       {
         r1->velocity -= r1->inv_mass * impulse;
+        r1->omega -= mul(cross(impulse, r1_to_point), r1->inv_inertia);
       }
 
       if(r2->flags & RigidBodyFlag::DYNAMIC)
       {
         r2->velocity += r2->inv_mass * impulse;
+        r2->omega += mul(cross(impulse, r2_to_point), r2->inv_inertia);
       }
-
     }
   }
 }
@@ -1344,7 +1362,5 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   Ptr<RigidBody> r =
       Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[pixel_i.x]);
 
-  if (r.has_flag(RigidBodyFlag::GRAVITY)){
-    r->advect(sim_config);
-  } 
+  r->advect(sim_config);
 }
