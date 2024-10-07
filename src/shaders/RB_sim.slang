@@ -1,5 +1,6 @@
 #include "shared.inl"
 
+[[vk::push_constant]] ResetCollisionsPushConstants RC;
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
@@ -1178,12 +1179,8 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   var any_collision = false;
   var face_collided = 0u;
   r->clear_flag(RigidBodyFlag::COLLIDING);
-  for (daxa_u32 i = 0; i < sim_config->rigid_body_count; i++)
+  for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {
-    if (i == rigid_body_index)
-    {
-        continue;
-    }
     // Simplex simplex;
     Ptr<RigidBody> r2 = Ptr<RigidBody>(&BP.task_head.rigid_bodies[i]);
 
@@ -1216,6 +1213,24 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
 }
 
 [shader("compute")]
+    [numthreads(1, 1, 1)] void
+    entry_reset_collisions(uint3 pixel_i : SV_DispatchThreadID)
+{
+
+  if (pixel_i.x >= 1u)
+  {
+    return;
+  }
+
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(RC.task_head.sim_config);
+
+  sim_config->collision_count = 0u;
+  sim_config->collision_point_count = 0u;
+
+}
+
+[shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_broad_phase(uint3 pixel_i : SV_DispatchThreadID)
 {
@@ -1238,7 +1253,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
 
 
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    [numthreads(1, 1, 1)] void
     entry_collision_solver_dispatcher(uint3 pixel_i : SV_DispatchThreadID)
 {
 

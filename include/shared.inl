@@ -228,6 +228,7 @@ struct SimConfig
   daxa_f32 dt;
   daxa_f32 gravity;
   daxa_u32 collision_count;
+  daxa_u32 collision_point_count;
 };
 DAXA_DECL_BUFFER_PTR(SimConfig)
 
@@ -249,9 +250,22 @@ static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 64;
 
 DAXA_DECL_BUFFER_PTR(Manifold)
 
+
+DAXA_DECL_TASK_HEAD_BEGIN(ResetCollisionsTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_DECL_TASK_HEAD_END
+
+
+
+struct ResetCollisionsPushConstants
+{
+  DAXA_TH_BLOB(ResetCollisionsTaskHead, task_head)
+};
+
+
 DAXA_DECL_TASK_HEAD_BEGIN(BroadPhaseTaskHead)
 DAXA_TH_BUFFER_PTR(HOST_TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(HOST_TRANSFER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
@@ -313,7 +327,7 @@ DAXA_DECL_BUFFER_PTR(daxa_BlasInstanceData)
 
 DAXA_DECL_TASK_HEAD_BEGIN(UpdateInstancesTaskHead)
 DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_RWBufferPtr(daxa_BlasInstanceData), blas_instance_data)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
@@ -322,6 +336,19 @@ DAXA_DECL_TASK_HEAD_END
 struct UpdateInstancesPushConstants
 {
   DAXA_TH_BLOB(UpdateInstancesTaskHead, task_head)
+};
+
+
+DAXA_DECL_TASK_HEAD_BEGIN(CreatePointsTaskHead)
+DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), point_aabbs)
+DAXA_DECL_TASK_HEAD_END
+
+struct CreatePointsPushConstants
+{
+  DAXA_TH_BLOB(CreatePointsTaskHead, task_head)
 };
 
 // RT STRUCTS

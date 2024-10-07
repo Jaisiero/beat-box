@@ -14,6 +14,8 @@ using namespace daxa::types;
 
 BB_NAMESPACE_BEGIN
 
+static constexpr u32 DOUBLE_BUFFERING = 2;
+
 static constexpr f32 TIME_STEP = 0.001f;
 static constexpr f32 GRAVITY = 9.81f;
 static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
@@ -61,6 +63,9 @@ const auto RT_shader_file_string = "ray_tracing.slang";
 const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
 
 const auto RB_sim_shader_file_string = "RB_sim.slang";
+// reset collision info
+const auto entry_reset_collisions = "entry_reset_collisions";
+const auto reset_collisions_pipeline_name = "Reset Collisions";
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
@@ -77,6 +82,8 @@ const auto RB_sim_pipeline_name = "Rigid Body Simulation";
 const auto AS_shader_file_string = "AS_mngr.slang";
 const auto entry_update_acceleration_structures = "entry_update_acceleration_structures";
 const auto AS_update_pipeline_name = "Update Acceleration Structures";
+const auto entry_create_contact_points = "entry_create_contact_points";
+const auto AS_create_contact_points_pipeline_name = "Create Contact Points";
 
 struct MainRayTracingPipeline
 {
@@ -182,6 +189,21 @@ struct MainRayTracingPipeline
   }
 };
 
+struct ResetCollisionsInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_reset_collisions,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(ResetCollisionsPushConstants),
+      .name = reset_collisions_pipeline_name,
+  };
+};
+
 struct BroadPhaseInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
@@ -257,6 +279,22 @@ struct UpdateAccelerationStructures
       .shader_info = compute_shader,
       .push_constant_size = sizeof(UpdateInstancesPushConstants),
       .name = AS_update_pipeline_name,
+  };
+};
+
+struct CreateContactPoints
+{
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{AS_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_create_contact_points,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(CreatePointsPushConstants),
+      .name = AS_create_contact_points_pipeline_name,
   };
 };
 

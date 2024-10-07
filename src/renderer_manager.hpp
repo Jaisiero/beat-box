@@ -142,11 +142,13 @@ struct RendererManager
     while (!window.should_close())
     {
       rigid_body_manager->simulate();
-      accel_struct_mngr->update();
-      accel_struct_mngr->update_TLAS();
 
       if (!window.update())
         continue;
+        
+      rigid_body_manager->read_back_sim_config();
+      accel_struct_mngr->update();
+      accel_struct_mngr->update_TLAS(rigid_body_manager->get_sim_config_buffer());
 
       if (window.swapchain_out_of_date)
       {
@@ -171,7 +173,7 @@ struct RendererManager
         handle_reload_result(task_manager->reload(), RT_pipeline, this);
         
         camera_manager->update(gpu->swapchain_get_extent());
-        update_resources(swapchain_image, *camera_manager, accel_struct_mngr->tlas, accel_struct_mngr->rigid_body_buffer, accel_struct_mngr->primitive_buffer);
+        update_resources(swapchain_image, *camera_manager, accel_struct_mngr->get_tlas(), accel_struct_mngr->rigid_body_buffer, accel_struct_mngr->primitive_buffer);
         execute();
         gpu->garbage_collector();
       }
