@@ -27,7 +27,9 @@ enum StageIndex : u32
   MISS,
   MISS2,
   CLOSE_HIT,
+  CLOSE_HIT_POINT,
   INTERSECTION,
+  INTERSECTION_POINT,
   STAGES_COUNT,
 };
 
@@ -37,6 +39,7 @@ enum GroupIndex : u32
   HIT_MISS,
   SHADOW_MISS,
   PROCEDURAL_HIT,
+  POINT_HIT,
   GROUPS_COUNT,
 };
 
@@ -52,8 +55,12 @@ std::string to_string(StageIndex index)
     return "miss_shadows";
   case CLOSE_HIT:
     return "closest_hit";
+  case CLOSE_HIT_POINT:
+    return "closest_hit_point";
   case INTERSECTION:
     return "intersection";
+  case INTERSECTION_POINT:
+    return "intersection_point";
   default:
     return "unknown";
   }
@@ -78,12 +85,12 @@ const auto collision_solver_pipeline_name = "Collision Solver";
 // sim
 const auto entry_rigid_body_sim = "entry_rigid_body_sim";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
+const auto entry_create_contact_points = "entry_create_contact_points";
+const auto create_contact_points_pipeline_name = "Create Contact Points";
 
 const auto AS_shader_file_string = "AS_mngr.slang";
 const auto entry_update_acceleration_structures = "entry_update_acceleration_structures";
 const auto AS_update_pipeline_name = "Update Acceleration Structures";
-const auto entry_create_contact_points = "entry_create_contact_points";
-const auto AS_create_contact_points_pipeline_name = "Create Contact Points";
 
 struct MainRayTracingPipeline
 {
@@ -115,10 +122,25 @@ struct MainRayTracingPipeline
       },
   };
 
+  daxa::ShaderCompileInfo rt_closest_hit_point_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RT_shader_file_string},
+      .compile_options = {
+          .entry_point = to_string(CLOSE_HIT_POINT),
+      },
+  };
+
   daxa::ShaderCompileInfo rt_intersection_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RT_shader_file_string},
       .compile_options = {
           .entry_point = to_string(INTERSECTION),
+      },
+  };
+
+  
+  daxa::ShaderCompileInfo rt_intersection_point_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RT_shader_file_string},
+      .compile_options = {
+          .entry_point = to_string(INTERSECTION_POINT),
       },
   };
 
@@ -153,8 +175,18 @@ struct MainRayTracingPipeline
         .type = daxa::RayTracingShaderType::CLOSEST_HIT,
     };
 
+    stages[CLOSE_HIT_POINT] = daxa::RayTracingShaderCompileInfo{
+        .shader_info = rt_closest_hit_point_shader,
+        .type = daxa::RayTracingShaderType::CLOSEST_HIT,
+    };
+
     stages[INTERSECTION] = daxa::RayTracingShaderCompileInfo{
         .shader_info = rt_intersection_shader,
+        .type = daxa::RayTracingShaderType::INTERSECTION,
+    };
+
+    stages[INTERSECTION_POINT] = daxa::RayTracingShaderCompileInfo{
+        .shader_info = rt_intersection_point_shader,
         .type = daxa::RayTracingShaderType::INTERSECTION,
     };
 
@@ -177,6 +209,12 @@ struct MainRayTracingPipeline
         .type = daxa::ExtendedShaderGroupType::PROCEDURAL_HIT_GROUP,
         .closest_hit_shader_index = StageIndex::CLOSE_HIT,
         .intersection_shader_index = StageIndex::INTERSECTION,
+    };
+
+    groups[POINT_HIT] = daxa::RayTracingShaderGroupInfo{
+        .type = daxa::ExtendedShaderGroupType::PROCEDURAL_HIT_GROUP,
+        .closest_hit_shader_index = StageIndex::CLOSE_HIT_POINT,
+        .intersection_shader_index = StageIndex::INTERSECTION_POINT,
     };
 
     info = daxa::RayTracingPipelineCompileInfo{
@@ -285,7 +323,7 @@ struct UpdateAccelerationStructures
 struct CreateContactPoints
 {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{AS_shader_file_string},
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
       .compile_options = {
           .entry_point = entry_create_contact_points,
       },
@@ -294,7 +332,7 @@ struct CreateContactPoints
   daxa::ComputePipelineCompileInfo info = {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(CreatePointsPushConstants),
-      .name = AS_create_contact_points_pipeline_name,
+      .name = create_contact_points_pipeline_name,
   };
 };
 

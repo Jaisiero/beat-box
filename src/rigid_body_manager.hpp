@@ -21,6 +21,7 @@ struct RigidBodyManager{
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS;
   std::shared_ptr<daxa::ComputePipeline> pipeline;
+  std::shared_ptr<daxa::ComputePipeline> create_points_pipeline;
 
   // TaskGraph for rigid body simulation
   TaskGraph RB_TG;
@@ -41,6 +42,7 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "RB_aabb_task"}};
   daxa::TaskBuffer task_collisions{{.initial_buffers = {}, .name = "RB_collisions"}};
+  daxa::TaskBuffer task_points{{.initial_buffers = {}, .name = "RB_points"}};
 
   explicit RigidBodyManager(daxa::Device& device, 
   std::shared_ptr<TaskManager> task_manager) : device(device), task_manager(task_manager) {
@@ -51,6 +53,7 @@ struct RigidBodyManager{
       pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
       pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
       pipeline = task_manager->create_compute(RigidBodySim{}.info);
+      create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
     }
   }
 
@@ -169,12 +172,31 @@ struct RigidBodyManager{
         daxa::attachment_view(RigidBodySimTaskHead::AT.aabbs, task_aabbs),
       }, user_callback2);
 
-    std::array<daxa::TaskBuffer, 5> buffers = {
+      auto user_callback_CP = [this](daxa::TaskInterface ti, auto& self) {
+        ti.recorder.set_pipeline(*create_points_pipeline);
+        ti.recorder.push_constant(CreatePointsPushConstants{.task_head = ti.attachment_shader_blob});
+        ti.recorder.dispatch_indirect({
+            .indirect_buffer = ti.get(CreatePointsTaskHead::AT.dispatch_buffer).ids[0],
+            .offset = sizeof(daxa_u32vec3)});
+    };
+    
+    using TTaskCP = TaskTemplate<CreatePointsTaskHead::Task, decltype(user_callback_CP)>;
+
+    // Instantiate the task using the template class
+    TTaskCP task_CP(std::array{
+          daxa::attachment_view(CreatePointsTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+          daxa::attachment_view(CreatePointsTaskHead::AT.sim_config, task_sim_config),
+          daxa::attachment_view(CreatePointsTaskHead::AT.collisions, task_collisions),
+          daxa::attachment_view(CreatePointsTaskHead::AT.point_aabbs, task_points),
+      }, user_callback_CP);
+
+    std::array<daxa::TaskBuffer, 6> buffers = {
         task_dispatch_buffer,
         task_sim_config,
         task_rigid_bodies,
         task_aabbs,
         task_collisions,
+        task_points,
     };
 
     RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
@@ -184,6 +206,7 @@ struct RigidBodyManager{
     RB_TG.add_task(task_CS_dispatcher);
     RB_TG.add_task(task_CS);
     RB_TG.add_task(task2);
+    RB_TG.add_task(task_CP);
 
 
     RB_TG.submit();
@@ -206,7 +229,7 @@ struct RigidBodyManager{
   {
     daxa::InlineTaskInfo task_readback_SC({
         .attachments = {
-            daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_sim_config),
+            daxa::inl_attachment(daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE, task_sim_config),
         },
         .task = [this](daxa::TaskInterface const &ti)
         { 
@@ -290,7 +313,7 @@ struct RigidBodyManager{
     return initialized;
   }
 
-  bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId rigid_bodies, daxa::BufferId aabbs)
+  bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer)
   {
     if (!initialized)
     {
@@ -300,6 +323,7 @@ struct RigidBodyManager{
     task_dispatch_buffer.set_buffers({.buffers = std::array{dispatch_buffer}});
     task_rigid_bodies.set_buffers({.buffers = std::array{rigid_bodies}});
     task_aabbs.set_buffers({.buffers = std::array{aabbs}});
+    task_points.set_buffers({.buffers = std::array{points_buffer}});
     task_collisions.set_buffers({.buffers = std::array{collisions}});
 
     return initialized;

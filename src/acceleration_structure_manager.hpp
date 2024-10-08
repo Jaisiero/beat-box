@@ -15,8 +15,6 @@ struct AccelerationStructureManager
   std::shared_ptr<TaskManager> task_manager;
   // Compute pipeline for updating acceleration structures
   std::shared_ptr<daxa::ComputePipeline> update_pipeline;
-  // Compute pipeline for creating contact points
-  std::shared_ptr<daxa::ComputePipeline> create_points_pipeline;
 
   // TODO: Refactor this into a separate struct
   daxa_u32 frame_index = 0;
@@ -62,8 +60,15 @@ struct AccelerationStructureManager
   u32 proc_blas_buffer_offset = 0;
   // Buffer for the BLAS
   daxa::BufferId proc_blas_buffer = {};
-  // // Sub-allocated buffer for the BLAS
+  // Sub-allocated buffer for the BLAS
   std::vector<daxa::BlasId> proc_blas = {};
+
+  // Offset for point BLAS buffer
+  u32 point_blas_buffer_offset = 0;
+  // Buffer for point BLAS
+  daxa::BufferId point_blas_buffer = {};
+  // Sub-allocated buffer for point BLAS
+  std::vector<daxa::BlasId> point_blas = {};
 
   // Buffer for the TLAS
   daxa::BufferId proc_tlas_buffer = {};
@@ -121,8 +126,6 @@ struct AccelerationStructureManager
       acceleration_structure_scratch_offset_alignment = device.properties().acceleration_structure_properties.value().min_acceleration_structure_scratch_offset_alignment;
 
       update_pipeline = task_manager->create_compute(UpdateAccelerationStructures{}.info);
-
-      create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
     }
   }
 
@@ -172,6 +175,11 @@ struct AccelerationStructureManager
           .name = "proc_blas_buffer",
       });
 
+      point_blas_buffer = device.create_buffer({
+          .size = AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT,
+          .name = "point_proc_blas_buffer",
+      });
+
       // Create BLAS scratch buffer
       proc_blas_scratch_buffer = device.create_buffer({
           .size = AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT,
@@ -216,7 +224,7 @@ struct AccelerationStructureManager
       AS_build_TG.submit();
       AS_build_TG.complete();
 
-      record_update_TLAS_tasks(TLAS_update_TG, update_pipeline, create_points_pipeline);
+      record_update_TLAS_tasks(TLAS_update_TG, update_pipeline);
       TLAS_update_TG.submit();
       TLAS_update_TG.complete();
 
@@ -240,6 +248,11 @@ struct AccelerationStructureManager
         device.destroy_blas(blas);
       }
       device.destroy_buffer(proc_blas_buffer);
+      for(auto blas : point_blas)
+      {
+        device.destroy_blas(blas);
+      }
+      device.destroy_buffer(point_blas_buffer);
       device.destroy_buffer(proc_blas_scratch_buffer);
       device.destroy_buffer(proc_tlas_buffer);
       device.destroy_buffer(proc_tlas_scratch_buffer);
@@ -258,6 +271,12 @@ struct AccelerationStructureManager
       device.destroy_blas(blas);
     }
 
+    // Freeing BLAS
+    for(auto blas : point_blas)
+    {
+      device.destroy_blas(blas);
+    }
+
     // Freeing TLAS
     
     for(auto f = 0; f < DOUBLE_BUFFERING; ++f)
@@ -270,6 +289,7 @@ struct AccelerationStructureManager
     primitive_scratch_offset = 0;
     previous_primitive_count = 0;
     proc_blas_buffer_offset = 0;
+    point_blas_buffer_offset = 0;
     proc_blas_scratch_offset = 0;
   }
 
@@ -475,15 +495,16 @@ struct AccelerationStructureManager
     }
     
     // TODO: routine for delete and add rigid bodies?
-    if(proc_blas.size() > current_rigid_body_count)
+    if(point_blas.size() > 0)
     {
-      for(auto i = current_rigid_body_count; i < proc_blas.size(); ++i)
+      for(auto blas : point_blas)
       {
-        device.destroy_blas(proc_blas[i]);
+        device.destroy_blas(blas);
       }
-      proc_blas.resize(current_rigid_body_count);
+      point_blas.clear();
     }
 
+    point_blas_buffer_offset = 0;
 
     // BUILDING BLAS
     auto clear_build_AS = [&](u32 count)
@@ -509,8 +530,8 @@ struct AccelerationStructureManager
 
     daxa_u32 total_instances = current_rigid_body_count;
 
-    if(sim_config->collision_point_count > 0)
-    {
+    // if(sim_config->collision_point_count > 0)
+    // {
       ++total_instances;
 
       // Get contact points
@@ -549,26 +570,26 @@ struct AccelerationStructureManager
       auto blas_instance_offset = get_aligned(blas_build_sizes.back().acceleration_structure_size, ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT);
 
       // Check if the buffer offset is within the limits
-      if (proc_blas_buffer_offset + blas_instance_offset > AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT)
+      if (point_blas_buffer_offset + blas_instance_offset > AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT)
       {
         clear_build_AS(1);
         return false;
       }
 
       // Create BLAS buffer from buffer
-      proc_blas.push_back(device.create_blas_from_buffer(
+      point_blas.push_back(device.create_blas_from_buffer(
           {{
                 .size = blas_build_sizes.back().acceleration_structure_size,
                 .name = "blas_points",
 
             },
-            proc_blas_buffer,
-            proc_blas_buffer_offset}));
+            point_blas_buffer,
+            point_blas_buffer_offset}));
       // Add the BLAS buffer to the BLAS build info
-      blas_build_infos.back().dst_blas = proc_blas.back();
+      blas_build_infos.back().dst_blas = point_blas.back();
 
       // Increment the buffer offset
-      proc_blas_buffer_offset += blas_instance_offset;
+      point_blas_buffer_offset += blas_instance_offset;
 
       blas_instances_data[current_rigid_body_count] = {
           .transform = daxa_f32mat3x4(daxa_f32vec4(1.0f, 0.0f, 0.0f, 0.0f),
@@ -576,13 +597,14 @@ struct AccelerationStructureManager
                                       daxa_f32vec4(0.0f, 0.0f, 1.0f, 0.0f)),
           .instance_custom_index = current_rigid_body_count,
           .mask = 0xFF,
-          .instance_shader_binding_table_record_offset = 0,
+          .instance_shader_binding_table_record_offset = 1,
           .flags = {},
-          .blas_device_address = device.device_address(proc_blas.back()).value(),
+          .blas_device_address = device.device_address(point_blas.back()).value(),
       };
-    }
+    // }
 
-
+    // Set Task BLAS
+    task_blas.set_blas({.blas = point_blas});
 
     // Destroy TLAS
     if (!tlas[frame_index].is_empty())
@@ -633,7 +655,6 @@ struct AccelerationStructureManager
     }
 
     task_dispatch_buffer.set_buffers({.buffers = std::array{dispatch_buffer}});
-    task_collisions.set_buffers({.buffers = std::array{collisions}});
 
     sim_host_buffer = sim_config_host_buffer;
 
@@ -719,7 +740,7 @@ private:
     AS_TG = task_manager->create_task_graph("Build Acceleration Structures", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(tlas));
   }
 
-  void record_update_TLAS_tasks(TaskGraph &TLAS_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline, std::shared_ptr<daxa::ComputePipeline> create_points_pipeline)
+  void record_update_TLAS_tasks(TaskGraph &TLAS_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline)
   {
     auto user_callback_UI = [update_AS_pipeline](daxa::TaskInterface ti, auto& self) {
         ti.recorder.set_pipeline(*update_AS_pipeline);
@@ -739,25 +760,6 @@ private:
           daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_bodies, task_rigid_body_buffer),
           daxa::attachment_view(UpdateInstancesTaskHead::AT.aabbs, task_aabb_buffer),
       }, user_callback_UI);
-
-
-    auto user_callback_CP = [create_points_pipeline](daxa::TaskInterface ti, auto& self) {
-        ti.recorder.set_pipeline(*create_points_pipeline);
-        ti.recorder.push_constant(CreatePointsPushConstants{.task_head = ti.attachment_shader_blob});
-        ti.recorder.dispatch_indirect({
-            .indirect_buffer = ti.get(CreatePointsTaskHead::AT.dispatch_buffer).ids[0],
-            .offset = sizeof(daxa_u32vec3)});
-    };
-    
-    using TTaskCP = TaskTemplate<CreatePointsTaskHead::Task, decltype(user_callback_CP)>;
-
-    // Instantiate the task using the template class
-    TTaskCP task_CP(std::array{
-          daxa::attachment_view(CreatePointsTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
-          daxa::attachment_view(CreatePointsTaskHead::AT.sim_config, task_sim_config),
-          daxa::attachment_view(CreatePointsTaskHead::AT.collisions, task_collisions),
-          daxa::attachment_view(CreatePointsTaskHead::AT.point_aabbs, task_points_aabb_buffer),
-      }, user_callback_CP);
 
     daxa::InlineTaskInfo task_BB({
         .attachments = {
@@ -794,14 +796,13 @@ private:
         .name = "tlas update",
     });
 
-    std::array<daxa::TaskBuffer, 7> buffers = {
+    std::array<daxa::TaskBuffer, 6> buffers = {
         task_dispatch_buffer,
         task_sim_config,
         task_blas_instance_data,
         task_rigid_body_buffer,
         task_aabb_buffer,
         task_points_aabb_buffer,
-        task_collisions,
     };
     std::array<daxa::TaskBlas, 1> blas = {
         task_blas,
@@ -813,7 +814,6 @@ private:
     TLAS_TG = task_manager->create_task_graph("Update TLAS",std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(tlas));
 
     TLAS_TG.add_task(task_UI);
-    TLAS_TG.add_task(task_CP);
     TLAS_TG.add_task(task_BB);
     TLAS_TG.add_task(task_BT);
   }

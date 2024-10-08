@@ -46,6 +46,7 @@ struct RendererManager
   daxa::TaskTlas task_tlas{{.name = "tlas"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "rigid_bodies"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "aabbs"}};
+  daxa::TaskBuffer task_points{{.initial_buffers = {}, .name = "points"}};
 
   explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager)
       : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), scene_manager(scene_manager), status_manager(status_manager)
@@ -82,11 +83,13 @@ struct RendererManager
         daxa::attachment_view(RayTracingTaskHead::AT.camera, task_camera_buffer),
         daxa::attachment_view(RayTracingTaskHead::AT.swapchain, task_swapchain_image),
         daxa::attachment_view(RayTracingTaskHead::AT.tlas, task_tlas),
+        daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies, 
+        task_rigid_bodies),
         daxa::attachment_view(RayTracingTaskHead::AT.aabbs, task_aabbs),
-        daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies, task_rigid_bodies),
+        daxa::attachment_view(RayTracingTaskHead::AT.point_aabbs, task_points),
       }, user_callback);
 
-    std::array<daxa::TaskBuffer, 3> buffers = {task_camera_buffer, task_rigid_bodies, task_aabbs};
+    std::array<daxa::TaskBuffer, 4> buffers = {task_camera_buffer, task_rigid_bodies, task_aabbs, task_points};
 
     std::array<daxa::TaskImage, 1> images = {task_swapchain_image};
 
@@ -121,7 +124,7 @@ struct RendererManager
     return true;
   }
 
-  bool update_resources(daxa::ImageId swapchain_image, CameraManager &cam_mngr, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs)
+  bool update_resources(daxa::ImageId swapchain_image, CameraManager &cam_mngr, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer)
   {
     if (!initialized)
     {
@@ -133,6 +136,7 @@ struct RendererManager
     task_tlas.set_tlas({.tlas = std::array{tlas}});
     task_rigid_bodies.set_buffers({.buffers = std::array{rigid_bodies}});
     task_aabbs.set_buffers({.buffers = std::array{aabbs}});
+    task_points.set_buffers({.buffers = std::array{points_buffer}});
 
     return true;
   }
@@ -173,7 +177,7 @@ struct RendererManager
         handle_reload_result(task_manager->reload(), RT_pipeline, this);
         
         camera_manager->update(gpu->swapchain_get_extent());
-        update_resources(swapchain_image, *camera_manager, accel_struct_mngr->get_tlas(), accel_struct_mngr->rigid_body_buffer, accel_struct_mngr->primitive_buffer);
+        update_resources(swapchain_image, *camera_manager, accel_struct_mngr->get_tlas(), accel_struct_mngr->rigid_body_buffer, accel_struct_mngr->primitive_buffer, accel_struct_mngr->points_buffer);
         execute();
         gpu->garbage_collector();
       }

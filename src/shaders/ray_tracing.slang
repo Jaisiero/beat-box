@@ -42,6 +42,7 @@ static const daxa_f32vec3 face_Z = daxa_f32vec3(0.0, 0.0, 1.0); // blue
 static const daxa_f32vec3 face_neg_Z = daxa_f32vec3(1.0, 0.0, 1.0); // purple
 static const daxa_f32vec3 material_color = daxa_f32vec3(0.0, 0.0, 0.0); // black
 static const daxa_f32vec3 collision_material_color = daxa_f32vec3(1.0, 1.0, 1.0); // white
+static const daxa_f32vec3 point_color = daxa_f32vec3(0.0, 0.0, 0.0); // orange 
 static const daxa_f32vec3 material_specular = daxa_f32vec3(0.0, 0.5, 1.0);
 static const daxa_f32 shininess = 10.0;
 
@@ -177,6 +178,67 @@ daxa_f32vec3 get_face_color(BoxFace face)
   Ray ray = {WorldRayOrigin(), WorldRayDirection()};
   ray.origin = r->world_to_object(ray.origin);
   ray.direction = normalize(r->rotate_vector_inverse(ray.direction));
+
+  THit = hitAabb(aabb, ray);
+
+  if(THit > 0.0)
+  {
+      ReportHit(THit, /*hitKind*/ 0, params);
+  }
+}
+
+
+[shader("closesthit")] void closest_hit_point(inout HitPayload payload,
+                                            in MyAttributes attr)
+{
+  daxa_f32vec3 hit_location = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+
+  payload.position = hit_location;
+
+  daxa_u32 instance_index = InstanceID();
+  daxa_u32 prim_index = PrimitiveIndex();
+  
+  Aabb aabb = p.task_head.point_aabbs[prim_index];
+
+  daxa_f32vec3 center = aabb.center();
+  // center = r->object_to_world(center);
+
+  daxa_f32vec3 color = point_color;
+
+
+  // Computing the normal at hit position
+  daxa_f32vec3 normal = normalize(hit_location - center);
+
+  // normal = r->rotate_vector_inverse(normal);
+
+  // cube normal
+  {
+    daxa_f32vec3  abs_normal = abs(normal);
+    daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
+    normal     = (max_component == abs_normal.x) ?
+                 daxa_f32vec3(sign(normal.x), 0, 0) :
+                 (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) : daxa_f32vec3(0, 0, sign(normal.z));
+  }
+
+  // normal = r->rotate_vector(normal);
+
+  payload.normal = normal;
+
+  payload.hit_value = point_color;
+}
+
+
+
+[shader("intersection")] void intersection_point() {
+  daxa_f32 THit = RayTCurrent();
+  MyAttributes params = {};
+  
+  daxa_u32 prim_index = PrimitiveIndex();
+
+
+  Aabb aabb = p.task_head.point_aabbs[prim_index];
+
+  Ray ray = {WorldRayOrigin(), WorldRayDirection()};
 
   THit = hitAabb(aabb, ray);
 

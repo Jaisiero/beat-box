@@ -5,6 +5,7 @@
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
+[[vk::push_constant]] CreatePointsPushConstants CP;
 
 extension RigidBody
 {
@@ -1378,4 +1379,31 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[pixel_i.x]);
 
   r->advect(sim_config);
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_create_contact_points(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(CP.task_head.sim_config);
+
+  if (pixel_i.x >= sim_config->collision_count)
+  {
+    return;
+  }
+
+  Manifold m =
+      CP.task_head.collisions[pixel_i.x];
+
+  daxa_u32 index = 0;
+  InterlockedAdd(sim_config->collision_point_count, m.contact_count, index);
+
+  for(int i = 0; i < m.contact_count; i++)
+  {
+    daxa_u32 current_index = index + i;
+    Ptr<Aabb> aabb = Ptr<Aabb>(&CP.task_head.point_aabbs[current_index]);
+    aabb->minimum = m.contacts[i].position + daxa_f32vec3(-POINT_SIZE, -POINT_SIZE, -POINT_SIZE);
+    aabb->maximum = m.contacts[i].position + daxa_f32vec3(POINT_SIZE, POINT_SIZE, POINT_SIZE);
+  }
 }
