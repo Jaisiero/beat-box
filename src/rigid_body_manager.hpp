@@ -51,21 +51,22 @@ struct RigidBodyManager{
   ~RigidBodyManager();
 
   daxa::BufferId get_sim_config_buffer();
+  daxa::BufferId get_rigid_body_buffer();
 
   bool create(char const* name, std::shared_ptr<RendererManager> renderer);
   void destroy();
 
-  bool simulate();
+  bool simulate(daxa::BufferId rigid_bodies);
   bool read_back_sim_config();
 
   bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer);
   // NOTE: this function reset simulation configuration
-  bool update_sim(daxa_u32 rigid_body_count);
+  bool update_sim(daxa_u32 rigid_body_count, daxa::BufferId rigid_body_buffer);
 
 private: 
   void record_read_back_sim_config_tasks(TaskGraph &readback_SC_TG);
   void record_update_sim_config_tasks(TaskGraph &update_SC_TG);
-  void update_buffers();
+  void update_buffers(daxa::BufferId rigid_bodies);
 
 };
 

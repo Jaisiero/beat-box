@@ -272,14 +272,14 @@ void RigidBodyManager::destroy()
   initialized = false;
 }
 
-bool RigidBodyManager::simulate()
+bool RigidBodyManager::simulate(daxa::BufferId rigid_bodies)
 {
   if (!initialized)
   {
     return !initialized;
   }
 
-  update_buffers();
+  update_buffers(rigid_bodies);
 
   RB_TG.execute();
 
@@ -303,7 +303,7 @@ bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::Bu
 }
 
 // NOTE: this function reset simulation configuration
-bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count)
+bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count, daxa::BufferId rigid_body_buffer)
 {
   if (!initialized)
   {
@@ -320,11 +320,7 @@ bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count)
       },
   };
 
-  update_buffers();
-
-  update_SC_TG.execute();
-
-  update_buffers();
+  update_buffers(rigid_body_buffer);
 
   update_SC_TG.execute();
 
@@ -345,9 +341,10 @@ bool RigidBodyManager::read_back_sim_config()
   return initialized;
 }
 
-void RigidBodyManager::update_buffers()
+void RigidBodyManager::update_buffers(daxa::BufferId rigid_bodies)
 {
   task_sim_config.set_buffers({.buffers = std::array{sim_config[renderer_manager->get_frame_index()]}});
+  task_rigid_bodies.set_buffers({.buffers = std::array{rigid_bodies}});
 }
 
 BB_NAMESPACE_END

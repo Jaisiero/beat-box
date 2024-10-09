@@ -32,10 +32,11 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
     });
 
     // Create buffer for RigidBodies
-    rigid_body_buffer = device.create_buffer({
-        .size = MAX_RIGID_BODY_COUNT * sizeof(RigidBody),
-        .name = "rigid_body_buffer",
-    });
+    for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
+      rigid_body_buffer[f] = device.create_buffer({
+          .size = MAX_RIGID_BODY_COUNT * sizeof(RigidBody),
+          .name = "rigid_body_buffer_ " + std::to_string(f),
+      });
 
     // Create scratch buffer for primitives
     primitive_scratch_buffer = device.create_buffer({
@@ -102,7 +103,7 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
       });
 
     // Set the buffers for the tasks
-    task_rigid_body_buffer.set_buffers({.buffers = std::array{rigid_body_buffer}});
+    task_rigid_body_buffer.set_buffers({.buffers = std::array{rigid_body_buffer[0]}});
     task_aabb_buffer.set_buffers({.buffers = std::array{primitive_buffer}});
     task_blas_instance_data.set_buffers({.buffers = std::array{blas_instances_buffer}});
     task_points_aabb_buffer.set_buffers({.buffers = std::array{points_buffer[0]}});
@@ -126,7 +127,8 @@ void AccelerationStructureManager::destroy()
   if (initialized)
   {
     device.destroy_buffer(rigid_body_scratch_buffer);
-    device.destroy_buffer(rigid_body_buffer);
+    for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
+      device.destroy_buffer(rigid_body_buffer[f]);
     device.destroy_buffer(primitive_scratch_buffer);
     device.destroy_buffer(primitive_buffer);
     for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
@@ -185,6 +187,16 @@ daxa::TlasId AccelerationStructureManager::get_tlas()
 {
   // TODO: should frame_index be passed as a parameter?
   return tlas[renderer_manager->get_frame_index()];
+}
+
+daxa::BufferId AccelerationStructureManager::get_rigid_body_buffer()
+{
+  return rigid_body_buffer[renderer_manager->get_frame_index()];
+}
+
+daxa::BufferId AccelerationStructureManager::get_next_rigid_body_buffer()
+{
+  return rigid_body_buffer[renderer_manager->get_frame_index()];
 }
 
 daxa::BufferId AccelerationStructureManager::get_points_buffer()
@@ -372,7 +384,7 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   return true;
 }
 
-void AccelerationStructureManager::update_TLAS(daxa::BufferId sim_config)
+void AccelerationStructureManager::update_TLAS(daxa::BufferId sim_config) 
 {
   update_buffers(sim_config);
   TLAS_update_TG.execute();
@@ -557,7 +569,7 @@ bool AccelerationStructureManager::update_TLAS_resources(daxa::BufferId dispatch
 
 void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
 {
-  daxa::InlineTaskInfo task1({
+  daxa::InlineTaskInfo task0({
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_rigid_body_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_aabb_buffer),
@@ -573,7 +585,25 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
 
         ti.recorder.copy_buffer_to_buffer({
             .src_buffer = rigid_body_scratch_buffer,
-            .dst_buffer = rigid_body_buffer,
+            .dst_buffer = rigid_body_buffer[renderer_manager->get_frame_index()],
+            .dst_offset = previous_rigid_body_count * sizeof(RigidBody),
+            .size = rigid_body_scratch_offset,
+        });
+      },
+      .name = "copy rigid bodies and primitives",
+  });
+  daxa::InlineTaskInfo task1({
+      .attachments = {
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_rigid_body_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_aabb_buffer),
+      },
+      .task = [this](daxa::TaskInterface const &ti)
+      {
+        auto next_index = (renderer_manager->get_frame_index() + 1) % DOUBLE_BUFFERING;
+        ti.recorder.copy_buffer_to_buffer({
+            .src_buffer = rigid_body_buffer[renderer_manager->get_frame_index()],
+            .dst_buffer = rigid_body_buffer[next_index],
+            .src_offset = previous_rigid_body_count * sizeof(RigidBody),
             .dst_offset = previous_rigid_body_count * sizeof(RigidBody),
             .size = rigid_body_scratch_offset,
         });
@@ -613,7 +643,8 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
       .name = "tlas build",
   });
 
-  std::array<daxa::InlineTaskInfo, 3> tasks = {
+  std::array<daxa::InlineTaskInfo, 4> tasks = {
+      task0,
       task1,
       task2,
       task3,
@@ -715,6 +746,7 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
 void AccelerationStructureManager::update_buffers(daxa::BufferId sim_config)
 {
   task_sim_config.set_buffers({.buffers = std::array{sim_config}});
+  task_rigid_body_buffer.set_buffers({.buffers = std::array{rigid_body_buffer[renderer_manager->get_frame_index()]}});
   task_blas_instance_data.set_buffers({.buffers = std::array{blas_instances_buffer}});
 }
 

@@ -97,7 +97,7 @@ void RendererManager::render()
 {
   while (!window.should_close())
   {
-    rigid_body_manager->simulate();
+    rigid_body_manager->simulate(accel_struct_mngr->get_rigid_body_buffer());
 
     if (!window.update())
       continue;
@@ -132,7 +132,7 @@ void RendererManager::render()
       handle_reload_result(task_manager->reload(), RT_pipeline, this);
 
       camera_manager->update(gpu->swapchain_get_extent());
-      update_resources(swapchain_image, *camera_manager, accel_struct_mngr->get_tlas(), accel_struct_mngr->rigid_body_buffer, accel_struct_mngr->primitive_buffer, accel_struct_mngr->get_points_buffer());
+      update_resources(swapchain_image, *camera_manager, accel_struct_mngr->get_tlas(), accel_struct_mngr->get_rigid_body_buffer(), accel_struct_mngr->primitive_buffer, accel_struct_mngr->get_points_buffer());
       execute();
       gpu->garbage_collector();
 

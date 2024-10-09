@@ -38,7 +38,7 @@ struct AccelerationStructureManager
   // Rigid body previous count
   u32 previous_rigid_body_count = 0;
   // Buffer for the RigidBodies
-  daxa::BufferId rigid_body_buffer = {};
+  daxa::BufferId rigid_body_buffer[DOUBLE_BUFFERING] = {};
 
   // Offset for the scratch buffer for primitives
   u32 primitive_scratch_offset = 0;
@@ -128,9 +128,12 @@ struct AccelerationStructureManager
   void free_accel_structs();
 
   daxa::TlasId get_tlas();
+  daxa::BufferId get_rigid_body_buffer();
+  daxa::BufferId get_next_rigid_body_buffer();
   daxa::BufferId get_points_buffer();
 
 
+  // NOTE: queue sync assures double buffering is filled
   void build_AS();
   bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives);
   void update_TLAS(daxa::BufferId sim_config);
