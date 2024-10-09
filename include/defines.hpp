@@ -76,9 +76,6 @@ const auto RT_shader_file_string = "ray_tracing.slang";
 const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
 
 const auto RB_sim_shader_file_string = "RB_sim.slang";
-// reset collision info
-const auto entry_reset_collisions = "entry_reset_collisions";
-const auto reset_collisions_pipeline_name = "Reset Collisions";
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
@@ -231,21 +228,6 @@ struct MainRayTracingPipeline
         .name = RT_main_pipeline_name,
     };
   }
-};
-
-struct ResetCollisionsInfo {
-  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
-      .compile_options = {
-          .entry_point = entry_reset_collisions,
-      },
-  };
-
-  daxa::ComputePipelineCompileInfo info = {
-      .shader_info = compute_shader,
-      .push_constant_size = sizeof(ResetCollisionsPushConstants),
-      .name = reset_collisions_pipeline_name,
-  };
 };
 
 struct BroadPhaseInfo {

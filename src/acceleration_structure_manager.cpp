@@ -432,7 +432,7 @@ bool AccelerationStructureManager::update()
   blas_geometries.at(0).push_back({
       .data = device.device_address(points_buffer[frame_index]).value(),
       .stride = sizeof(Aabb),
-      .count = sim_config->collision_point_count,
+      .count = sim_config->g_c_info.collision_point_count,
       .flags = daxa::GeometryFlagBits::OPAQUE,
   });
 

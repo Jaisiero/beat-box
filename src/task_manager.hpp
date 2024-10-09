@@ -40,6 +40,19 @@ struct TaskTemplate : public TaskType
   }
 };
 
+template<typename T>
+inline void allocate_fill_copy(daxa::TaskInterface ti, T value, daxa::TaskBufferAttachmentInfo dst, u32 dst_offset = 0)
+{
+    auto alloc = ti.allocator->allocate_fill(value).value();
+    ti.recorder.copy_buffer_to_buffer({
+        .src_buffer = ti.allocator->buffer(),
+        .dst_buffer = dst.ids[0],
+        .src_offset = alloc.buffer_offset,
+        .dst_offset = dst_offset,
+        .size = sizeof(T),
+    });
+}
+
 FORCE_INLINE std::vector<std::filesystem::path> paths{
     DAXA_SHADER_INCLUDE_DIR,
     "include",

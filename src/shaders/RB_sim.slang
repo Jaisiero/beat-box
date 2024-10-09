@@ -1,6 +1,5 @@
 #include "shared.inl"
 
-[[vk::push_constant]] ResetCollisionsPushConstants RC;
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
@@ -1198,7 +1197,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     {
       any_collision = true;
       daxa_u32 index = 0;
-      InterlockedAdd(sim_config->collision_count, 1u, index);
+      InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
       manifold.compute_basis();
       collisions[index] = manifold;
       face_collided |= manifold.faces;
@@ -1211,24 +1210,6 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   {
     r->flags |= RigidBodyFlag::COLLIDING;
   }
-}
-
-[shader("compute")]
-    [numthreads(1, 1, 1)] void
-    entry_reset_collisions(uint3 pixel_i : SV_DispatchThreadID)
-{
-
-  if (pixel_i.x >= 1u)
-  {
-    return;
-  }
-
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(RC.task_head.sim_config);
-
-  sim_config->collision_count = 0u;
-  sim_config->collision_point_count = 0u;
-
 }
 
 [shader("compute")]
@@ -1269,7 +1250,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   Ptr<DispatchBuffer> dispatch_buffer =
       Ptr<DispatchBuffer>(CSD.task_head.dispatch_buffer);
 
-  dispatch_buffer->solver_dispatch.x = (sim_config->collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  dispatch_buffer->solver_dispatch.x = (sim_config->g_c_info.collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
 
 }
 
@@ -1289,7 +1270,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   // TODO: Implement parallel collision solver
   // atomicAdd to velocity and omega
 
-  for(daxa_u32 m = 0u; m < sim_config->collision_count; ++m)
+  for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
   {
 
     Manifold manifold =
@@ -1388,7 +1369,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(CP.task_head.sim_config);
 
-  if (pixel_i.x >= sim_config->collision_count)
+  if (pixel_i.x >= sim_config->g_c_info.collision_count)
   {
     return;
   }
@@ -1397,7 +1378,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       CP.task_head.collisions[pixel_i.x];
 
   daxa_u32 index = 0;
-  InterlockedAdd(sim_config->collision_point_count, m.contact_count, index);
+  InterlockedAdd(sim_config->g_c_info.collision_point_count, m.contact_count, index);
 
   for(int i = 0; i < m.contact_count; i++)
   {

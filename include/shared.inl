@@ -224,13 +224,18 @@ static const daxa_f32 PI = 3.14159265359f;
 static const daxa_f32 COLLISION_GUARD = 1e-3f;
 static const daxa_u32 AABB_CORNER_COUNT = 8;
 
+struct GlobalCollisionInfo
+{
+  daxa_u32 collision_count;
+  daxa_u32 collision_point_count;
+};
+
 struct SimConfig
 {
   daxa_u32 rigid_body_count;
   daxa_f32 dt;
   daxa_f32 gravity;
-  daxa_u32 collision_count;
-  daxa_u32 collision_point_count;
+  GlobalCollisionInfo g_c_info;
 };
 DAXA_DECL_BUFFER_PTR(SimConfig)
 
@@ -251,18 +256,6 @@ static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 64;
 
 
 DAXA_DECL_BUFFER_PTR(Manifold)
-
-
-DAXA_DECL_TASK_HEAD_BEGIN(ResetCollisionsTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_WRITE, daxa_BufferPtr(SimConfig), sim_config)
-DAXA_DECL_TASK_HEAD_END
-
-
-
-struct ResetCollisionsPushConstants
-{
-  DAXA_TH_BLOB(ResetCollisionsTaskHead, task_head)
-};
 
 
 DAXA_DECL_TASK_HEAD_BEGIN(BroadPhaseTaskHead)

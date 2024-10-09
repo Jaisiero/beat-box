@@ -8,7 +8,6 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
 {
   if (device.is_valid())
   {
-    pipeline_RC = task_manager->create_compute(ResetCollisionsInfo{}.info);
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
     pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
     pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
@@ -58,23 +57,27 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .rigid_body_count = 0,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
-      .collision_count = 0,
+      .g_c_info = GlobalCollisionInfo{
+          .collision_count = 0,
+          .collision_point_count = 0,
+      },
   };
 
-  auto user_callback0 = [this](daxa::TaskInterface ti, auto &self)
-  {
-    ti.recorder.set_pipeline(*pipeline_RC);
-    ti.recorder.push_constant(ResetCollisionsPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
-  };
-
-  using TTaskRC = TaskTemplate<ResetCollisionsTaskHead::Task, decltype(user_callback0)>;
-
-  // Instantiate the task using the template class
-  TTaskRC task_RC(std::array{
-                      daxa::attachment_view(ResetCollisionsTaskHead::AT.sim_config, task_sim_config),
-                  },
-                  user_callback0);
+  daxa::InlineTaskInfo task_RC({
+      .attachments = {
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_sim_config),
+      },
+      .task = [this](daxa::TaskInterface const &ti)
+      {
+        auto reset_c_info = GlobalCollisionInfo{
+            .collision_count = 0,
+            .collision_point_count = 0,
+        };
+        
+        allocate_fill_copy(ti, reset_c_info, ti.get(task_sim_config), sizeof(SimConfig) - sizeof(GlobalCollisionInfo));
+      },
+      .name = "reset sim config",
+  });
 
   auto user_callback = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -311,8 +314,10 @@ bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count)
       .rigid_body_count = rigid_body_count,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
-      .collision_count = 0,
-      .collision_point_count = 0,
+      .g_c_info = GlobalCollisionInfo{
+          .collision_count = 0,
+          .collision_point_count = 0,
+      },
   };
 
   update_buffers();
