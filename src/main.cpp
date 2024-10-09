@@ -40,18 +40,18 @@ int main(int argc, char const *argv[])
   // Primary tracing pipeline
   auto RT_pipeline = std::make_shared<RayTracingPipeline>(task_manager->create_ray_tracing(MainRayTracingPipeline{}.info), gpu->device);
   // Renderer
-  RendererManager renderer(gpu, task_manager, window, camera_manager, accel_struct_mngr, rigid_body_manager, scene_manager, status_manager);
+  auto renderer = std::make_shared<RendererManager>(gpu, task_manager, window, camera_manager, accel_struct_mngr, rigid_body_manager, scene_manager, status_manager);
 
   // Create camera manager
   camera_manager->create("Camera Manager");
   // Create input manager which depends on camera manager and window
   input_manager.create(camera_manager);
   // Create task graph
-  renderer.create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->build_SBT());
+  renderer->create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->build_SBT());
   // Create rigid body simulator
-  rigid_body_manager->create("Rigid Body Manager");
+  rigid_body_manager->create("Rigid Body Manager", renderer);
   // Create acceleration structure manager
-  accel_struct_mngr->create();
+  accel_struct_mngr->create(renderer);
   // Create status manager
   status_manager->create();
   // Create scene manager
@@ -63,7 +63,7 @@ int main(int argc, char const *argv[])
   }
 
   // Main loop
-  renderer.render();
+  renderer->render();
 
   // Cleanup
   status_manager->destroy();

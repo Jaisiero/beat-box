@@ -5,6 +5,12 @@
 #endif // DAXA_RAY_TRACING
 #include "daxa/daxa.inl"
 
+#if defined(__cplusplus)
+#define FORCE_INLINE inline
+#else
+#define FORCE_INLINE
+#endif
+
 struct Aabb
 {
     daxa_f32vec3 minimum;
@@ -97,34 +103,34 @@ struct Ray {
 #define MAX std::max
 #define MIN std::min
 
-daxa_f32vec3 operator-(const daxa_f32vec3& a, const daxa_f32vec3& b)
+FORCE_INLINE daxa_f32vec3 operator-(const daxa_f32vec3& a, const daxa_f32vec3& b)
 {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
 }
 
-daxa_f32vec3 operator*(const daxa_f32vec3& a, const daxa_f32vec3& b)
+FORCE_INLINE daxa_f32vec3 operator*(const daxa_f32vec3& a, const daxa_f32vec3& b)
 {
     return {a.x * b.x, a.y * b.y, a.z * b.z};
 }
 
-daxa_f32vec3 operator/(const daxa_f32& a, const daxa_f32vec3& b)
+FORCE_INLINE daxa_f32vec3 operator/(const daxa_f32& a, const daxa_f32vec3& b)
 {
     return {a / b.x, a / b.y, a / b.z};
 }
 
-bool operator<(const daxa_f32vec3& a, const daxa_f32vec3& b)
+FORCE_INLINE bool operator<(const daxa_f32vec3& a, const daxa_f32vec3& b)
 {
   auto lenght_a = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
   auto lenght_b = std::sqrt(b.x * b.x + b.y * b.y + b.z * b.z);
   return lenght_a < lenght_b;
 }
 
-daxa_f32vec3 operator*(const daxa_f32& a, const daxa_f32vec3& b)
+FORCE_INLINE daxa_f32vec3 operator*(const daxa_f32& a, const daxa_f32vec3& b)
 {
     return {a * b.x, a * b.y, a * b.z};
 }
 
-daxa_f32mat4x4 daxa_mat4_from_glm_mat4(glm::mat4 const& m)
+FORCE_INLINE daxa_f32mat4x4 daxa_mat4_from_glm_mat4(glm::mat4 const& m)
 {
     return {
         m[0][0], m[0][1], m[0][2], m[0][3],
@@ -134,7 +140,7 @@ daxa_f32mat4x4 daxa_mat4_from_glm_mat4(glm::mat4 const& m)
     };
 }
 
-daxa_f32mat3x3 daxa_mat3_from_glm_mat3(glm::mat3 const& m)
+FORCE_INLINE daxa_f32mat3x3 daxa_mat3_from_glm_mat3(glm::mat3 const& m)
 {
     return {
         m[0][0], m[0][1], m[0][2],
@@ -143,7 +149,7 @@ daxa_f32mat3x3 daxa_mat3_from_glm_mat3(glm::mat3 const& m)
     };
 }
 
-auto cuboid_get_inverse_intertia(daxa_f32 mass, daxa_f32vec3 min, daxa_f32vec3 max) -> daxa_f32mat3x3
+FORCE_INLINE auto cuboid_get_inverse_intertia(daxa_f32 mass, daxa_f32vec3 min, daxa_f32vec3 max) -> daxa_f32mat3x3
 {
     daxa_f32vec3 size = max - min; // (width, height, depth)
     daxa_f32 w = size.x;
@@ -175,7 +181,7 @@ static const daxa_f32 EPSILON = 1.192092896e-07F;
 #endif // __cplusplus
 
 
-daxa_f32 hitAabb(const Aabb aabb, const Ray r)
+FORCE_INLINE daxa_f32 hitAabb(const Aabb aabb, const Ray r)
 {
   daxa_f32vec3  invDir = 1.0f / r.direction;
   daxa_f32vec3  tbot   = invDir * (aabb.minimum - r.origin);

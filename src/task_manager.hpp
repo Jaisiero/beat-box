@@ -2,6 +2,7 @@
 #include "defines.hpp"
 #include <map>
 #include <variant>
+#include "gpu_context.hpp"
 
 BB_NAMESPACE_BEGIN
 
@@ -39,7 +40,7 @@ struct TaskTemplate : public TaskType
   }
 };
 
-std::vector<std::filesystem::path> paths{
+FORCE_INLINE std::vector<std::filesystem::path> paths{
     DAXA_SHADER_INCLUDE_DIR,
     "include",
     "src/shaders",

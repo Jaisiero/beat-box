@@ -17,6 +17,8 @@ struct StatusManager
   std::shared_ptr<RigidBodyManager> rigid_body_manager;
   // flag for initialization
   bool initialized = false;
+  // frame index
+  daxa_u32 frame_index = 0;
   
   // Dispatch buffer
   daxa::BufferId dispatch_buffer;
@@ -47,7 +49,7 @@ struct StatusManager
     // Link resources
     accel_struct_mngr->update_TLAS_resources(dispatch_buffer, rigid_body_manager->collisions, rigid_body_manager->sim_config_host_buffer);
 
-    rigid_body_manager->update_resources(dispatch_buffer, accel_struct_mngr->rigid_body_buffer, accel_struct_mngr->primitive_buffer, accel_struct_mngr->points_buffer);
+    rigid_body_manager->update_resources(dispatch_buffer, accel_struct_mngr->rigid_body_buffer, accel_struct_mngr->primitive_buffer, accel_struct_mngr->get_points_buffer());
 
     return initialized = true;
   }
@@ -75,6 +77,23 @@ struct StatusManager
     gpu->device.buffer_host_address_as<DispatchBuffer>(dispatch_buffer).value()->dispatch = daxa_u32vec3((rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X, 1, 1);
 
     return initialized;
+  }
+
+  bool next_frame()
+  {
+    if (!initialized)
+    {
+      return false;
+    }
+
+    frame_index = (frame_index + 1) % DOUBLE_BUFFERING;
+
+    return true;
+  }
+
+  daxa_u32 get_frame_index()
+  {
+    return frame_index;
   }
 };
 

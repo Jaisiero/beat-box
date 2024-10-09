@@ -11,6 +11,12 @@ using namespace daxa::types;
 #define BB_NAMESPACE_BEGIN namespace beatbox {
 #define BB_NAMESPACE_END }
 
+#if defined(__cplusplus)
+#define FORCE_INLINE inline
+#else
+#define FORCE_INLINE
+#endif
+
 
 BB_NAMESPACE_BEGIN
 
@@ -43,7 +49,7 @@ enum GroupIndex : u32
   GROUPS_COUNT,
 };
 
-std::string to_string(StageIndex index)
+FORCE_INLINE std::string to_string(StageIndex index)
 {
   switch (index)
   {
