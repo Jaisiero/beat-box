@@ -77,7 +77,7 @@ struct RigidBody
   daxa_u32 primitive_count;
   daxa_u32 primitive_offset;
   daxa_f32vec3 position;
-  daxa_f32vec4 rotation;
+  Quaternion rotation;
   daxa_f32vec3 minimum;
   daxa_f32vec3 maximum;
   daxa_f32 mass;
@@ -93,28 +93,15 @@ struct RigidBody
   // daxa_f32 drag;
   // daxa_f32 angular_drag;
 
+  daxa_f32mat3x3 get_rotation_matrix()
+  {
+    return rotation.to_matrix();
+  }
+
   daxa_f32mat4x4 get_transform_matrix()
   {
     daxa_f32vec3 translation = position;
-    daxa_f32vec4 rot = rotation;
-
-    // transform quaternion to matrix
-    daxa_f32 x2 = rot.x + rot.x;
-    daxa_f32 y2 = rot.y + rot.y;
-    daxa_f32 z2 = rot.z + rot.z;
-    daxa_f32 xx = rot.x * x2;
-    daxa_f32 xy = rot.x * y2;
-    daxa_f32 xz = rot.x * z2;
-    daxa_f32 yy = rot.y * y2;
-    daxa_f32 yz = rot.y * z2;
-    daxa_f32 zz = rot.z * z2;
-    daxa_f32 wx = rot.w * x2;
-    daxa_f32 wy = rot.w * y2;
-    daxa_f32 wz = rot.w * z2;
-
-    daxa_f32mat3x3 rotation_matrix = daxa_f32mat3x3(daxa_f32vec3(1.0f - (yy + zz), xy - wz, xz + wy),
-                                                    daxa_f32vec3(xy + wz, 1.0f - (xx + zz), yz - wx),
-                                                    daxa_f32vec3(xz - wy, yz + wx, 1.0f - (xx + yy)));
+    daxa_f32mat3x3 rotation_matrix = rotation.to_matrix();
 
 #if defined(__cplusplus)
     return daxa_f32mat4x4(daxa_f32vec4(rotation_matrix.x.x, rotation_matrix.y.x, rotation_matrix.z.x, translation.x),
@@ -169,7 +156,7 @@ struct RigidBody
   }
   daxa_f32vec3 rotate_vector(const daxa_f32vec3 v)
   {
-    daxa_f32vec3 u = daxa_f32vec3(this.rotation.x, this.rotation.y, this.rotation.z);
+    daxa_f32vec3 u = daxa_f32vec3(this.rotation.v);
     daxa_f32 s = this.rotation.w;
 
     return 2.0f * dot(u, v) * u
@@ -179,7 +166,7 @@ struct RigidBody
 
   daxa_f32vec3 rotate_vector_inverse(const daxa_f32vec3 v)
   {
-    daxa_f32vec3 u = daxa_f32vec3(-this.rotation.x, -this.rotation.y, -this.rotation.z);
+    daxa_f32vec3 u = daxa_f32vec3(-this.rotation.v);
     daxa_f32 s = this.rotation.w;
 
     return 2.0f * dot(u, v) * u

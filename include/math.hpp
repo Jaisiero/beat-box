@@ -11,88 +11,6 @@
 #define FORCE_INLINE
 #endif
 
-struct Aabb
-{
-    daxa_f32vec3 minimum;
-    daxa_f32vec3 maximum;
-#if !defined(__cplusplus)
-  daxa_f32vec3 center() {
-    return (this.minimum + this.maximum) * 0.5;
-  }
-
-  daxa_f32vec3 size() {
-    return this.maximum - this.minimum;
-  }
-
-  daxa_f32vec3 get_corner(daxa_u32 index) {
-    daxa_f32vec3 result;
-    result.x = (index & 1) == 0 ? this.minimum.x : this.maximum.x;
-    result.y = (index & 2) == 0 ? this.minimum.y : this.maximum.y;
-    result.z = (index & 4) == 0 ? this.minimum.z : this.maximum.z;
-    return result;
-  }
-#endif // __cplusplus
-};
-
-static const daxa_u32 MAX_INCIDENT_VERTEX_COUNT = 4;
-static const daxa_u32 MAX_CONTACT_POINT_COUNT = 8;
-
-struct Transform {
-  daxa_f32vec3 position;
-  daxa_f32mat3x3 rotation;
-};
-
-struct FeaturePair {
-  daxa_u32 in_reference;
-  daxa_u32 out_reference;
-  daxa_u32 in_incident;
-  daxa_u32 out_incident;
-};
-
-struct ClipVertex {
-  daxa_f32vec3 v;
-  FeaturePair f;
-};
-
-struct Contact {
-  daxa_f32vec3 position;
-  daxa_f32 penetration;
-  daxa_f32 normal_impulse;
-  daxa_f32 tangent_impulse[2];
-  daxa_f32 bias;
-  daxa_f32 normal_mass;
-  daxa_f32 tangent_mass[2];
-  FeaturePair fp;
-};
-
-struct Manifold {
-  daxa_u32 obb1_index;
-  daxa_u32 obb2_index;
-  daxa_i32 key;
-  daxa_u32 faces;
-
-  daxa_i32 error;
-  // // DEBUG
-  // daxa_f32 s_max;
-  // Transform rtx;
-  // daxa_f32vec3 e_r;
-  // Transform itx;
-  // daxa_f32vec3 e_i;
-  // daxa_f32vec3 e;
-  // daxa_f32mat3x3 basis;
-
-  daxa_f32vec3 normal;
-  daxa_f32vec3 tangent_vectors[2];
-  Contact contacts[MAX_CONTACT_POINT_COUNT];
-  daxa_i32 contact_count;
-};
-DAXA_DECL_BUFFER_PTR(Manifold)
-
-struct Ray {
-    daxa_f32vec3 origin;
-    daxa_f32vec3 direction;
-};
-
 #if defined(__cplusplus) // C++
 #include <cmath>
 #include <glm/glm.hpp>
@@ -128,6 +46,16 @@ FORCE_INLINE bool operator<(const daxa_f32vec3& a, const daxa_f32vec3& b)
 FORCE_INLINE daxa_f32vec3 operator*(const daxa_f32& a, const daxa_f32vec3& b)
 {
     return {a * b.x, a * b.y, a * b.z};
+}
+
+FORCE_INLINE daxa_f32vec3 operator*(const daxa_f32vec3& a, const daxa_f32& b)
+{
+    return {a.x * b, a.y * b, a.z * b};
+}
+
+FORCE_INLINE daxa_f32vec3 operator/(const daxa_f32vec3& a, const daxa_f32& b)
+{
+    return {a.x / b, a.y / b, a.z / b};
 }
 
 FORCE_INLINE daxa_f32mat4x4 daxa_mat4_from_glm_mat4(glm::mat4 const& m)
@@ -179,6 +107,163 @@ static const daxa_f32 FLT_MAX = 3.402823466e+38F;
 static const daxa_f32 FLT_MIN = 1.175494351e-38F;
 static const daxa_f32 EPSILON = 1.192092896e-07F;
 #endif // __cplusplus
+
+struct Aabb
+{
+    daxa_f32vec3 minimum;
+    daxa_f32vec3 maximum;
+#if !defined(__cplusplus)
+  daxa_f32vec3 center() {
+    return (this.minimum + this.maximum) * 0.5;
+  }
+
+  daxa_f32vec3 size() {
+    return this.maximum - this.minimum;
+  }
+
+  daxa_f32vec3 get_corner(daxa_u32 index) {
+    daxa_f32vec3 result;
+    result.x = (index & 1) == 0 ? this.minimum.x : this.maximum.x;
+    result.y = (index & 2) == 0 ? this.minimum.y : this.maximum.y;
+    result.z = (index & 4) == 0 ? this.minimum.z : this.maximum.z;
+    return result;
+  }
+#endif // __cplusplus
+};
+
+static const daxa_u32 MAX_INCIDENT_VERTEX_COUNT = 4;
+static const daxa_u32 MAX_CONTACT_POINT_COUNT = 8;
+
+struct Transform {
+  daxa_f32vec3 position;
+  daxa_f32mat3x3 rotation;
+};
+
+struct Quaternion {
+  daxa_f32vec3 v;
+  daxa_f32 w;
+#if defined(__cplusplus)
+  Quaternion(daxa_f32vec3 v, daxa_f32 w) : v(v), w(w) {}
+  Quaternion(daxa_f32 x, daxa_f32 y, daxa_f32 z, daxa_f32 w) : v({x, y, z}), w(w) {}
+#else 
+  __init(daxa_f32vec3 v, daxa_f32 w) {
+    this.v = v;
+    this.w = w;
+  }
+  __init(daxa_f32 x, daxa_f32 y, daxa_f32 z, daxa_f32 w) {
+    this.v = daxa_f32vec3(x, y, z);
+    this.w = w;
+  }
+#endif // __cplusplus
+
+  daxa_f32 magnitude() {
+    return sqrt(v.x * v.x + v.y * v.y + v.z * v.z + w * w);
+  }
+
+  Quaternion normalize() {
+    daxa_f32 mag = magnitude();
+    return Quaternion(v / mag, w / mag);
+  }
+
+  Quaternion conjugate() {
+    return Quaternion(-v.x, -v.y, -v.z, w);
+  }
+
+  daxa_f32mat3x3 to_matrix() {
+    daxa_f32 x2 = v.x + v.x;
+    daxa_f32 y2 = v.y + v.y;
+    daxa_f32 z2 = v.z + v.z;
+    daxa_f32 xx = v.x * x2;
+    daxa_f32 xy = v.x * y2;
+    daxa_f32 xz = v.x * z2;
+    daxa_f32 yy = v.y * y2;
+    daxa_f32 yz = v.y * z2;
+    daxa_f32 zz = v.z * z2;
+    daxa_f32 wx = w * x2;
+    daxa_f32 wy = w * y2;
+    daxa_f32 wz = w * z2;
+
+    return daxa_f32mat3x3(daxa_f32vec3(1 - (yy + zz), xy - wz, xz + wy),
+                          daxa_f32vec3(xy + wz, 1 - (xx + zz), yz - wx),
+                          daxa_f32vec3(xz - wy, yz + wx, 1 - (xx + yy)));
+  }
+};
+
+FORCE_INLINE Quaternion operator*(Quaternion q1, Quaternion q2) {
+  return Quaternion(
+    daxa_f32vec3(q1.w * q2.v.x + q1.v.x * q2.w + q1.v.y * q2.v.z - q1.v.z * q2.v.y,
+    q1.w * q2.v.y + q1.v.y * q2.w + q1.v.z * q2.v.x - q1.v.x * q2.v.z,
+    q1.w * q2.v.z + q1.v.z * q2.w + q1.v.x * q2.v.y - q1.v.y * q2.v.x),
+    q1.w * q2.w - q1.v.x * q2.v.x - q1.v.y * q2.v.y - q1.v.z * q2.v.z
+  );
+}
+
+FORCE_INLINE Quaternion operator*(Quaternion q, daxa_f32vec3 v) {
+  return q * Quaternion(v, 0);
+}
+
+FORCE_INLINE Quaternion operator*(daxa_f32vec3 v, Quaternion q) {
+  return Quaternion(v, 0) * q;
+}
+
+FORCE_INLINE Quaternion apply_rotation(Quaternion q, daxa_f32vec3 v) {
+  return q * v * q.conjugate();
+}
+
+// FORCE_INLINE Quaternion apply_angular_velocity(Quaternion q, daxa_f32vec3 w, daxa_f32 dt) {
+//   return q * Quaternion(w * dt, 0);
+// }
+
+struct FeaturePair {
+  daxa_u32 in_reference;
+  daxa_u32 out_reference;
+  daxa_u32 in_incident;
+  daxa_u32 out_incident;
+};
+
+struct ClipVertex {
+  daxa_f32vec3 v;
+  FeaturePair f;
+};
+
+struct Contact {
+  daxa_f32vec3 position;
+  daxa_f32 penetration;
+  daxa_f32 normal_impulse;
+  daxa_f32 tangent_impulse[2];
+  daxa_f32 bias;
+  daxa_f32 normal_mass;
+  daxa_f32 tangent_mass[2];
+  FeaturePair fp;
+};
+
+struct Manifold {
+  daxa_u32 obb1_index;
+  daxa_u32 obb2_index;
+  daxa_i32 key;
+  daxa_u32 faces;
+
+  daxa_i32 error;
+  // // DEBUG
+  // daxa_f32 s_max;
+  // Transform rtx;
+  // daxa_f32vec3 e_r;
+  // Transform itx;
+  // daxa_f32vec3 e_i;
+  // daxa_f32vec3 e;
+  // daxa_f32mat3x3 basis;
+
+  daxa_f32vec3 normal;
+  daxa_f32vec3 tangent_vectors[2];
+  Contact contacts[MAX_CONTACT_POINT_COUNT];
+  daxa_i32 contact_count;
+};
+DAXA_DECL_BUFFER_PTR(Manifold)
+
+struct Ray {
+    daxa_f32vec3 origin;
+    daxa_f32vec3 direction;
+};
 
 
 FORCE_INLINE daxa_f32 hitAabb(const Aabb aabb, const Ray r)

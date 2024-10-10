@@ -32,27 +32,7 @@ extension RigidBody
     this.rotation = apply_angular_velocity(this.rotation, this.omega, dt);
   }
 
-  daxa_f32vec4 quat_mul(daxa_f32vec4 q1, daxa_f32vec4 q2)
-  {
-    daxa_f32 x = q1.x;
-    daxa_f32 y = q1.y;
-    daxa_f32 z = q1.z;
-    daxa_f32 w = q1.w;
-
-    daxa_f32 x2 = q2.x;
-    daxa_f32 y2 = q2.y;
-    daxa_f32 z2 = q2.z;
-    daxa_f32 w2 = q2.w;
-
-    daxa_f32 result_x = w * x2 + x * w2 + y * z2 - z * y2;
-    daxa_f32 result_y = w * y2 - x * z2 + y * w2 + z * x2;
-    daxa_f32 result_z = w * z2 + x * y2 - y * x2 + z * w2;
-    daxa_f32 result_w = w * w2 - x * x2 - y * y2 - z * z2;
-
-    return daxa_f32vec4(result_x, result_y, result_z, result_w);
-  }
-
-      [mutating] daxa_f32vec4 apply_angular_velocity(daxa_f32vec4 rotation, daxa_f32vec3 omega, daxa_f32 dt)
+      [mutating] Quaternion apply_angular_velocity(Quaternion rotation, daxa_f32vec3 omega, daxa_f32 dt)
   {
     daxa_f32 angle = length(omega) * dt;
     if (angle > 0.0001f)
@@ -61,15 +41,15 @@ extension RigidBody
       daxa_f32 half_angle = angle / 2.0f;
       daxa_f32 sin_half_angle = sin(half_angle);
       daxa_f32 cos_half_angle = cos(half_angle);
-      daxa_f32vec4 q = daxa_f32vec4(axis * sin_half_angle, cos_half_angle);
-      return normalize(quat_mul(q, rotation));
+      Quaternion q = Quaternion(axis * sin_half_angle, cos_half_angle);
+      return (q * rotation).normalize();
     }
     else
     {
       // For small angles, use approximation
       daxa_f32vec3 delta_rotation = omega * dt * 0.5f;
-      daxa_f32vec4 q = daxa_f32vec4(delta_rotation, 1.0f);
-      return normalize(quat_mul(q, rotation));
+      Quaternion q = Quaternion(delta_rotation, 1.0f);
+      return (q * rotation).normalize();
     }
   }
 
@@ -95,33 +75,9 @@ extension RigidBody
     return this.velocity - cross(point - this.position, this.omega);
   }
 
-  daxa_f32mat3x3 quat_to_mat3x3() {
-    daxa_f32 x = this.rotation.x;
-    daxa_f32 y = this.rotation.y;
-    daxa_f32 z = this.rotation.z;
-    daxa_f32 w = this.rotation.w;
-
-    daxa_f32 x2 = x + x;
-    daxa_f32 y2 = y + y;
-    daxa_f32 z2 = z + z;
-    daxa_f32 xx = x * x2;
-    daxa_f32 xy = x * y2;
-    daxa_f32 xz = x * z2;
-    daxa_f32 yy = y * y2;
-    daxa_f32 yz = y * z2;
-    daxa_f32 zz = z * z2;
-    daxa_f32 wx = w * x2;
-    daxa_f32 wy = w * y2;
-    daxa_f32 wz = w * z2;
-
-    return daxa_f32mat3x3(1 - (yy + zz), xy - wz, xz + wy,
-                          xy + wz, 1 - (xx + zz), yz - wx,
-                          xz - wy, yz + wx, 1 - (xx + yy));
-  }
-
   daxa_f32mat3x3 get_transformed_inertia()
   {
-    daxa_f32mat3x3 rotation_matrix = quat_to_mat3x3();
+    daxa_f32mat3x3 rotation_matrix = get_rotation_matrix();
     return mul(rotation_matrix, mul(inv_inertia, transpose(rotation_matrix)));
   }
 
@@ -754,8 +710,8 @@ struct OBBvsOBBCollision {
   static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, inout Manifold manifold) {
 
     // Transform the OBBs to world space
-    daxa_f32mat3x3 r_A = A->quat_to_mat3x3();
-    daxa_f32mat3x3 r_B = B->quat_to_mat3x3();
+    daxa_f32mat3x3 r_A = A->get_rotation_matrix();
+    daxa_f32mat3x3 r_B = B->get_rotation_matrix();
 
     // Get the half extents of the OBBs
     daxa_f32vec3 e_A = (A->maximum - A->minimum) * 0.5f;
@@ -1179,8 +1135,13 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   var any_collision = false;
   var face_collided = 0u;
   r->clear_flag(RigidBodyFlag::COLLIDING);
-  for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
+  for (daxa_u32 i = rigid_body_index; i < sim_config->rigid_body_count; i++)
   {
+    if(i == rigid_body_index)
+    {
+      continue;
+    }
+
     // Simplex simplex;
     Ptr<RigidBody> r2 = Ptr<RigidBody>(&BP.task_head.rigid_bodies[i]);
 

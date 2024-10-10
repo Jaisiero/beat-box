@@ -194,11 +194,6 @@ daxa::BufferId AccelerationStructureManager::get_rigid_body_buffer()
   return rigid_body_buffer[renderer_manager->get_frame_index()];
 }
 
-daxa::BufferId AccelerationStructureManager::get_next_rigid_body_buffer()
-{
-  return rigid_body_buffer[renderer_manager->get_frame_index()];
-}
-
 daxa::BufferId AccelerationStructureManager::get_points_buffer()
 {
   // TODO: should frame_index be passed as a parameter?
