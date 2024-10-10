@@ -156,22 +156,12 @@ struct RigidBody
   }
   daxa_f32vec3 rotate_vector(const daxa_f32vec3 v)
   {
-    daxa_f32vec3 u = daxa_f32vec3(this.rotation.v);
-    daxa_f32 s = this.rotation.w;
-
-    return 2.0f * dot(u, v) * u
-         + (s * s - dot(u, u)) * v
-         + 2.0f * s * cross(u, v);
+    return (rotation * Quaternion(v, 0) * rotation.conjugate()).v;
   }
 
   daxa_f32vec3 rotate_vector_inverse(const daxa_f32vec3 v)
   {
-    daxa_f32vec3 u = daxa_f32vec3(-this.rotation.v);
-    daxa_f32 s = this.rotation.w;
-
-    return 2.0f * dot(u, v) * u
-         + (s * s - dot(u, u)) * v
-         + 2.0f * s * cross(u, v);
+    return (rotation.conjugate() * Quaternion(v, 0) * rotation).v;
   }
 
   daxa_f32vec3 object_to_world(const daxa_f32vec3 v)

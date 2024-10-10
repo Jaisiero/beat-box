@@ -206,14 +206,6 @@ FORCE_INLINE Quaternion operator*(daxa_f32vec3 v, Quaternion q) {
   return Quaternion(v, 0) * q;
 }
 
-FORCE_INLINE Quaternion apply_rotation(Quaternion q, daxa_f32vec3 v) {
-  return q * v * q.conjugate();
-}
-
-// FORCE_INLINE Quaternion apply_angular_velocity(Quaternion q, daxa_f32vec3 w, daxa_f32 dt) {
-//   return q * Quaternion(w * dt, 0);
-// }
-
 struct FeaturePair {
   daxa_u32 in_reference;
   daxa_u32 out_reference;
