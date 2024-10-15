@@ -24,8 +24,8 @@
   ],
   "vcpkg-configuration": {
     "overlay-ports": [
-      "../cube-tracing/deps/Daxa",
-      "../cube-tracing/deps/daxa/cmake/vcpkg-overlay-ports/shader-slang"
+      "lib/daxa",
+      "lib/daxa/cmake/vcpkg-overlay-ports/shader-slang"
     ]
   }
 }

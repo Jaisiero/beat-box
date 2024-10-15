@@ -14,11 +14,6 @@ foreach(file ${SRCS})
     message(STATUS ${file})
 endforeach()
 
-message("src files:")
-foreach(file ${SRCS})
-    message(STATUS ${file})
-endforeach()
-
 add_executable(${PROJECT_NAME} ${SRCS})
 
 target_include_directories(${PROJECT_NAME} PUBLIC include)
