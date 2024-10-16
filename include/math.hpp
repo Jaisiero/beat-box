@@ -187,6 +187,24 @@ struct Quaternion {
                           daxa_f32vec3(xy + wz, 1 - (xx + zz), yz - wx),
                           daxa_f32vec3(xz - wy, yz + wx, 1 - (xx + yy)));
   }
+
+  daxa_f32vec3 get_x_axis() {
+    return daxa_f32vec3(1 - 2 * (v.y * v.y + v.z * v.z),
+                        2 * (v.x * v.y + w * v.z),
+                        2 * (v.x * v.z - w * v.y));
+  }
+
+  daxa_f32vec3 get_y_axis() {
+    return daxa_f32vec3(2 * (v.x * v.y - w * v.z),
+                        1 - 2 * (v.x * v.x + v.z * v.z),
+                        2 * (v.y * v.z + w * v.x));
+  }
+
+  daxa_f32vec3 get_z_axis() {
+    return daxa_f32vec3(2 * (v.x * v.z + w * v.y),
+                        2 * (v.y * v.z - w * v.x),
+                        1 - 2 * (v.x * v.x + v.y * v.y));
+  }
 };
 
 FORCE_INLINE Quaternion operator*(Quaternion q1, Quaternion q2) {

@@ -1,7 +1,6 @@
 #include "shared.inl"
 
 [[vk::push_constant]] UpdateInstancesPushConstants UI;
-// [[vk::push_constant]] CreatePointsPushConstants CP;
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
