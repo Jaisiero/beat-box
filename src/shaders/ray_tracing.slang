@@ -42,7 +42,7 @@ static const daxa_f32vec3 face_Z = daxa_f32vec3(0.0, 0.0, 1.0); // blue
 static const daxa_f32vec3 face_neg_Z = daxa_f32vec3(1.0, 0.0, 1.0); // purple
 static const daxa_f32vec3 material_color = daxa_f32vec3(0.0, 0.0, 0.0); // black
 static const daxa_f32vec3 collision_material_color = daxa_f32vec3(1.0, 1.0, 1.0); // white
-static const daxa_f32vec3 point_color = daxa_f32vec3(0.0, 0.0, 0.0); // orange 
+static const daxa_f32vec3 point_color = daxa_f32vec3(0.5, 0.5, 0.5); // grey
 static const daxa_f32vec3 material_specular = daxa_f32vec3(0.0, 0.5, 1.0);
 static const daxa_f32 shininess = 10.0;
 
@@ -211,15 +211,6 @@ daxa_f32vec3 get_face_color(BoxFace face)
 
   // normal = r->rotate_vector_inverse(normal);
 
-  // cube normal
-  {
-    daxa_f32vec3  abs_normal = abs(normal);
-    daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
-    normal     = (max_component == abs_normal.x) ?
-                 daxa_f32vec3(sign(normal.x), 0, 0) :
-                 (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) : daxa_f32vec3(0, 0, sign(normal.z));
-  }
-
   // normal = r->rotate_vector(normal);
 
   payload.normal = normal;
@@ -240,7 +231,11 @@ daxa_f32vec3 get_face_color(BoxFace face)
 
   Ray ray = {WorldRayOrigin(), WorldRayDirection()};
 
-  THit = hitAabb(aabb, ray);
+  daxa_f32vec3 center = aabb.center();
+
+  daxa_f32 radius = POINT_SIZE;
+
+  THit = hitSphere(center, radius, ray);
 
   if(THit > 0.0)
   {

@@ -140,33 +140,48 @@ extension RigidBody
 
 extension Transform {
 
+    daxa_f32mat3x3 get_rotation_matrix() {
+      return rotation;
+    }
+
+    daxa_f32mat3x3 get_inverse_rotation_matrix() {
+      return transpose(rotation);
+    }
+
+    daxa_f32vec3 get_position() {
+      return position;
+    }
+
     daxa_f32vec3 rotate(daxa_f32vec3 v) {
       return mul(v, rotation);
+      // return mul(rotation, v);
     }
 
     daxa_f32vec3 rotate_transpose(daxa_f32vec3 v) {
       return mul(v, transpose(rotation));
+      // return mul(transpose(rotation), v);
     }
 
     daxa_f32vec3 transform(daxa_f32vec3 v) {
       return mul(v, rotation) + position;
+      // return mul(rotation, v) + position;
     }
 
     daxa_f32vec3 transform_transpose(daxa_f32vec3 v) {
       return mul(v - position, transpose(rotation));
+      // return mul(transpose(rotation), v - position);
     }
 
-
-    daxa_f32vec3 get_x_axis() {
-      return rotate(daxa_f32vec3(1, 0, 0));
+    daxa_f32vec3 get_axis(daxa_u32 i) {
+      return daxa_f32vec3(rotation[0][i], rotation[1][i], rotation[2][i]);
     }
 
-    daxa_f32vec3 get_y_axis() {
-      return rotate(daxa_f32vec3(0, 1, 0));
+    daxa_f32vec3 get_inverse_axis(daxa_u32 i) {
+      return daxa_f32vec3(rotation[i][0], rotation[i][1], rotation[i][2]);
     }
 
-    daxa_f32vec3 get_z_axis() {
-      return rotate(daxa_f32vec3(0, 0, 1));
+    daxa_f32 get_rotation_element(daxa_u32 i, daxa_u32 j) {
+      return rotation[i][j];
     }
 };
 

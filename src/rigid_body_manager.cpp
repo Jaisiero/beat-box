@@ -272,14 +272,18 @@ void RigidBodyManager::destroy()
   initialized = false;
 }
 
-bool RigidBodyManager::simulate(daxa::BufferId rigid_bodies)
+bool RigidBodyManager::simulate(daxa::BufferId rigid_bodies,
+                                daxa::BufferId points_buffer)
 {
   if (!initialized)
   {
     return !initialized;
   }
 
+  
   update_buffers(rigid_bodies);
+  // TODO: refactor
+  task_points.set_buffers({.buffers = std::array{points_buffer}});
 
   RB_TG.execute();
 

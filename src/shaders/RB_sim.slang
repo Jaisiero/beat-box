@@ -374,7 +374,7 @@ struct OBBvsOBBCollision {
     return out_count;
   }
 
-  static daxa_i32 clip(const daxa_f32vec3 position, const daxa_f32vec3 e, const daxa_u32 clip_edges[MAX_INCIDENT_VERTEX_COUNT], const daxa_f32mat3x3 basis, const ClipVertex incident[MAX_INCIDENT_VERTEX_COUNT], out ClipVertex out_vertices[MAX_CONTACT_POINT_COUNT], out daxa_f32 depths[MAX_CONTACT_POINT_COUNT], out daxa_i32 error) {
+  static daxa_i32 clip(const Transform tx, const daxa_f32vec3 e, const daxa_u32 clip_edges[MAX_INCIDENT_VERTEX_COUNT], const ClipVertex incident[MAX_INCIDENT_VERTEX_COUNT], out ClipVertex out_vertices[MAX_CONTACT_POINT_COUNT], out daxa_f32 depths[MAX_CONTACT_POINT_COUNT], out daxa_i32 error) {
     daxa_i32 in_count = MAX_INCIDENT_VERTEX_COUNT;
     daxa_i32 out_count = 0;
     ClipVertex in[MAX_CONTACT_POINT_COUNT];
@@ -382,10 +382,8 @@ struct OBBvsOBBCollision {
 
     error = 0;
 
-    let transpose_basis = transpose(basis);
-
     for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
-      in[i].v = mul(incident[i].v - position, transpose_basis);
+      in[i].v = tx.transform_transpose(incident[i].v);
     }
 
     out_count = ortographic_clip(1.0f, e.x, 0, clip_edges[0], in, in_count, out);
@@ -437,7 +435,7 @@ struct OBBvsOBBCollision {
     for(daxa_i32 i = 0; i < in_count; ++i) {
       daxa_f32 d = in[i].v.z - e.z;
       if(d <= 0.0f) {
-        out_vertices[out_count].v = mul(in[i].v, basis) + position;
+        out_vertices[out_count].v = tx.transform(in[i].v);
         out_vertices[out_count].f = in[i].f;
         depths[out_count] = d;
         ++out_count;
@@ -537,48 +535,58 @@ struct OBBvsOBBCollision {
   static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, inout Manifold manifold) {
 
     // Transform the OBBs to world space
-    daxa_f32mat3x3 r_A = A->get_rotation_matrix();
-    daxa_f32mat3x3 r_B = B->get_rotation_matrix();
+    Transform tx_A = Transform(A->get_rotation_matrix(), A->position);
+    Transform tx_B = Transform(B->get_rotation_matrix(), B->position);
 
     // Get the half extents of the OBBs
     daxa_f32vec3 e_A = (A->maximum - A->minimum) * 0.5f;
     daxa_f32vec3 e_B = (B->maximum - B->minimum) * 0.5f;
 
-    // r2 to r1
-    daxa_f32mat3x3 C = mul(transpose(r_A), r_B);
+
+    Transform tx_C;
+    Transform tx_abs_C;
+
+    daxa_f32mat3x3 C = mul(tx_A.get_inverse_rotation_matrix(), tx_B.get_rotation_matrix());
+    daxa_f32mat3x3 abs_C = abs(C);
 
     daxa_b32 parallel = false;
-    daxa_f32mat3x3 abs_C = abs(C);
-    for (daxa_u32 i = 0; i < 3; i++) {
-      for (daxa_u32 j = 0; j < 3; j++) {
-        if (abs_C[i][j] > 0.999f) {
-          parallel = true;
-          break;
+    {
+      // r2 to r1
+      for (daxa_u32 i = 0; i < 3; i++) {
+        for (daxa_u32 j = 0; j < 3; j++) {
+          if (abs_C[i][j] > 0.999f) {
+            parallel = true;
+            break;
+          }
         }
       }
+
+      tx_C = Transform(C, daxa_f32vec3(0.0f));
+      tx_abs_C = Transform(abs_C, daxa_f32vec3(0.0f));
     }
 
     // Calculate vector from center of OBB1 to center of OBB2 in OBB1's coordinate frame
     daxa_f32vec3 t = A->rotate_vector_inverse(B->position - A->position);
+    // daxa_f32vec3 t = tx_A.rotate_transpose(B->position - A->position);
 
     Axis OBB1_Axes[3];
     Axis OBB2_Axes[3];
 
     {
-      let r_A_t = transpose(r_A);
-      let r_B_t = transpose(r_B);
+      // let r_A_t = transpose(r_A);
+      // let r_B_t = transpose(r_B);
 
       // Define axes for OBB1 and OBB2
       OBB1_Axes = {
-          { A_X_AXIS, daxa_f32vec3(r_A_t[0]) }, // A_X_AXIS
-          { A_Y_AXIS, daxa_f32vec3(r_A_t[1]) }, // A_Y_AXIS
-          { A_Z_AXIS, daxa_f32vec3(r_A_t[2]) }  // A_Z_AXIS
+          { A_X_AXIS, daxa_f32vec3(tx_A.get_axis(0)) }, // A_X_AXIS
+          { A_Y_AXIS, daxa_f32vec3(tx_A.get_axis(1)) }, // A_Y_AXIS
+          { A_Z_AXIS, daxa_f32vec3(tx_A.get_axis(2)) }  // A_Z_AXIS
       };
 
       OBB2_Axes= {
-          { B_X_AXIS, daxa_f32vec3(r_B_t[0]) }, // B_X_AXIS
-          { B_Y_AXIS, daxa_f32vec3(r_B_t[1]) }, // B_Y_AXIS
-          { B_Z_AXIS, daxa_f32vec3(r_B_t[2]) }  // B_Z_AXIS
+          { B_X_AXIS, daxa_f32vec3(tx_B.get_axis(0)) }, // B_X_AXIS
+          { B_Y_AXIS, daxa_f32vec3(tx_B.get_axis(1)) }, // B_Y_AXIS
+          { B_Z_AXIS, daxa_f32vec3(tx_B.get_axis(2)) }  // B_Z_AXIS
       };
     }
 
@@ -593,10 +601,8 @@ struct OBBvsOBBCollision {
 
     // Iterate through OBB1's axes
     for(int i = 0; i < 3; ++i) {
-        float s = abs(t[i]) - (e_A[i] + 
-                                 e_B.x * abs_C[i][0] + 
-                                 e_B.y * abs_C[i][1] + 
-                                 e_B.z * abs_C[i][2]);
+        // Compute the separation distance
+        float s = abs(t[i]) - (e_A[i] + dot(tx_abs_C.get_inverse_axis(i), e_B));
 
         if(track_face_axis(a_axis, 
                            OBB1_Axes[i].index, 
@@ -612,11 +618,9 @@ struct OBBvsOBBCollision {
     for(int i = 0; i < 3; ++i) {
         // Compute the projection using dot product
         // dot(t, C[i]) = t.x * C[0][i] + t.y * C[1][i] + t.z * C[2][i]
-        float projection = t.x * C[0][i] + t.y * C[1][i] + t.z * C[2][i]; 
-        float s = abs(projection) - (e_B[i] + 
-                                      e_A.x * abs_C[0][i] + 
-                                      e_A.y * abs_C[1][i] + 
-                                      e_A.z * abs_C[2][i]);
+        float projection = dot(t, tx_C.get_axis(i));
+        // Compute the separation distance
+        float s = abs(projection) - (e_B[i] + dot(tx_abs_C.get_axis(i), e_A));
 
         if(track_face_axis(b_axis, 
                            OBB2_Axes[i].index, 
@@ -809,13 +813,13 @@ struct OBBvsOBBCollision {
       daxa_f32vec3 e_i;
       daxa_b32 flip = false;
       if(axis <= A_Z_AXIS) {
-        rtx = {A->position, r_A};
-        itx = {B->position, r_B};
+        rtx = tx_A;
+        itx = tx_B;
         e_r = e_A;
         e_i = e_B;
       } else {
-        rtx = {B->position, r_B};
-        itx = {A->position, r_A};
+        rtx = tx_B;
+        itx = tx_A;
         e_r = e_B;
         e_i = e_A;
         flip = true;
@@ -862,7 +866,8 @@ struct OBBvsOBBCollision {
       daxa_f32 depths[MAX_CONTACT_POINT_COUNT];
       // DEBUGGING
       daxa_i32 error;
-      daxa_i32 out_num = clip(rtx.position, e, clip_edges, basis, incident, out_vertices, depths, error);
+      Transform tx = Transform(basis, rtx.position);
+      daxa_i32 out_num = clip(tx, e, clip_edges, incident, out_vertices, depths, error);
         
       manifold.error = error;
 
@@ -922,15 +927,15 @@ struct OBBvsOBBCollision {
       // Edge axis
 
       // Find the closest point on each edge
-      normal = mul(r_A, normal);
+      normal = tx_A.rotate(normal);
 
       // Reverse the normal if it is not facing the same direction as the axis
       if( dot(normal, B.position - A.position) < 0.0f) {
         normal = -normal;
       }
 
-      Transform atx = {A->position, r_A};
-      Transform btx = {B->position, r_B};
+      Transform atx = tx_A;
+      Transform btx = tx_B;
 
       daxa_f32vec3 PA, QA;
       daxa_f32vec3 PB, QB;
@@ -946,7 +951,6 @@ struct OBBvsOBBCollision {
       manifold.contacts[0].position = (CA + CB) * 0.5f;
       manifold.contacts[0].penetration = s_max;
       manifold.key = axis;
-
     }
 
 

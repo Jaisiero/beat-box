@@ -135,8 +135,16 @@ static const daxa_u32 MAX_INCIDENT_VERTEX_COUNT = 4;
 static const daxa_u32 MAX_CONTACT_POINT_COUNT = 8;
 
 struct Transform {
-  daxa_f32vec3 position;
   daxa_f32mat3x3 rotation;
+  daxa_f32vec3 position;
+#if defined(__cplusplus)
+  Transform(daxa_f32mat3x3 rotation, daxa_f32vec3 position) : rotation(rotation), position(position) {}
+#else
+  __init(daxa_f32mat3x3 rotation, daxa_f32vec3 position) {
+    this.rotation = rotation;
+    this.position = position;
+  }
+#endif // __cplusplus
 };
 
 struct Quaternion {
@@ -293,4 +301,25 @@ FORCE_INLINE daxa_f32 hitAabb(const Aabb aabb, const Ray r)
   //   return t1; // Ray origin inside AABB, return exit point
 
   // return t0; // Ray intersects AABB, return entry point
+}
+
+
+#if defined(__cplusplus)
+FORCE_INLINE daxa_f32 dot(const daxa_f32vec3 a, const daxa_f32vec3 b)
+{
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+#endif // __cplusplus
+
+
+FORCE_INLINE daxa_f32 hitSphere(const daxa_f32vec3 center, const daxa_f32 radius, const Ray r)
+{
+  daxa_f32vec3 oc = r.origin - center;
+  daxa_f32 a = dot(r.direction, r.direction);
+  daxa_f32 b = 2.0f * dot(oc, r.direction);
+  daxa_f32 c = dot(oc, oc) - radius * radius;
+  daxa_f32 discriminant = b * b - 4 * a * c;
+  if (discriminant < 0)
+    return -1.0f;
+  return (-b - sqrt(discriminant)) / (2.0f * a);
 }

@@ -56,7 +56,7 @@ struct RigidBodyManager{
   bool create(char const* name, std::shared_ptr<RendererManager> renderer);
   void destroy();
 
-  bool simulate(daxa::BufferId rigid_bodies);
+  bool simulate(daxa::BufferId rigid_bodies, daxa::BufferId points_buffer);
   bool read_back_sim_config();
 
   bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer);

@@ -8,7 +8,7 @@
 
 static const daxa_f32 LINEAR_DAMPING = 0.1f;
 static const daxa_f32 ANGULAR_DAMPING = 0.1f;
-static const daxa_f32 POINT_SIZE = 0.025f;
+static const daxa_f32 POINT_SIZE = 0.01f;
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 [Flags]
@@ -95,7 +95,12 @@ struct RigidBody
 
   daxa_f32mat3x3 get_rotation_matrix()
   {
+#if defined(__cplusplus)
     return rotation.to_matrix();
+#else // defined(__cplusplus)
+    return transpose(rotation.to_matrix());
+    // return rotation.to_matrix();
+#endif // defined(__cplusplus)
   }
 
   daxa_f32mat4x4 get_transform_matrix()

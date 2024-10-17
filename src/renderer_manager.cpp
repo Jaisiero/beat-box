@@ -97,7 +97,8 @@ void RendererManager::render()
 {
   while (!window.should_close())
   {
-    rigid_body_manager->simulate(accel_struct_mngr->get_rigid_body_buffer());
+    rigid_body_manager->simulate(accel_struct_mngr->get_rigid_body_buffer(),
+    accel_struct_mngr->get_points_buffer());
 
     if (!window.update())
       continue;
