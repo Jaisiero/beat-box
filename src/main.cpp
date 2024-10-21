@@ -45,7 +45,7 @@ int main(int argc, char const *argv[])
   // Create camera manager
   camera_manager->create("Camera Manager");
   // Create input manager which depends on camera manager and window
-  input_manager.create(camera_manager);
+  input_manager.create(camera_manager, status_manager);
   // Create task graph
   renderer->create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->build_SBT());
   // Create rigid body simulator

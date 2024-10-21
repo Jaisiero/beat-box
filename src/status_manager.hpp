@@ -17,6 +17,8 @@ struct StatusManager
   std::shared_ptr<RigidBodyManager> rigid_body_manager;
   // flag for initialization
   bool initialized = false;
+  // flag for simulation
+  bool simulating = true;
   // frame index
   daxa_u32 frame_index = 0;
   
@@ -94,6 +96,16 @@ struct StatusManager
   daxa_u32 get_frame_index()
   {
     return frame_index;
+  }
+
+  bool is_simulating()
+  {
+    return simulating;
+  }
+
+  void switch_simulating()
+  {
+    simulating = !simulating;
   }
 };
 

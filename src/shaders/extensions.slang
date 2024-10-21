@@ -205,6 +205,7 @@ extension Manifold {
     let k_bias_factor = 0.2f;
 
     for(int i = 0; i < contact_count; i++) {
+
       daxa_f32vec3 r1 = contacts[i].position - body_a->position;
       daxa_f32vec3 r2 = contacts[i].position - body_b->position;
 
@@ -285,18 +286,19 @@ extension Manifold {
       if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
         body_a->velocity -= normal_impulse_vector * body_a->inv_mass;
         body_a->omega -= mul(cross(normal_impulse_vector, r1_to_point), body_a->inv_inertia);
-        // TODO: check how to avoid this
-        body_a->omega = min(body_b->omega, 10.0f);
       }
 
       if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
         body_b->velocity += normal_impulse_vector * body_b->inv_mass;
         body_b->omega += mul(cross(normal_impulse_vector, r2_to_point), body_b->inv_inertia);
-        // limit the angular velocity
-        // TODO: check how to avoid this
-        body_b->omega = min(body_b->omega, 10.0f);
       }
 
+      // if(any(isnan(collision_point))) {
+      //   printf("manifold.error %d, contact_count: %d\n", error, contact_count);
+      //   printf("collision_point : %f %f %f, body_a.position : %f %f %f, body_b.position : %f %f %f\n", collision_point.x, collision_point.y, collision_point.z, body_a->position.x, body_a->position.y, body_a->position.z, body_b->position.x, body_b->position.y, body_b->position.z);
+
+      //   printf("r1_to_point : %f %f %f, r2_to_point : %f %f %f, normal_impulse_vector : %f %f %f\n", r1_to_point.x, r1_to_point.y, r1_to_point.z, r2_to_point.x, r2_to_point.y, r2_to_point.z, normal_impulse_vector.x, normal_impulse_vector.y, normal_impulse_vector.z);
+      // }
     }
   }
 };

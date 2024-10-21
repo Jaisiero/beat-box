@@ -446,7 +446,7 @@ struct OBBvsOBBCollision {
   }
 
 
-  static void support_edge(const Transform tx, const daxa_f32vec3 e, daxa_f32vec3 n, out daxa_f32vec3 a, out daxa_f32vec3 b) {
+  static void support_edge(const Transform tx, const daxa_f32vec3 e, daxa_f32vec3 n, out daxa_f32vec3 CA, out daxa_f32vec3 CB) {
     n = tx.transform_transpose(n);
     daxa_f32vec3 abs_n = abs(n);
     daxa_f32vec3 a, b;
@@ -475,9 +475,9 @@ struct OBBvsOBBCollision {
 		// z > y > x || y > z > x
     }
 
-    daxa_f32 sign_x = n.x > 0.0f ? 1.0f : -1.0f;
-    daxa_f32 sign_y = n.y > 0.0f ? 1.0f : -1.0f;
-    daxa_f32 sign_z = n.z > 0.0f ? 1.0f : -1.0f;
+    daxa_f32 sign_x = sign(n.x);
+    daxa_f32 sign_y = sign(n.y);
+    daxa_f32 sign_z = sign(n.z);
 
     a.x *= sign_x;
     a.y *= sign_y;
@@ -487,8 +487,8 @@ struct OBBvsOBBCollision {
     b.y *= sign_y;
     b.z *= sign_z;
 
-    a = tx.transform(a);
-    b = tx.transform(b);
+    CA = tx.transform(a);
+    CB = tx.transform(b);
   }
 
   static void edges_contact(

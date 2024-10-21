@@ -97,15 +97,19 @@ void RendererManager::render()
 {
   while (!window.should_close())
   {
-    rigid_body_manager->simulate(accel_struct_mngr->get_rigid_body_buffer(),
-    accel_struct_mngr->get_points_buffer());
+    if(status_manager->is_simulating()) {
+      rigid_body_manager->simulate(accel_struct_mngr->get_rigid_body_buffer(),
+      accel_struct_mngr->get_points_buffer());
+    }
 
     if (!window.update())
       continue;
 
-    rigid_body_manager->read_back_sim_config();
-    accel_struct_mngr->update();
-    accel_struct_mngr->update_TLAS(rigid_body_manager->get_sim_config_buffer());
+    if(status_manager->is_simulating()) {
+      rigid_body_manager->read_back_sim_config();
+      accel_struct_mngr->update();
+      accel_struct_mngr->update_TLAS(rigid_body_manager->get_sim_config_buffer());
+    }
 
     if (window.swapchain_out_of_date)
     {
