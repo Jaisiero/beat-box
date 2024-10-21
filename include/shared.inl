@@ -181,16 +181,15 @@ struct RigidBody
     return aabbs[primitive_offset + index];
   }
 
-  [mutating] bool has_flag(RigidBodyFlag flag)
-  {
-    return (this.flags & flag) != 0;
-  }
-
   [mutating] bool is_face_colliding(BoxFace face)
   {
     return (this.face_collided & face) != 0;
   }
 
+  [mutating] bool has_flag(RigidBodyFlag flag)
+  {
+    return (this.flags & flag) != 0;
+  }
 
   [mutating] void set_flag(RigidBodyFlag flag)
   {

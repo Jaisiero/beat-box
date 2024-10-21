@@ -238,12 +238,12 @@ extension Manifold {
 
         if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
           body_a->velocity -= P * body_a->inv_mass;
-          body_a->omega -= mul(cross(r1, P), body_a->inv_inertia);
+          body_a->omega -= mul(cross(P, r1), body_a->inv_inertia);
         } 
 
         if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
           body_b->velocity += P * body_b->inv_mass;
-          body_b->omega += mul(cross(r2, P), body_b->inv_inertia);
+          body_b->omega += mul(cross(P, r2), body_b->inv_inertia);
         }
       }
     }
@@ -262,8 +262,6 @@ extension Manifold {
 
       daxa_f32vec3 v1 = body_a->velocity;
       daxa_f32vec3 v2 = body_b->velocity;
-
-      // daxa_f32vec3 relative_velocity = v2 + cross(body_b->omega, r2_to_point) - v1 - cross(body_a->omega, r1_to_point);
 
       daxa_f32vec3 relative_velocity = v2 + cross(r2_to_point, body_b->omega) - v1 - cross(r1_to_point, body_a->omega);
 
@@ -287,15 +285,15 @@ extension Manifold {
       if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
         body_a->velocity -= normal_impulse_vector * body_a->inv_mass;
         body_a->omega -= mul(cross(normal_impulse_vector, r1_to_point), body_a->inv_inertia);
-        // body_a->omega -= mul(body_a->inv_inertia, cross(r1_to_point, normal_impulse_vector));
+        // TODO: check how to avoid this
         body_a->omega = min(body_b->omega, 10.0f);
       }
 
       if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
         body_b->velocity += normal_impulse_vector * body_b->inv_mass;
         body_b->omega += mul(cross(normal_impulse_vector, r2_to_point), body_b->inv_inertia);
-        // body_b->omega += mul(body_b->inv_inertia, cross(r2_to_point, normal_impulse_vector));
         // limit the angular velocity
+        // TODO: check how to avoid this
         body_b->omega = min(body_b->omega, 10.0f);
       }
 
