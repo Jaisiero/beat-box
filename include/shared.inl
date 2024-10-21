@@ -21,21 +21,6 @@ enum RigidBodyFlag : daxa_u32 {
   DYNAMIC = 1 << 1,
   GRAVITY = 1 << 2,
 };
-
-#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
-[Flags]
-#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
-enum BoxFace : daxa_u32
-{
-  NO_FACE = 0,
-  RIGHT = 1 << 0,
-  LEFT = 1 << 1,
-  TOP = 1 << 2,
-  BOTTOM = 1 << 3,
-  BACK = 1 << 4,
-  FRONT = 1 << 5,
-};
-
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 RigidBodyFlag  operator|(RigidBodyFlag a, RigidBodyFlag b)
 {
@@ -46,7 +31,6 @@ void operator|=(inout RigidBodyFlag a, RigidBodyFlag b)
 {
     a = a | b;
 }
-
 // Define bitwise AND operator
 RigidBodyFlag operator&(RigidBodyFlag a, RigidBodyFlag b)
 {
@@ -67,8 +51,62 @@ inline void operator|=(RigidBodyFlag &a, RigidBodyFlag b)
 {
     a = a | b;
 }
-
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+[Flags]
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+enum BoxFace : daxa_u32
+{
+  NO_FACE = 0,
+  RIGHT = 1 << 0,
+  LEFT = 1 << 1,
+  TOP = 1 << 2,
+  BOTTOM = 1 << 3,
+  BACK = 1 << 4,
+  FRONT = 1 << 5,
+};
+
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+[Flags]
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+enum SimFlag : daxa_u32
+{
+  NO_SIM_FLAG = 0,
+  ACCUM_IMPULSE = 1 << 0,
+};
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+SimFlag  operator|(SimFlag a, SimFlag b)
+{
+    return SimFlag((daxa_u32)a | (daxa_u32)b);
+}
+// Define bitwise OR assignment operator
+void operator|=(inout SimFlag a, SimFlag b)
+{
+    a = a | b;
+}
+// Define bitwise AND operator
+SimFlag operator&(SimFlag a, SimFlag b)
+{
+    return SimFlag((daxa_u32)a & (daxa_u32)b);
+}
+// Define bitwise AND assignment operator
+void operator&=(inout SimFlag a, SimFlag b)
+{
+    a = a & b;
+}
+#elif defined(__cplusplus)
+inline SimFlag operator|(SimFlag a, SimFlag b)
+{
+    return SimFlag((daxa_u32)a | (daxa_u32)b);
+}
+
+inline void operator|=(SimFlag &a, SimFlag b)
+{
+    a = a | b;
+}
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+
 
 
 // RigidBody struct is 156 bytes
@@ -163,6 +201,7 @@ struct RigidBody
   {
     this.flags &= ~flag;
   }
+  
   daxa_f32vec3 rotate_vector(const daxa_f32vec3 v)
   {
     return (rotation * Quaternion(v, 0) * rotation.conjugate()).v;
@@ -221,7 +260,24 @@ struct SimConfig
   daxa_u32 rigid_body_count;
   daxa_f32 dt;
   daxa_f32 gravity;
+  SimFlag flags;
   GlobalCollisionInfo g_c_info;
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+  [mutating] bool has_flag(SimFlag flag)
+  {
+    return (this.flags & flag) != 0;
+  }
+
+  [mutating] void set_flag(SimFlag flag)
+  {
+    this.flags |= flag;
+  }
+
+  [mutating] void clear_flag(SimFlag flag)
+  {
+    this.flags &= ~flag;
+  }
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 };
 DAXA_DECL_BUFFER_PTR(SimConfig)
 

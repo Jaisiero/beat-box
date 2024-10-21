@@ -200,7 +200,7 @@ extension Manifold {
     tangent_vectors[1] = cross(tangent_vectors[0], normal);
   }
 
-  [mutating] void pre_step(daxa_f32 inv_dt, inout Ptr<RigidBody> body_a, inout Ptr<RigidBody> body_b) {
+  [mutating] void pre_step(daxa_f32 inv_dt, inout Ptr<RigidBody> body_a, inout Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses) {
     let k_allowed_penetration = 0.01f;
     let k_bias_factor = 0.2f;
 
@@ -228,7 +228,7 @@ extension Manifold {
       contacts[i].bias = -k_bias_factor * inv_dt * min(contacts[i].penetration + k_allowed_penetration, 0.0f);
 
       // accumlate impulse
-      if(true) {
+      if(accumulate_impulses) {
         // Apply normal + friction impulse
         daxa_f32vec3 P = normal * contacts[i].normal_impulse;
 
@@ -250,7 +250,7 @@ extension Manifold {
   }
 
   [mutating]
-  void solve(Ptr<RigidBody> body_a, Ptr<RigidBody> body_b) {
+  void solve(Ptr<RigidBody> body_a, Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses) {
     for(daxa_u32 c = 0u; c < contact_count; ++c)
     {
       Contact contact = contacts[c];
@@ -273,7 +273,7 @@ extension Manifold {
       daxa_f32 normal_impulse = contact.normal_mass * (-normal_velocity + contact.bias);
 
       // Clamp the accumulated impulse
-      if(true) {
+      if(accumulate_impulses) {
         daxa_f32 old_normal_impulse = contact.normal_impulse;
         contact.normal_impulse = max(old_normal_impulse + normal_impulse, 0.0f);
         normal_impulse = contact.normal_impulse - old_normal_impulse;

@@ -57,6 +57,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .rigid_body_count = 0,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
+      .flags = SimFlag::ACCUM_IMPULSE,
       .g_c_info = GlobalCollisionInfo{
           .collision_count = 0,
           .collision_point_count = 0,
@@ -318,6 +319,7 @@ bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count, daxa::BufferId rigi
       .rigid_body_count = rigid_body_count,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
+      .flags = SimFlag::ACCUM_IMPULSE,
       .g_c_info = GlobalCollisionInfo{
           .collision_count = 0,
           .collision_point_count = 0,
