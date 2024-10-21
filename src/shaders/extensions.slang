@@ -247,11 +247,20 @@ extension Manifold {
           body_b->omega += mul(cross(P, r2), body_b->inv_inertia);
         }
       }
+
+      daxa_f32 relative_velocity = dot(body_b->velocity + cross(body_b->omega, r2) - body_a->velocity - cross(body_a->omega, r1), normal);
+
+      if(relative_velocity < -1.0f) {
+        daxa_f32 restitution = max(body_a->restitution, body_b->restitution);
+        contacts[i].bias += -restitution * relative_velocity;
+      }
     }
   }
 
   [mutating]
-  void solve(Ptr<RigidBody> body_a, Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses) {
+  void solve(Ptr<RigidBody> body_a, Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction) {
+
+    daxa_f32 friction = sqrt(body_a->friction * body_b->friction);
     for(daxa_u32 c = 0u; c < contact_count; ++c)
     {
       Contact contact = contacts[c];
@@ -261,10 +270,42 @@ extension Manifold {
       daxa_f32vec3 r1_to_point = collision_point - body_a->position;
       daxa_f32vec3 r2_to_point = collision_point - body_b->position;
 
-      daxa_f32vec3 v1 = body_a->velocity;
-      daxa_f32vec3 v2 = body_b->velocity;
+      daxa_f32vec3 relative_velocity = body_b->velocity + cross(r2_to_point, body_b->omega) - body_a->velocity - cross(r1_to_point, body_a->omega);
 
-      daxa_f32vec3 relative_velocity = v2 + cross(r2_to_point, body_b->omega) - v1 - cross(r1_to_point, body_a->omega);
+      // Friction
+      if(enable_friction) {
+          for(daxa_u32 j = 0u; j < 2u; ++j)
+          {
+            daxa_f32 tangent_velocity = dot(relative_velocity, tangent_vectors[j]);
+            daxa_f32 tangent_impulse = contact.tangent_mass[j] * -tangent_velocity;
+
+            daxa_f32 max_friction_impulse = friction * contact.normal_impulse;
+
+            // Clamp the accumulated impulse
+            if(accumulate_impulses) {
+              daxa_f32 old_impulse = contact.tangent_impulse[j];
+              contact.tangent_impulse[j] = clamp(old_impulse + tangent_impulse, -max_friction_impulse, max_friction_impulse);
+              tangent_impulse = contact.tangent_impulse[j] - old_impulse;
+            } else {
+              tangent_impulse = clamp(tangent_impulse, -max_friction_impulse, max_friction_impulse);
+            }
+
+            // Apply contact impulse
+            daxa_f32vec3 tangent_impulse_vector = tangent_vectors[j] * tangent_impulse;
+
+            if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
+              body_a->velocity -= tangent_impulse_vector * body_a->inv_mass;
+              body_a->omega -= mul(cross(tangent_impulse_vector, r1_to_point), body_a->inv_inertia);
+            }
+
+            if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
+              body_b->velocity += tangent_impulse_vector * body_b->inv_mass;
+              body_b->omega += mul(cross(tangent_impulse_vector, r2_to_point), body_b->inv_inertia);
+            }
+          }
+      }
+
+      relative_velocity = body_b->velocity + cross(r2_to_point, body_b->omega) - body_a->velocity - cross(r1_to_point, body_a->omega);
 
       // Calculate normal impulse
       daxa_f32 normal_velocity = dot(relative_velocity, normal);
@@ -299,6 +340,7 @@ extension Manifold {
 
       //   printf("r1_to_point : %f %f %f, r2_to_point : %f %f %f, normal_impulse_vector : %f %f %f\n", r1_to_point.x, r1_to_point.y, r1_to_point.z, r2_to_point.x, r2_to_point.y, r2_to_point.z, normal_impulse_vector.x, normal_impulse_vector.y, normal_impulse_vector.z);
       // }
+
     }
   }
 };

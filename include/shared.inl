@@ -74,6 +74,7 @@ enum SimFlag : daxa_u32
 {
   NO_SIM_FLAG = 0,
   ACCUM_IMPULSE = 1 << 0,
+  FRICTION = 1 << 1,
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 SimFlag  operator|(SimFlag a, SimFlag b)

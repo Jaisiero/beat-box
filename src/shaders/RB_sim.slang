@@ -1102,11 +1102,13 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
         Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb2_index]);
 
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+    daxa_f32 friction = sim_config->has_flag(SimFlag::FRICTION);
+
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
     manifold.pre_step(inv_dt, r1, r2, accum_impulse);
 
     // Solve the collision
-    manifold.solve(r1, r2, accum_impulse);
+    manifold.solve(r1, r2, accum_impulse, friction);
   }
 }
 
