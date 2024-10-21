@@ -199,7 +199,7 @@ struct OBBvsOBBCollision {
         incident[3].f.in_incident = Edge::POS_Y_POS_Z;
         incident[3].f.out_incident = Edge::POS_X_POS_Y;
 
-        incident_face = BoxFace::BACK;
+        incident_face = BoxFace::FRONT;
       } else { // Negative z face
         incident[0].v = daxa_f32vec3(e.x, -e.y, -e.z);
         incident[1].v = daxa_f32vec3(-e.x, -e.y, -e.z);
@@ -215,7 +215,7 @@ struct OBBvsOBBCollision {
         incident[3].f.in_incident = Edge::POS_X_POS_Z;
         incident[3].f.out_incident = Edge::POS_Y_NEG_Z;
 
-        incident_face = BoxFace::FRONT;
+        incident_face = BoxFace::BACK;
       }
     }
 
@@ -298,7 +298,7 @@ struct OBBvsOBBCollision {
           e = daxa_f32vec3(e_r.y, e_r.x, e_r.z);
           basis = daxa_f32mat3x3(-r[1], r[0], r[2]);
 
-          reference_face = BoxFace::BACK;
+          reference_face = BoxFace::FRONT;
         } else {
           clip_edges[0] = Edge::NEG_X_POS_Z;
           clip_edges[1] = Edge::NEG_Y_POS_Z;
@@ -308,7 +308,7 @@ struct OBBvsOBBCollision {
           e = daxa_f32vec3(e_r.y, e_r.x, e_r.z);
           basis = daxa_f32mat3x3(-r[1], -r[0], -r[2]);
 
-          reference_face = BoxFace::FRONT;
+          reference_face = BoxFace::BACK;
         }
 
       }
@@ -532,7 +532,7 @@ struct OBBvsOBBCollision {
     }
   }
 
-  static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, inout Manifold manifold) {
+  static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, inout Manifold manifold, out daxa_u32 obb1_faces, out daxa_u32 obb2_faces) {
 
     // Transform the OBBs to world space
     Transform tx_A = Transform(A->get_rotation_matrix(), A->position);
@@ -901,10 +901,11 @@ struct OBBvsOBBCollision {
         manifold.normal = flip ? -normal : normal;
         if(flip) {
           // flip the faces
-          manifold.faces = incident_face;
-          // manifold.faces = incident_face;
+          obb1_faces = incident_face;
+          obb2_faces = reference_face;
         } else {
-          manifold.faces = reference_face;
+          obb1_faces = reference_face;
+          obb2_faces = incident_face;
         }
 
         for(daxa_i32 i = 0; i < out_num; ++i) {
@@ -964,15 +965,9 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
          Ptr<SimConfig> sim_config, Ptr<Manifold> collisions) -> void
 {
   var any_collision = false;
-  var face_collided = 0u;
   r->clear_flag(RigidBodyFlag::COLLIDING);
-  for (daxa_u32 i = 0; i < sim_config->rigid_body_count; i++)
+  for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {
-    if(i == rigid_body_index)
-    {
-      continue;
-    }
-
     // Simplex simplex;
     Ptr<RigidBody> r2 = Ptr<RigidBody>(&BP.task_head.rigid_bodies[i]);
 
@@ -982,7 +977,10 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     manifold.contact_count = 0;
     manifold.key = -1;
 
-    let collision = OBBvsOBBCollision.collision_detection(r, r2, manifold);
+    var obb1_faces = 0u;
+    var obb2_faces = 0u;
+
+    let collision = OBBvsOBBCollision.collision_detection(r, r2, manifold, obb1_faces, obb2_faces);
 
     // 
     if (collision)
@@ -992,11 +990,13 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
       manifold.compute_basis();
       collisions[index] = manifold;
-      face_collided |= manifold.faces;
+      var old_obb1_faces = 0u;
+      var old_obb2_faces = 0u;
+      InterlockedOr(r->face_collided, obb1_faces, old_obb1_faces);
+      InterlockedOr(r2->face_collided, obb2_faces, old_obb2_faces);
+      r2->flags |= RigidBodyFlag::COLLIDING;
     }
   }
-
-  r->face_collided = face_collided;
 
   if(any_collision)
   {

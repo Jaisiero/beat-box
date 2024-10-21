@@ -11,6 +11,17 @@
 #define FORCE_INLINE
 #endif
 
+
+#if defined(__cplusplus)
+#define MAT_ELEM(mat, row, col) ( \
+    ((col) == 0) ? ((&mat.x)->*(row == 0 ? &daxa_f32vec3::x : row == 1 ? &daxa_f32vec3::y : &daxa_f32vec3::z)) : \
+    ((col) == 1) ? ((&mat.y)->*(row == 0 ? &daxa_f32vec3::x : row == 1 ? &daxa_f32vec3::y : &daxa_f32vec3::z)) : \
+    ((&mat.z)->*(row == 0 ? &daxa_f32vec3::x : row == 1 ? &daxa_f32vec3::y : &daxa_f32vec3::z)) \
+)
+#else
+#define MAT_ELEM(mat, x, y) mat[x][y]
+#endif // __cplusplus
+
 #if defined(__cplusplus) // C++
 #include <cmath>
 #include <glm/glm.hpp>
@@ -134,19 +145,6 @@ struct Aabb
 static const daxa_u32 MAX_INCIDENT_VERTEX_COUNT = 4;
 static const daxa_u32 MAX_CONTACT_POINT_COUNT = 8;
 
-struct Transform {
-  daxa_f32mat3x3 rotation;
-  daxa_f32vec3 position;
-#if defined(__cplusplus)
-  Transform(daxa_f32mat3x3 rotation, daxa_f32vec3 position) : rotation(rotation), position(position) {}
-#else
-  __init(daxa_f32mat3x3 rotation, daxa_f32vec3 position) {
-    this.rotation = rotation;
-    this.position = position;
-  }
-#endif // __cplusplus
-};
-
 struct Quaternion {
   daxa_f32vec3 v;
   daxa_f32 w;
@@ -213,6 +211,24 @@ struct Quaternion {
                         2 * (v.y * v.z - w * v.x),
                         1 - 2 * (v.x * v.x + v.y * v.y));
   }
+
+  daxa_f32vec3 get_invert_x_axis() {
+    return daxa_f32vec3(1 - 2 * (v.y * v.y + v.z * v.z),
+                        2 * (v.x * v.y - w * v.z),
+                        2 * (v.x * v.z + w * v.y));
+  }
+
+  daxa_f32vec3 get_invert_y_axis() {
+    return daxa_f32vec3(2 * (v.x * v.y + w * v.z),
+                        1 - 2 * (v.x * v.x + v.z * v.z),
+                        2 * (v.y * v.z - w * v.x));
+  }
+
+  daxa_f32vec3 get_invert_z_axis() {
+    return daxa_f32vec3(2 * (v.x * v.z - w * v.y),
+                        2 * (v.y * v.z + w * v.x),
+                        1 - 2 * (v.x * v.x + v.y * v.y));
+  }
 };
 
 FORCE_INLINE Quaternion operator*(Quaternion q1, Quaternion q2) {
@@ -231,6 +247,65 @@ FORCE_INLINE Quaternion operator*(Quaternion q, daxa_f32vec3 v) {
 FORCE_INLINE Quaternion operator*(daxa_f32vec3 v, Quaternion q) {
   return Quaternion(v, 0) * q;
 }
+
+FORCE_INLINE Quaternion from_matrix(daxa_f32mat3x3 mat) {
+  daxa_f32 s;
+  daxa_f32 x, y, z, w;
+
+  daxa_f32 xx = MAT_ELEM(mat, 0, 0);
+  daxa_f32 yy = MAT_ELEM(mat, 1, 1);
+  daxa_f32 zz = MAT_ELEM(mat, 2, 2);
+  daxa_f32 t = xx + yy + zz;
+
+  if (t > 0.0f) {
+    s = sqrt(t + 1.0f);
+    w = s * 0.5f;
+    s = 0.5f / s;
+    x = (MAT_ELEM(mat, 2, 1) - MAT_ELEM(mat, 1, 2)) * s;
+    y = (MAT_ELEM(mat, 0, 2) - MAT_ELEM(mat, 2, 0)) * s;
+    z = (MAT_ELEM(mat, 1, 0) - MAT_ELEM(mat, 0, 1)) * s;
+  } else {
+    daxa_i32 i = xx < yy ? (yy < zz ? 2 : 1) : (xx < zz ? 2 : 0);
+    daxa_i32 j = (i + 1) % 3;
+    daxa_i32 k = (i + 2) % 3;
+
+    s = sqrt(MAT_ELEM(mat, i, i) - MAT_ELEM(mat, j, j) - MAT_ELEM(mat, k, k) + 1.0f);
+    daxa_f32 q[3];
+    q[i] = s * 0.5f;
+    s = 0.5f / s;
+    w = (MAT_ELEM(mat, k, j) - MAT_ELEM(mat, j, k)) * s;
+    q[j] = (MAT_ELEM(mat, j, i) + MAT_ELEM(mat, i, j)) * s;
+    q[k] = (MAT_ELEM(mat, k, i) + MAT_ELEM(mat, i, k)) * s;
+  }
+
+  return Quaternion(x, y, z, w);
+};
+
+
+
+struct Transform {
+  daxa_f32vec3 position;
+  Quaternion quat;
+  daxa_f32mat3x3 rotation;
+#if defined(__cplusplus)
+  Transform(Quaternion quat, daxa_f32vec3 position) : quat(quat), position(position), rotation(quat.to_matrix()) {
+  }
+  Transform(daxa_f32mat3x3 rotation, daxa_f32vec3 position) : rotation(rotation), position(position), quat(from_matrix(rotation)) {
+  }
+#else
+  __init(Quaternion quat, daxa_f32vec3 position) {
+    this.quat = quat;
+    this.rotation = transpose(quat.to_matrix());
+    this.position = position;
+  }
+  __init(daxa_f32mat3x3 rotation, daxa_f32vec3 position) {
+    this.rotation = rotation;
+    this.position = position;
+    this.quat = from_matrix(rotation);
+  }
+  
+#endif // __cplusplus
+};
 
 struct FeaturePair {
   daxa_u32 in_reference;
@@ -259,7 +334,6 @@ struct Manifold {
   daxa_u32 obb1_index;
   daxa_u32 obb2_index;
   daxa_i32 key;
-  daxa_u32 faces;
 
   daxa_i32 error;
   // // DEBUG
