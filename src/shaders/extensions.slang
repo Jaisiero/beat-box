@@ -200,6 +200,32 @@ extension Manifold {
     tangent_vectors[1] = cross(tangent_vectors[0], normal);
   }
 
+  [mutating]
+  void update(Manifold old_manifold) {
+    daxa_f32vec3 otv0  = old_manifold.tangent_vectors[0];
+    daxa_f32vec3 otv1  = old_manifold.tangent_vectors[1];
+
+    for(int i = 0; i < contact_count; i++) {
+      contacts[i].tangent_impulse[0] = contacts[i].tangent_impulse[1] = 0.0f;
+      contacts[i].warm_start = 0u;
+
+      for(int j = 0; j < old_manifold.contact_count; j++) {
+        if(reinterpret<daxa_u32>(old_manifold.contacts[j].fp) == reinterpret<daxa_u32>(contacts[i].fp)) {
+          contacts[i].normal_impulse = old_manifold.contacts[j].normal_impulse;
+
+					// Attempt to re-project old friction solutions
+          daxa_f32vec3 friction = otv0 * old_manifold.contacts[j].tangent_impulse[0] + otv1 * old_manifold.contacts[j].tangent_impulse[1];
+
+          contacts[i].tangent_impulse[0] = dot(tangent_vectors[0], friction);
+          contacts[i].tangent_impulse[1] = dot(tangent_vectors[1], friction);
+
+          contacts[i].warm_start = max(old_manifold.contacts[j].warm_start, 1u);
+          break;
+        }
+      }
+    }
+  }
+
   [mutating] void pre_step(daxa_f32 inv_dt, inout Ptr<RigidBody> body_a, inout Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses) {
     let k_allowed_penetration = 0.01f;
     let k_bias_factor = 0.2f;
@@ -344,3 +370,14 @@ extension Manifold {
     }
   }
 };
+
+
+func find_old_collision(daxa_u32 body_a_index, daxa_u32 body_b_index, daxa_u32 old_collision_count, Ptr<Manifold> old_collisions, out Manifold old_manifold) -> daxa_b32 {
+  for(daxa_u32 i = 0u; i < old_collision_count; ++i) {
+    if(old_collisions[i].obb1_index == body_a_index && old_collisions[i].obb2_index == body_b_index) {
+      old_manifold = old_collisions[i];
+      return true;
+    }
+  }
+  return false;
+}

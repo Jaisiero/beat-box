@@ -328,6 +328,7 @@ struct Contact {
   daxa_f32 normal_mass;
   daxa_f32 tangent_mass[2];
   FeaturePair fp;
+  daxa_u32 warm_start;
 };
 
 struct Manifold {

@@ -36,14 +36,16 @@ struct RigidBodyManager{
 
   daxa::BufferId sim_config_host_buffer;
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
-  daxa::BufferId collisions;
+  daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
 
   // Task graph information for rigid body simulation
   daxa::TaskBuffer task_dispatch_buffer{{.initial_buffers = {}, .name = "RB_dispatch"}};
   daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config"}};
+  daxa::TaskBuffer task_old_sim_config{{.initial_buffers = {}, .name = "RB_old_sim_config"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
   daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "RB_aabb_task"}};
   daxa::TaskBuffer task_collisions{{.initial_buffers = {}, .name = "RB_collisions"}};
+  daxa::TaskBuffer task_old_collisions{{.initial_buffers = {}, .name = "RB_old_collisions"}};
   daxa::TaskBuffer task_points{{.initial_buffers = {}, .name = "RB_points"}};
 
   explicit RigidBodyManager(daxa::Device& device, 
@@ -51,7 +53,7 @@ struct RigidBodyManager{
   ~RigidBodyManager();
 
   daxa::BufferId get_sim_config_buffer();
-  daxa::BufferId get_rigid_body_buffer();
+  daxa::BufferId get_collision_buffer();
 
   bool create(char const* name, std::shared_ptr<RendererManager> renderer);
   void destroy();

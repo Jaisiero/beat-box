@@ -573,9 +573,6 @@ struct OBBvsOBBCollision {
     Axis OBB2_Axes[3];
 
     {
-      // let r_A_t = transpose(r_A);
-      // let r_B_t = transpose(r_B);
-
       // Define axes for OBB1 and OBB2
       OBB1_Axes = {
           { A_X_AXIS, daxa_f32vec3(tx_A.get_axis(0)) }, // A_X_AXIS
@@ -962,7 +959,8 @@ struct OBBvsOBBCollision {
 
 
 func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
-         Ptr<SimConfig> sim_config, Ptr<Manifold> collisions) -> void
+         Ptr<SimConfig> sim_config, Ptr<Manifold> collisions,
+         Ptr<Manifold> old_collisions) -> void
 {
 #if defined(BB_DEBUG)
   var any_collision = false;
@@ -991,6 +989,14 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       daxa_u32 index = 0;
       InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
       manifold.compute_basis();
+
+      Manifold old_manifold;
+      if(find_old_collision(rigid_body_index, i, sim_config->g_c_info_old.collision_count, old_collisions, old_manifold))
+      {
+        printf("Found old collision %d %d\n", rigid_body_index, i);
+        manifold.update(old_manifold);
+      }
+
       collisions[index] = manifold;
 #if defined(BB_DEBUG)
       var old_obb1_faces = 0u;
@@ -1028,7 +1034,11 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   Ptr<Manifold> collisions =
       Ptr<Manifold>(BP.task_head.collisions);
 
-  broad_phase(pixel_i.x, r, sim_config, collisions);
+  Ptr<Manifold> old_collisions =
+      Ptr<Manifold>(BP.task_head.old_collisions);
+
+
+  broad_phase(pixel_i.x, r, sim_config, collisions, old_collisions);
 }
 
 
@@ -1083,7 +1093,6 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     return;
   }
   
-
   // TODO: Implement parallel collision solver
   // atomicAdd to velocity and omega
   for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
@@ -1102,7 +1111,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
         Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb2_index]);
 
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
-    daxa_f32 friction = sim_config->has_flag(SimFlag::FRICTION);
+    daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
 
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
     manifold.pre_step(inv_dt, r1, r2, accum_impulse);
