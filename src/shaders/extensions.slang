@@ -199,4 +199,106 @@ extension Manifold {
     tangent_vectors[0] = normalize(tangent_vectors[0]);
     tangent_vectors[1] = cross(tangent_vectors[0], normal);
   }
+
+  [mutating] void pre_step(daxa_f32 inv_dt, inout Ptr<RigidBody> body_a, inout Ptr<RigidBody> body_b) {
+    let k_allowed_penetration = 0.01f;
+    let k_bias_factor = 0.2f;
+
+    for(int i = 0; i < contact_count; i++) {
+      daxa_f32vec3 r1 = contacts[i].position - body_a->position;
+      daxa_f32vec3 r2 = contacts[i].position - body_b->position;
+
+      // Precompute normal mass, tangent mass, and bias
+      daxa_f32vec3 rn1 = cross(r1, normal);
+      daxa_f32vec3 rn2 = cross(r2, normal);
+      daxa_f32 k_normal = body_a->inv_mass + body_b->inv_mass;
+      k_normal += dot(rn1, mul(rn1, body_a->inv_inertia));
+      k_normal += dot(rn2, mul(rn2, body_b->inv_inertia));
+      contacts[i].normal_mass = 1.0f / k_normal;
+
+      for(int j = 0; j < 2; j++) {
+        daxa_f32vec3 r1ct = cross(tangent_vectors[j], r1);
+        daxa_f32vec3 r2ct = cross(tangent_vectors[j], r2);
+        daxa_f32 k_tangent = body_a->inv_mass + body_b->inv_mass;
+        k_tangent += dot(r1ct, mul(r1ct, body_a->inv_inertia));
+        k_tangent += dot(r2ct, mul(r2ct, body_b->inv_inertia));
+        contacts[i].tangent_mass[j] = 1.0f / k_tangent;
+      }
+
+      contacts[i].bias = -k_bias_factor * inv_dt * min(contacts[i].penetration + k_allowed_penetration, 0.0f);
+
+      // accumlate impulse
+      if(true) {
+        // Apply normal + friction impulse
+        daxa_f32vec3 P = normal * contacts[i].normal_impulse;
+
+        for(int j = 0; j < 2; j++) {
+          P += contacts[i].tangent_impulse[j] * contacts[i].tangent_impulse[j];
+        }
+
+        if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
+          body_a->velocity -= P * body_a->inv_mass;
+          body_a->omega -= mul(cross(r1, P), body_a->inv_inertia);
+        } 
+
+        if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
+          body_b->velocity += P * body_b->inv_mass;
+          body_b->omega += mul(cross(r2, P), body_b->inv_inertia);
+        }
+      }
+    }
+  }
+
+  [mutating]
+  void solve(Ptr<RigidBody> body_a, Ptr<RigidBody> body_b) {
+    for(daxa_u32 c = 0u; c < contact_count; ++c)
+    {
+      Contact contact = contacts[c];
+      daxa_f32vec3 collision_point = contact.position;
+
+      // Calculate relative velocity
+      daxa_f32vec3 r1_to_point = collision_point - body_a->position;
+      daxa_f32vec3 r2_to_point = collision_point - body_b->position;
+
+      daxa_f32vec3 v1 = body_a->velocity;
+      daxa_f32vec3 v2 = body_b->velocity;
+
+      // daxa_f32vec3 relative_velocity = v2 + cross(body_b->omega, r2_to_point) - v1 - cross(body_a->omega, r1_to_point);
+
+      daxa_f32vec3 relative_velocity = v2 + cross(r2_to_point, body_b->omega) - v1 - cross(r1_to_point, body_a->omega);
+
+      // Calculate normal impulse
+      daxa_f32 normal_velocity = dot(relative_velocity, normal);
+
+      daxa_f32 normal_impulse = contact.normal_mass * (-normal_velocity + contact.bias);
+
+      // Clamp the accumulated impulse
+      if(true) {
+        daxa_f32 old_normal_impulse = contact.normal_impulse;
+        contact.normal_impulse = max(old_normal_impulse + normal_impulse, 0.0f);
+        normal_impulse = contact.normal_impulse - old_normal_impulse;
+      } else {
+        normal_impulse = max(normal_impulse, 0.0f);
+      }
+
+      // Apply contact impulse
+      daxa_f32vec3 normal_impulse_vector = normal * normal_impulse;
+
+      if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
+        body_a->velocity -= normal_impulse_vector * body_a->inv_mass;
+        body_a->omega -= mul(cross(normal_impulse_vector, r1_to_point), body_a->inv_inertia);
+        // body_a->omega -= mul(body_a->inv_inertia, cross(r1_to_point, normal_impulse_vector));
+        body_a->omega = min(body_b->omega, 10.0f);
+      }
+
+      if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
+        body_b->velocity += normal_impulse_vector * body_b->inv_mass;
+        body_b->omega += mul(cross(normal_impulse_vector, r2_to_point), body_b->inv_inertia);
+        // body_b->omega += mul(body_b->inv_inertia, cross(r2_to_point, normal_impulse_vector));
+        // limit the angular velocity
+        body_b->omega = min(body_b->omega, 10.0f);
+      }
+
+    }
+  }
 };

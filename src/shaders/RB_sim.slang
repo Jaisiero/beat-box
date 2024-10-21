@@ -964,8 +964,10 @@ struct OBBvsOBBCollision {
 func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
          Ptr<SimConfig> sim_config, Ptr<Manifold> collisions) -> void
 {
+#if defined(BB_DEBUG)
   var any_collision = false;
   r->clear_flag(RigidBodyFlag::COLLIDING);
+#endif // BB_DEBUG
   for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {
     // Simplex simplex;
@@ -990,18 +992,22 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
       manifold.compute_basis();
       collisions[index] = manifold;
+#if defined(BB_DEBUG)
       var old_obb1_faces = 0u;
       var old_obb2_faces = 0u;
       InterlockedOr(r->face_collided, obb1_faces, old_obb1_faces);
       InterlockedOr(r2->face_collided, obb2_faces, old_obb2_faces);
       r2->flags |= RigidBodyFlag::COLLIDING;
+#endif // BB_DEBUG
     }
   }
 
+#if defined(BB_DEBUG)
   if(any_collision)
   {
     r->flags |= RigidBodyFlag::COLLIDING;
   }
+#endif // BB_DEBUG
 }
 
 [shader("compute")]
@@ -1046,99 +1052,9 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
 
 }
 
-
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_collision_solver(uint3 pixel_i : SV_DispatchThreadID)
-{
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(CS.task_head.sim_config);
-
-  if (pixel_i.x >= 1)
-  {
-    return;
-  }
-
-  // TODO: Implement parallel collision solver
-  // atomicAdd to velocity and omega
-
-  for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
-  {
-
-    Manifold manifold =
-      CS.task_head.collisions[m];
-
-    if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count)
-    {
-      return;
-    }
-
-    Ptr<RigidBody> r1 =
-        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb1_index]);
-    Ptr<RigidBody> r2 =
-        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb2_index]);
-    for(daxa_u32 c = 0u; c < manifold.contact_count; ++c)
-    {
-      Contact contact = manifold.contacts[c];
-      daxa_f32vec3 collision_point = contact.position;
-      daxa_f32vec3 normal = normalize(manifold.normal);
-
-      // Calculate relative velocity
-      daxa_f32vec3 r1_to_point = collision_point - r1->position;
-      daxa_f32vec3 r2_to_point = collision_point - r2->position;
-
-      daxa_f32vec3 v1 = r1->velocity;
-      daxa_f32vec3 v2 = r2->velocity;
-
-      daxa_f32vec3 relative_velocity = v2 - v1;
-
-      // Calculate relative velocity in the normal direction
-      daxa_f32 normal_velocity = dot(relative_velocity, normal);
-
-      if(normal_velocity > 0.0f)
-      {
-        continue;
-      }
-
-      // Calculate restitution
-      daxa_f32 e = min(r1->restitution, r2->restitution);
-
-      let numerator = -(1.0f + e) * normal_velocity;
-
-      let r1_to_point_cross_n = cross(normal, r1_to_point);
-      let r2_to_point_cross_n = cross(normal, r2_to_point);
-
-      let r1_cross_n_cross_inv_inertia = mul(r1_to_point_cross_n, r1->inv_inertia);
-      let r2_cross_n_cross_inv_inertia = mul(r2_to_point_cross_n, r2->inv_inertia);
-
-      let r1_term = dot(normal, cross(r1_cross_n_cross_inv_inertia, r1_to_point_cross_n));
-      let r2_term = dot(normal, cross(r2_cross_n_cross_inv_inertia, r2_to_point_cross_n));
-
-      let denominator = r1->inv_mass + r2->inv_mass + r1_term + r2_term;
-
-      // Calculate impulse scalar
-      daxa_f32 j = numerator / denominator;
-
-      // Apply impulse
-      daxa_f32vec3 impulse = j * normal;
-
-      if(r1->flags & RigidBodyFlag::DYNAMIC)
-      {
-        r1->velocity -= r1->inv_mass * impulse;
-        r1->omega -= mul(cross(impulse, r1_to_point), r1->inv_inertia);
-      }
-
-      if(r2->flags & RigidBodyFlag::DYNAMIC)
-      {
-        r2->velocity += r2->inv_mass * impulse;
-        r2->omega += mul(cross(impulse, r2_to_point), r2->inv_inertia);
-      }
-    }
-  }
-}
-
-    [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_rigid_body_sim(uint3 pixel_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] 
+    void entry_rigid_body_sim(uint3 pixel_i : SV_DispatchThreadID)
 {
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(RB_sim.task_head.sim_config);
@@ -1152,6 +1068,45 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[pixel_i.x]);
 
   r->advect(sim_config);
+}
+
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_collision_solver(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(CS.task_head.sim_config);
+
+  if (pixel_i.x >= 1)
+  {
+    return;
+  }
+  
+
+  // TODO: Implement parallel collision solver
+  // atomicAdd to velocity and omega
+  for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
+  {
+    Manifold manifold =
+      CS.task_head.collisions[m];
+
+    if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count)
+    {
+      return;
+    }
+
+    Ptr<RigidBody> r1 =
+        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb1_index]);
+    Ptr<RigidBody> r2 =
+        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb2_index]);
+
+    daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+    manifold.pre_step(inv_dt, r1, r2);
+
+    // Solve the collision
+    manifold.solve(r1, r2);
+  }
 }
 
 [shader("compute")]

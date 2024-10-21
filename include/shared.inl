@@ -10,6 +10,8 @@ static const daxa_f32 LINEAR_DAMPING = 0.1f;
 static const daxa_f32 ANGULAR_DAMPING = 0.1f;
 static const daxa_f32 POINT_SIZE = 0.01f;
 
+#define BB_DEBUG 1
+
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 [Flags]
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
@@ -73,7 +75,9 @@ inline void operator|=(RigidBodyFlag &a, RigidBodyFlag b)
 struct RigidBody
 {
   RigidBodyFlag flags;
+#if defined(BB_DEBUG)
   daxa_u32 face_collided;
+#endif // BB_DEBUG
   daxa_u32 primitive_count;
   daxa_u32 primitive_offset;
   daxa_f32vec3 position;

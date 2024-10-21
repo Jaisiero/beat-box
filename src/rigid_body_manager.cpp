@@ -10,8 +10,8 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
   {
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
     pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
-    pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
     pipeline = task_manager->create_compute(RigidBodySim{}.info);
+    pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
   }
 }
@@ -132,23 +132,23 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_CS);
 
-  auto user_callback2 = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_advect = [this](daxa::TaskInterface ti, auto &self)
   {
     ti.recorder.set_pipeline(*pipeline);
     ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySimTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
   };
 
-  using TTask2 = TaskTemplate<RigidBodySimTaskHead::Task, decltype(user_callback2)>;
+  using TTaskAdvect = TaskTemplate<RigidBodySimTaskHead::Task, decltype(user_callback_advect)>;
 
   // Instantiate the task using the template class
-  TTask2 task2(std::array{
+  TTaskAdvect task_advect(std::array{
                    daxa::attachment_view(RigidBodySimTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
                    daxa::attachment_view(RigidBodySimTaskHead::AT.sim_config, task_sim_config),
                    daxa::attachment_view(RigidBodySimTaskHead::AT.rigid_bodies, task_rigid_bodies),
                    daxa::attachment_view(RigidBodySimTaskHead::AT.aabbs, task_aabbs),
                },
-               user_callback2);
+               user_callback_advect);
 
   auto user_callback_CP = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -183,8 +183,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_RC);
   RB_TG.add_task(task);
   RB_TG.add_task(task_CS_dispatcher);
+  RB_TG.add_task(task_advect);
   RB_TG.add_task(task_CS);
-  RB_TG.add_task(task2);
   RB_TG.add_task(task_CP);
 
   RB_TG.submit();
