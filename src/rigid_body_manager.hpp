@@ -12,6 +12,8 @@ struct RigidBodyManager{
   daxa::Device& device;
   // Initialization flag
   bool initialized = false;
+  // iteration count
+  daxa_u32 iteration_count = DEFAULT_ITERATION_COUNT;
   // Task manager reference
   std::shared_ptr<TaskManager> task_manager;
   // Renderer manager reference
@@ -56,7 +58,7 @@ struct RigidBodyManager{
   daxa::BufferId get_sim_config_buffer();
   daxa::BufferId get_collision_buffer();
 
-  bool create(char const* name, std::shared_ptr<RendererManager> renderer);
+  bool create(char const* name, std::shared_ptr<RendererManager> renderer, daxa_u32 iterations = DEFAULT_ITERATION_COUNT);
   void destroy();
 
   bool simulate(daxa::BufferId rigid_bodies, daxa::BufferId points_buffer);

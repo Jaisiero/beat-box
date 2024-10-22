@@ -49,7 +49,7 @@ int main(int argc, char const *argv[])
   // Create task graph
   renderer->create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->build_SBT());
   // Create rigid body simulator
-  rigid_body_manager->create("Rigid Body Manager", renderer);
+  rigid_body_manager->create("Rigid Body Manager", renderer, 10);
   // Create acceleration structure manager
   accel_struct_mngr->create(renderer);
   // Create status manager

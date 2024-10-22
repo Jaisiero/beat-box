@@ -995,7 +995,8 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       if(find_old_collision(rigid_body_index, i, sim_config->g_c_info_old.collision_count, old_collisions, old_manifold))
       {
         // printf("Found old collision %d %d\n", rigid_body_index, i);
-        manifold.update(old_manifold);
+        daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+        manifold.update(old_manifold, false);
       }
 
       collisions[index] = manifold;
@@ -1079,6 +1080,8 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[pixel_i.x]);
 
   r->advect(sim_config);
+
+  printf("rigid body %d position %f %f %f velocity %f %f %f omega %f %f %f\n", pixel_i.x, r->position.x, r->position.y, r->position.z, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
 }
 
 [shader("compute")]
@@ -1113,7 +1116,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
 
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
-    manifold.pre_step(inv_dt, r1, r2, accum_impulse);
+    manifold.pre_step(inv_dt, r1, r2, false);
 
     CPS.task_head.collisions[m] = manifold;
   }
@@ -1153,7 +1156,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
 
     // Solve the collision
-    manifold.solve(r1, r2, accum_impulse, friction);
+    manifold.solve(r1, r2, false, false);
   }
 }
 

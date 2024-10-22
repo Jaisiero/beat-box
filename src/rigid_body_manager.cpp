@@ -33,12 +33,14 @@ daxa::BufferId RigidBodyManager::get_collision_buffer()
   return collisions[renderer_manager->get_frame_index()];
 }
 
-bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager> renderer)
+bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager> renderer, daxa_u32 iterations)
 {
   if (initialized)
   {
     return false;
   }
+
+  iteration_count = iterations;
 
   renderer_manager = renderer;
 
@@ -238,7 +240,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_advect);
   RB_TG.add_task(task_CPS);
-  for(auto i = 0u; i < 10; ++i)
+  for(auto i = 0u; i < iteration_count; ++i)
     RB_TG.add_task(task_CS);
   RB_TG.add_task(task_CP);
 
