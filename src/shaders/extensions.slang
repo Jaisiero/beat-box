@@ -226,7 +226,7 @@ extension Manifold {
     }
   }
 
-  [mutating] void pre_step(daxa_f32 inv_dt, inout Ptr<RigidBody> body_a, inout Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses) {
+  [mutating] void pre_step(daxa_f32 inv_dt, Ptr<RigidBody> body_a,  Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses) {
     let k_allowed_penetration = 0.01f;
     let k_bias_factor = 0.2f;
 

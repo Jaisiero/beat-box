@@ -325,11 +325,23 @@ struct CollisionSolverDispatcherPushConstants
   DAXA_TH_BLOB(CollisionSolverDispatcherTaskHead, task_head)
 };
 
+DAXA_DECL_TASK_HEAD_BEGIN(CollisionPreSolverTaskHead)
+DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
+DAXA_DECL_TASK_HEAD_END
+
+struct CollisionPreSolverPushConstants
+{
+  DAXA_TH_BLOB(CollisionPreSolverTaskHead, task_head)
+};
+
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverTaskHead)
 DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
 DAXA_DECL_TASK_HEAD_END
 
 struct CollisionSolverPushConstants

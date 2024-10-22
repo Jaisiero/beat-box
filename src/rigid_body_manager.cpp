@@ -11,6 +11,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
     pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
     pipeline = task_manager->create_compute(RigidBodySim{}.info);
+    pipeline_CPS = task_manager->create_compute(CollisionPreSolverInfo{}.info);
     pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
   }
@@ -145,6 +146,24 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                                          },
                                          user_callback_CS_dispatcher);
 
+  auto user_callback_CPS = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_CPS);
+    ti.recorder.push_constant(CollisionPreSolverPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionPreSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3)});
+  };
+
+  using TTask_CPS = TaskTemplate<CollisionPreSolverTaskHead::Task, decltype(user_callback_CPS)>;
+
+  // Instantiate the task using the template class
+  TTask_CPS task_CPS(std::array{
+                       daxa::attachment_view(CollisionPreSolverTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                       daxa::attachment_view(CollisionPreSolverTaskHead::AT.sim_config, task_sim_config),
+                       daxa::attachment_view(CollisionPreSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                       daxa::attachment_view(CollisionPreSolverTaskHead::AT.collisions, task_collisions),
+                   },
+                   user_callback_CPS);
+
   auto user_callback_CS = [this](daxa::TaskInterface ti, auto &self)
   {
     ti.recorder.set_pipeline(*pipeline_CS);
@@ -218,7 +237,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task);
   RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_advect);
-  RB_TG.add_task(task_CS);
+  RB_TG.add_task(task_CPS);
+  for(auto i = 0u; i < 10; ++i)
+    RB_TG.add_task(task_CS);
   RB_TG.add_task(task_CP);
 
   RB_TG.submit();

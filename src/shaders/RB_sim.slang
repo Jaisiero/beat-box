@@ -2,6 +2,7 @@
 
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
+[[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] CreatePointsPushConstants CP;
@@ -993,7 +994,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       Manifold old_manifold;
       if(find_old_collision(rigid_body_index, i, sim_config->g_c_info_old.collision_count, old_collisions, old_manifold))
       {
-        printf("Found old collision %d %d\n", rigid_body_index, i);
+        // printf("Found old collision %d %d\n", rigid_body_index, i);
         manifold.update(old_manifold);
       }
 
@@ -1080,6 +1081,44 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
   r->advect(sim_config);
 }
 
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_collision_pre_solver(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(CPS.task_head.sim_config);
+
+  if (pixel_i.x >= 1)
+  {
+    return;
+  }
+  
+  // TODO: Implement parallel collision solver
+  // atomicAdd to velocity and omega
+  for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
+  {
+    Manifold manifold =
+      CPS.task_head.collisions[m];
+
+    if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count)
+    {
+      return;
+    }
+
+    Ptr<RigidBody> r1 =
+        Ptr<RigidBody>(&CPS.task_head.rigid_bodies[manifold.obb1_index]);
+    Ptr<RigidBody> r2 =
+        Ptr<RigidBody>(&CPS.task_head.rigid_bodies[manifold.obb2_index]);
+
+    daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+
+    daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+    manifold.pre_step(inv_dt, r1, r2, accum_impulse);
+
+    CPS.task_head.collisions[m] = manifold;
+  }
+}
+
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
@@ -1112,9 +1151,6 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
 
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
-
-    daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
-    manifold.pre_step(inv_dt, r1, r2, accum_impulse);
 
     // Solve the collision
     manifold.solve(r1, r2, accum_impulse, friction);
