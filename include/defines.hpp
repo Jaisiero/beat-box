@@ -22,11 +22,12 @@ BB_NAMESPACE_BEGIN
 
 static constexpr u32 DOUBLE_BUFFERING = 2;
 
-static constexpr f32 TIME_STEP = 0.001f;
+// static constexpr f32 TIME_STEP = 0.001f;
+static constexpr f32 TIME_STEP = 0.001667f;
 static constexpr f32 GRAVITY = 90.81f;
 static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
 static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
-static constexpr u32 DEFAULT_ITERATION_COUNT = 1;
+static constexpr u32 DEFAULT_ITERATION_COUNT = 10;
 
 enum StageIndex : u32
 {

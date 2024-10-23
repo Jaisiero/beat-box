@@ -143,7 +143,7 @@ daxa_f32vec3 get_face_color(BoxFace face)
     // Diffuse
     daxa_f32vec3 diffuse = compute_diffuse(color, normal, L);
     daxa_f32vec3 specular = daxa_f32vec3(0);
-    daxa_f32 attenuation = 1.0f;
+    daxa_f32 attenuation = 0.0f;
 
     // Tracing shadow ray only if the light is visible from the surface
     if (dot(normal, L) > 0)
@@ -158,10 +158,10 @@ daxa_f32vec3 get_face_color(BoxFace face)
       let shadow_result = (shadowPayload.shadow);
 
       attenuation =  1.0 - shadow_result;
-      // specular = compute_specular(shininess, material_specular, WorldRayDirection(), normal, L);
+      specular = compute_specular(shininess, material_specular, WorldRayDirection(), normal, L);
     }
 
-    hit_value += daxa_f32vec3(light_intensity * attenuation * (diffuse + specular));
+    hit_value += daxa_f32vec3(light_intensity * attenuation * (diffuse + specular)) / daxa_f32(LIGHT_NUMBER);
   }
 
   payload.hit_value = hit_value;
