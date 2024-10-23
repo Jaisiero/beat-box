@@ -114,6 +114,7 @@ daxa_f32vec3 get_face_color(BoxFace face)
 
   // get face by normal
   BoxFace face = get_face_by_normal(normal);
+#if defined(BB_RT_DEBUG)
   if(r->has_flag(RigidBodyFlag::COLLIDING))
   {
     if(r->is_face_colliding(face))
@@ -125,6 +126,9 @@ daxa_f32vec3 get_face_color(BoxFace face)
   } else {
     color = get_face_color(face);
   }
+#else
+    color = get_face_color(face);
+#endif
 
   normal = r->rotate_vector(normal);
 

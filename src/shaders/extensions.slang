@@ -7,9 +7,11 @@ extension RigidBody
     integrate_velocities(sim_config->dt);
     apply_temporal_velocity();
     advance(sim_config->dt, LINEAR_DAMPING, ANGULAR_DAMPING);
+#if defined(BB_DYNAMIC_DEBUG)
     if(has_flag(RigidBodyFlag::GRAVITY)){
       apply_impulse(this.mass * daxa_f32vec3(0, sim_config->gravity, 0) *       sim_config->dt, this.position);
     }
+#endif // BB_DYNAMIC_DEBUG
     reset_state();
   }
 
@@ -248,19 +250,19 @@ extension Manifold {
       daxa_f32vec3 r2 = contacts[i].position - body_b->position;
 
       // Precompute normal mass, tangent mass, and bias
-      daxa_f32vec3 rn1 = cross(normal, r1);
-      daxa_f32vec3 rn2 = cross(normal, r2);
+      daxa_f32vec3 rn1 = cross(r1, normal);
+      daxa_f32vec3 rn2 = cross(r2, normal);
       daxa_f32 k_normal = body_a->inv_mass + body_b->inv_mass;
-      k_normal += dot(rn1, mul(rn1, body_a->inv_inertia));
-      k_normal += dot(rn2, mul(rn2, body_b->inv_inertia));
+      k_normal += dot(rn1, mul(body_a->inv_inertia, rn1));
+      k_normal += dot(rn2, mul(body_b->inv_inertia, rn2));
       contacts[i].normal_mass = 1.0f / k_normal;
 
       for(daxa_u32 j = 0u; j < 2; j++) {
-        daxa_f32vec3 r1ct = cross(r1, tangent_vectors[j]);
-        daxa_f32vec3 r2ct = cross(r2, tangent_vectors[j]);
+        daxa_f32vec3 r1ct = cross(tangent_vectors[j], r1);
+        daxa_f32vec3 r2ct = cross(tangent_vectors[j], r2);
         daxa_f32 k_tangent = body_a->inv_mass + body_b->inv_mass;
-        k_tangent += dot(r1ct, mul(r1ct, body_a->inv_inertia));
-        k_tangent += dot(r2ct, mul(r2ct, body_b->inv_inertia));
+        k_tangent += dot(r1ct, mul(body_a->inv_inertia, r1ct));
+        k_tangent += dot(r2ct, mul(body_b->inv_inertia, r2ct));
         contacts[i].tangent_mass[j] = 1.0f / k_tangent;
       }
 
@@ -275,18 +277,20 @@ extension Manifold {
           P += contacts[i].tangent_impulse[j] * contacts[i].tangent_impulse[j];
         }
 
+#if defined(BB_DYNAMIC_DEBUG)
         if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
           body_a->velocity -= P * body_a->inv_mass;
-          body_a->omega -= mul(cross(P, r1), body_a->inv_inertia);
+          body_a->omega -= mul(body_a->inv_inertia, cross(r1, P));
         } 
 
         if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
           body_b->velocity += P * body_b->inv_mass;
-          body_b->omega += mul(cross(P, r2), body_b->inv_inertia);
+          body_b->omega += mul(body_b->inv_inertia, cross(r2, P));
         }
+#endif // BB_DYNAMIC_DEBUG
       }
 
-      daxa_f32 relative_velocity = dot(body_b->velocity + cross(r2, body_b->omega) - body_a->velocity - cross(r1, body_a->omega), normal);
+      daxa_f32 relative_velocity = dot(body_b->velocity + cross(body_b->omega, r2) - body_a->velocity - cross(body_a->omega, r1), normal);
 
       if(relative_velocity < -1.0f) {
         daxa_f32 restitution = max(body_a->restitution, body_b->restitution);
@@ -308,7 +312,7 @@ extension Manifold {
       daxa_f32vec3 r1_to_point = collision_point - body_a->position;
       daxa_f32vec3 r2_to_point = collision_point - body_b->position;
 
-      daxa_f32vec3 relative_velocity = body_b->velocity + cross(r2_to_point, body_b->omega) - body_a->velocity - cross(r1_to_point, body_a->omega);
+      daxa_f32vec3 relative_velocity = body_b->velocity + cross(body_b->omega, r2_to_point) - body_a->velocity - cross(body_a->omega, r1_to_point);
 
       // Friction
       if(enable_friction) {
@@ -331,19 +335,21 @@ extension Manifold {
             // Apply contact impulse
             daxa_f32vec3 tangent_impulse_vector = tangent_vectors[j] * tangent_impulse;
 
+#if defined(BB_DYNAMIC_DEBUG)
             if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
               body_a->velocity -= tangent_impulse_vector * body_a->inv_mass;
-              body_a->omega -= mul(cross(tangent_impulse_vector, r1_to_point), body_a->inv_inertia);
+              body_a->omega -= mul(body_a->inv_inertia, cross(r1_to_point, tangent_impulse_vector));
             }
 
             if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
               body_b->velocity += tangent_impulse_vector * body_b->inv_mass;
-              body_b->omega += mul(cross(tangent_impulse_vector, r2_to_point), body_b->inv_inertia);
+              body_b->omega += mul(body_b->inv_inertia, cross(r2_to_point, tangent_impulse_vector));
             }
+#endif // BB_DYNAMIC_DEBUG
           }
       }
 
-      relative_velocity = body_b->velocity + cross(r2_to_point, body_b->omega) - body_a->velocity - cross(r1_to_point, body_a->omega);
+      relative_velocity = body_b->velocity + cross(body_b->omega, r2_to_point) - body_a->velocity - cross(body_a->omega, r1_to_point);
 
       // Calculate normal impulse
       daxa_f32 normal_velocity = dot(relative_velocity, normal);
@@ -362,23 +368,25 @@ extension Manifold {
       // Apply contact impulse
       daxa_f32vec3 normal_impulse_vector = normal * normal_impulse;
 
+#if defined(BB_DYNAMIC_DEBUG)
       if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
         body_a->velocity -= normal_impulse_vector * body_a->inv_mass;
-        body_a->omega -= mul(cross(normal_impulse_vector, r1_to_point), body_a->inv_inertia);
+        body_a->omega -= mul(body_a->inv_inertia, cross(r1_to_point, normal_impulse_vector));
       }
 
       if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
         body_b->velocity += normal_impulse_vector * body_b->inv_mass;
-        body_b->omega += mul(cross(normal_impulse_vector, r2_to_point), body_b->inv_inertia);
+        body_b->omega += mul(body_b->inv_inertia, cross(r2_to_point, normal_impulse_vector));
       }
+#endif // BB_DYNAMIC_DEBUG
 
       // if(any(isnan(collision_point))) {
-        printf("manifold.error %d, contact_count: %d\n", error, contact_count);
-        printf("collision_point : %f %f %f, body_a.position : %f %f %f, body_b.position : %f %f %f\n", collision_point.x, collision_point.y, collision_point.z, body_a->position.x, body_a->position.y, body_a->position.z, body_b->position.x, body_b->position.y, body_b->position.z);
+        // printf("manifold.error %d, contact_count: %d\n", error, contact_count);
+        // printf("collision_point : %f %f %f, body_a.position : %f %f %f, body_b.position : %f %f %f\n", collision_point.x, collision_point.y, collision_point.z, body_a->position.x, body_a->position.y, body_a->position.z, body_b->position.x, body_b->position.y, body_b->position.z);
 
-        printf("r1_to_point : %f %f %f, r2_to_point : %f %f %f, normal_impulse_vector : %f %f %f\n", r1_to_point.x, r1_to_point.y, r1_to_point.z, r2_to_point.x, r2_to_point.y, r2_to_point.z, normal_impulse_vector.x, normal_impulse_vector.y, normal_impulse_vector.z);
+        // printf("r1_to_point : %f %f %f, r2_to_point : %f %f %f, normal_impulse_vector : %f %f %f\n", r1_to_point.x, r1_to_point.y, r1_to_point.z, r2_to_point.x, r2_to_point.y, r2_to_point.z, normal_impulse_vector.x, normal_impulse_vector.y, normal_impulse_vector.z);
 
-        printf("relative_velocity : %f %f %f, normal_velocity : %f, normal_impulse : %f\n", relative_velocity.x, relative_velocity.y, relative_velocity.z, normal_velocity, normal_impulse);
+        // printf("relative_velocity : %f %f %f, normal_velocity : %f, normal_impulse : %f\n", relative_velocity.x, relative_velocity.y, relative_velocity.z, normal_velocity, normal_impulse);
       // }
     }
   }

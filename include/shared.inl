@@ -11,6 +11,10 @@ static const daxa_f32 ANGULAR_DAMPING = 0.1f;
 static const daxa_f32 POINT_SIZE = 0.01f;
 
 #define BB_DEBUG 1
+#if defined(BB_DEBUG) 
+// #define BB_DYNAMIC_DEBUG 1
+#define BB_RT_DEBUG 1
+#endif // BB_DEBUG
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 [Flags]
