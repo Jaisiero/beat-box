@@ -73,7 +73,7 @@
 
   r->advect(sim_config);
 
-  printf("rigid body %d position %f %f %f velocity %f %f %f omega %f %f %f\n", pixel_i.x, r->position.x, r->position.y, r->position.z, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
+  // printf("rigid body %d position %f %f %f velocity %f %f %f omega %f %f %f\n", pixel_i.x, r->position.x, r->position.y, r->position.z, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
 }
 
 [shader("compute")]
@@ -106,9 +106,9 @@
         Ptr<RigidBody>(&CPS.task_head.rigid_bodies[manifold.obb2_index]);
 
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
-
+    daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
-    manifold.pre_step(inv_dt, r1, r2, false);
+    manifold.pre_step(inv_dt, r1, r2, accum_impulse, friction);
 
     CPS.task_head.collisions[m] = manifold;
   }
@@ -148,7 +148,9 @@
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
 
     // Solve the collision
-    manifold.solve(r1, r2, false, false);
+    manifold.solve(r1, r2, accum_impulse, friction);
+    
+    CS.task_head.collisions[m] = manifold;
   }
 }
 

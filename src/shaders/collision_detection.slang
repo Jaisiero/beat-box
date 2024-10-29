@@ -832,30 +832,6 @@ struct OBBvsOBBCollision {
       daxa_f32vec3 e;
       compute_reference_edges_and_basis(e_r, rtx, normal, axis, clip_edges, basis, e, reference_face);
 
-      // // TODO: DEBUGGING
-      // manifold.normal = normal;
-      // manifold.key = axis;
-      // manifold.s_max = s_max;
-      // manifold.itx = itx;
-      // manifold.rtx = rtx;
-      // manifold.e_i = e_i;
-      // manifold.e_r = e_r;
-      // manifold.e = e;
-      // manifold.basis = basis;
-      // manifold.contacts[0].position = incident[0].v;
-      // manifold.contacts[0].fp = incident[0].f;
-      // manifold.contacts[0].bias = daxa_f32(clip_edges[0]);
-      // manifold.contacts[1].position = incident[1].v;
-      // manifold.contacts[1].fp = incident[1].f;
-      // manifold.contacts[1].bias = daxa_f32(clip_edges[1]);
-      // manifold.contacts[2].position = incident[2].v;
-      // manifold.contacts[2].fp = incident[2].f;
-      // manifold.contacts[2].bias = daxa_f32(clip_edges[2]);
-      // manifold.contacts[3].position = incident[3].v;
-      // manifold.contacts[3].fp = incident[3].f;
-      // manifold.contacts[3].bias = daxa_f32(clip_edges[3]);
-      // // TODO: DEBUGGING
-
       // Clip the incident face against the reference face
       ClipVertex out_vertices[MAX_CONTACT_POINT_COUNT];
       daxa_f32 depths[MAX_CONTACT_POINT_COUNT];
@@ -868,26 +844,8 @@ struct OBBvsOBBCollision {
 
       // DEBUGGING
       if(error != 0) {
+        manifold.key = axis;
         manifold.contact_count = 0;
-
-        // for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
-        //   manifold.contacts[4].position = out_vertices[0].v;
-        //   manifold.contacts[4].fp = out_vertices[0].f;
-        //   manifold.contacts[4].penetration = depths[0];
-        //   manifold.contacts[4].normal_impulse = depths[4];
-        //   manifold.contacts[5].position = out_vertices[1].v;
-        //   manifold.contacts[5].fp = out_vertices[1].f;
-        //   manifold.contacts[5].penetration = depths[1];
-        //   manifold.contacts[5].normal_impulse = depths[5];
-        //   manifold.contacts[6].position = out_vertices[2].v;
-        //   manifold.contacts[6].fp = out_vertices[2].f;
-        //   manifold.contacts[6].penetration = depths[2];
-        //   manifold.contacts[6].normal_impulse = depths[6];
-        //   manifold.contacts[7].position = out_vertices[3].v;
-        //   manifold.contacts[7].fp = out_vertices[3].f;
-        //   manifold.contacts[7].penetration = depths[3];
-        //   manifold.contacts[7].normal_impulse = depths[7];
-        // }
         return true; // FAIL
       }
 
@@ -917,6 +875,8 @@ struct OBBvsOBBCollision {
           manifold.contacts[i].fp = out_vertices[i].f;
           manifold.contacts[i].position = out_vertices[i].v;
           manifold.contacts[i].penetration = depths[i];
+          manifold.contacts[i].tangent_impulse[0] = manifold.contacts[i].tangent_impulse[1] = manifold.contacts[i].normal_impulse = 0.0f;
+          manifold.contacts[i].warm_start = 0u;
         }
       }
     } else {
@@ -945,8 +905,8 @@ struct OBBvsOBBCollision {
 
       manifold.contacts[0].position = (CA + CB) * 0.5f;
       manifold.contacts[0].penetration = s_max;
-      manifold.key = axis;
     }
+    manifold.key = axis;
 
 
     return true;
@@ -985,12 +945,14 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
       manifold.compute_basis();
 
-      Manifold old_manifold;
-      if(find_old_collision(rigid_body_index, i, sim_config->g_c_info_old.collision_count, old_collisions, old_manifold))
-      {
-        // printf("Found old collision %d %d\n", rigid_body_index, i);
-        daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
-        manifold.update(old_manifold, false);
+      daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
+      if(warm_starting) {
+        Manifold old_manifold;
+        if(find_old_collision(rigid_body_index, i, sim_config->g_c_info_old.collision_count, old_collisions, old_manifold))
+        {
+          // printf("Found old collision %d %d\n", rigid_body_index, i);
+          manifold.update(old_manifold);
+        }
       }
 
       collisions[index] = manifold;
