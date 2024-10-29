@@ -205,6 +205,18 @@ extension Manifold {
     tangent_vectors[1] = cross(tangent_vectors[0], normal);
   }
 
+
+  bool is_same_contact(FeaturePair a, FeaturePair b) {
+    return a.in_reference == b.in_reference && a.out_reference == b.out_reference && a.in_incident == b.in_incident && a.out_incident == b.out_incident;
+  }
+
+  void key_to_fp(daxa_u32 key, out FeaturePair fp) {
+    fp.in_reference = key & 0x000000FF;
+    fp.out_reference = (key & 0x0000FF00) >> 8;
+    fp.in_incident = (key & 0x00FF0000) >> 16;
+    fp.out_incident = (key & 0xFF000000) >> 24;
+  }
+
   [mutating]
   void update(Manifold old_manifold) {
     daxa_f32vec3 otv0  = old_manifold.tangent_vectors[0];
@@ -212,7 +224,7 @@ extension Manifold {
 
     for(daxa_u32 i = 0u; i < contact_count; i++) {
       for(daxa_u32 j = 0u; j < old_manifold.contact_count; j++) {
-        if(reinterpret<daxa_u32>(old_manifold.contacts[j].fp) == reinterpret<daxa_u32>(contacts[i].fp)) {
+        if(is_same_contact(old_manifold.contacts[j].fp, contacts[i].fp)) {
 
             contacts[i].normal_impulse = old_manifold.contacts[j].normal_impulse;
 
@@ -224,9 +236,11 @@ extension Manifold {
 
             contacts[i].warm_start = max(old_manifold.contacts[j].warm_start, 1u);
 
+            // printf("fp %d, %d, %d, %d, old %d, %d, %d, %d\n", contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, old_manifold.contacts[j].fp.in_reference, old_manifold.contacts[j].fp.out_reference, old_manifold.contacts[j].fp.in_incident, old_manifold.contacts[j].fp.out_incident);
+
             // if(contacts[i].normal_impulse != 0) {
-            //   printf("tangent_impulse[0] %f, tangent_impulse[1] %f normal_impulse %f friction %f %f %f \n", contacts[i].tangent_impulse[0], contacts[i].tangent_impulse[1], contacts[i].normal_impulse, friction.x, friction.y, friction.z);
-            //   printf("    tangent_vectors[0] %f %f %f tangent_vectors[1] %f %f %f\n", tangent_vectors[0].x, tangent_vectors[0].y, tangent_vectors[0].z, tangent_vectors[1].x, tangent_vectors[1].y, tangent_vectors[1].z);
+              printf("tangent_impulse[0] %f, tangent_impulse[1] %f normal_impulse %f friction %f %f %f \n", contacts[i].tangent_impulse[0], contacts[i].tangent_impulse[1], contacts[i].normal_impulse, friction.x, friction.y, friction.z);
+              printf("    tangent_vectors[0] %f %f %f tangent_vectors[1] %f %f %f\n", tangent_vectors[0].x, tangent_vectors[0].y, tangent_vectors[0].z, tangent_vectors[1].x, tangent_vectors[1].y, tangent_vectors[1].z);
             // }
           break;
         }

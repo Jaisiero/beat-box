@@ -905,6 +905,9 @@ struct OBBvsOBBCollision {
 
       manifold.contacts[0].position = (CA + CB) * 0.5f;
       manifold.contacts[0].penetration = s_max;
+      manifold.key_to_fp(axis, manifold.contacts[0].fp);
+      manifold.contacts[0].tangent_impulse[0] = manifold.contacts[0].tangent_impulse[1] = manifold.contacts[0].normal_impulse = 0.0f;
+      manifold.contacts[0].warm_start = 0u;
     }
     manifold.key = axis;
 
