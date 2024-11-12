@@ -172,11 +172,15 @@
   daxa_u32 index = 0;
   InterlockedAdd(sim_config->g_c_info.collision_point_count, m.contact_count, index);
 
+  var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
+
   for(int i = 0; i < m.contact_count; i++)
   {
     daxa_u32 current_index = index + i;
     Ptr<Aabb> aabb = Ptr<Aabb>(&CP.task_head.point_aabbs[current_index]);
     aabb->minimum = m.contacts[i].position + daxa_f32vec3(-POINT_SIZE, -POINT_SIZE, -POINT_SIZE);
     aabb->maximum = m.contacts[i].position + daxa_f32vec3(POINT_SIZE, POINT_SIZE, POINT_SIZE);
+
+    vertex_buffer[current_index].position = m.contacts[i].position;
   }
 }

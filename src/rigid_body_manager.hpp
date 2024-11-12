@@ -6,6 +6,7 @@
 BB_NAMESPACE_BEGIN
 
 class RendererManager;
+class GUIManager;
 
 struct RigidBodyManager{
   // Device reference
@@ -18,6 +19,8 @@ struct RigidBodyManager{
   std::shared_ptr<TaskManager> task_manager;
   // Renderer manager reference
   std::shared_ptr<RendererManager> renderer_manager;
+  // GUI manager reference
+  std::shared_ptr<GUIManager> gui_manager;
 
   // Compute pipeline reference
   std::shared_ptr<daxa::ComputePipeline> pipeline_RC;
@@ -58,11 +61,14 @@ struct RigidBodyManager{
   daxa::BufferId get_sim_config_buffer();
   daxa::BufferId get_collision_buffer();
 
-  bool create(char const* name, std::shared_ptr<RendererManager> renderer, daxa_u32 iterations = DEFAULT_ITERATION_COUNT);
+  bool create(char const* name, std::shared_ptr<RendererManager> renderer, std::shared_ptr<GUIManager> gui, daxa_u32 iterations = DEFAULT_ITERATION_COUNT);
   void destroy();
 
   bool simulate(daxa::BufferId rigid_bodies, daxa::BufferId points_buffer);
   bool read_back_sim_config();
+  SimConfig& get_sim_config_reference() {
+    return *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer).value();
+  }
 
   bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer);
   // NOTE: this function reset simulation configuration

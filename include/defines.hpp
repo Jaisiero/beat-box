@@ -20,6 +20,8 @@ using namespace daxa::types;
 
 BB_NAMESPACE_BEGIN
 
+static constexpr u32 MAX_VERTEX_COUNT = 1024;
+
 static constexpr u32 DOUBLE_BUFFERING = 2;
 
 // static constexpr f32 TIME_STEP = 0.001f;
@@ -99,6 +101,12 @@ const auto create_contact_points_pipeline_name = "Create Contact Points";
 const auto AS_shader_file_string = "AS_mngr.slang";
 const auto entry_update_acceleration_structures = "entry_update_acceleration_structures";
 const auto AS_update_pipeline_name = "Update Acceleration Structures";
+
+const auto GUI_shader_file_string = "GUI.slang";
+// broad phase
+const auto GUI_vertex = "entry_vertex";
+const auto GUI_fragment = "entry_fragment";
+const auto GUI_pipeline_name = "GUI Pipeline";
 
 struct MainRayTracingPipeline
 {
@@ -342,6 +350,36 @@ struct CreateContactPoints
       .push_constant_size = sizeof(CreatePointsPushConstants),
       .name = create_contact_points_pipeline_name,
   };
+};
+
+struct UIPipeline
+{
+    daxa::ShaderCompileInfo vertex_shader = daxa::ShaderCompileInfo{
+        .source = daxa::ShaderFile{GUI_shader_file_string},
+        .compile_options = {
+            .entry_point = GUI_vertex,
+        },
+    };
+    
+    daxa::ShaderCompileInfo fragment_shader = daxa::ShaderCompileInfo{
+        .source = daxa::ShaderFile{GUI_shader_file_string},
+        .compile_options = {
+            .entry_point = GUI_fragment,
+        },
+    };
+    
+    daxa::RasterPipelineCompileInfo info = {
+        .vertex_shader_info = vertex_shader,
+        .fragment_shader_info = fragment_shader,
+        .color_attachments = {
+            daxa::RenderAttachment{
+                .format = daxa::Format::R8G8B8A8_UNORM,
+            },
+        },
+        .raster = {},
+        .push_constant_size = sizeof(GUIPushConstants),
+        .name = GUI_pipeline_name,
+    };
 };
 
 BB_NAMESPACE_END

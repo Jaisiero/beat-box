@@ -33,16 +33,16 @@ daxa::BufferId RigidBodyManager::get_collision_buffer()
   return collisions[renderer_manager->get_frame_index()];
 }
 
-bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager> renderer, daxa_u32 iterations)
+bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager> renderer, std::shared_ptr<GUIManager> gui, daxa_u32 iterations)
 {
   if (initialized)
   {
     return false;
   }
 
-  iteration_count = iterations;
-
   renderer_manager = renderer;
+  gui_manager = gui;
+  iteration_count = iterations;
 
   sim_config_host_buffer = device.create_buffer({
       .size = sizeof(SimConfig),
@@ -66,7 +66,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .rigid_body_count = 0,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
-      .flags = SimFlag::ACCUM_IMPULSE|SimFlag::FRICTION,
+      .flags = SimFlag::NO_SIM_FLAG,
       .g_c_info = GlobalCollisionInfo{
           .collision_count = 0,
           .collision_point_count = 0
@@ -218,10 +218,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                       daxa::attachment_view(CreatePointsTaskHead::AT.sim_config, task_sim_config),
                       daxa::attachment_view(CreatePointsTaskHead::AT.collisions, task_collisions),
                       daxa::attachment_view(CreatePointsTaskHead::AT.point_aabbs, task_points),
+                      daxa::attachment_view(CreatePointsTaskHead::AT.vertex_buffer, gui->task_vertex_buffer),
                   },
                   user_callback_CP);
 
-  std::array<daxa::TaskBuffer, 8> buffers = {
+  std::array<daxa::TaskBuffer, 9> buffers = {
       task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -230,6 +231,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_collisions,
       task_old_collisions,
       task_points,
+      gui->task_vertex_buffer,
   };
 
   RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
@@ -337,7 +339,6 @@ bool RigidBodyManager::simulate(daxa::BufferId rigid_bodies,
   {
     return !initialized;
   }
-
   
   update_buffers(rigid_bodies);
   // TODO: refactor
@@ -375,7 +376,7 @@ bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count, daxa::BufferId rigi
       .rigid_body_count = rigid_body_count,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
-      .flags = SimFlag::ACCUM_IMPULSE|SimFlag::FRICTION,
+      .flags = SimFlag::NO_SIM_FLAG,
       .g_c_info = GlobalCollisionInfo{
           .collision_count = 0,
           .collision_point_count = 0,

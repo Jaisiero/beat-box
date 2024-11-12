@@ -185,28 +185,41 @@ void AccelerationStructureManager::free_accel_structs()
 
 daxa::TlasId AccelerationStructureManager::get_tlas()
 {
-  // TODO: should frame_index be passed as a parameter?
+  if(!initialized) {
+    return {};
+  }
   return tlas[renderer_manager->get_frame_index()];
 }
 
 daxa::BufferId AccelerationStructureManager::get_rigid_body_buffer()
 {
+  if(!initialized) {
+    return {};
+  }
   return rigid_body_buffer[renderer_manager->get_frame_index()];
 }
 
 daxa::BufferId AccelerationStructureManager::get_points_buffer()
 {
-  // TODO: should frame_index be passed as a parameter?
+  if(!initialized) {
+    return {};
+  }
   return points_buffer[renderer_manager->get_frame_index()];
 }
 
 void AccelerationStructureManager::build_AS()
 {
+  if(!initialized) {
+    return;
+  }
   AS_build_TG.execute();
 }
 
 bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives)
 {
+  if(!initialized) {
+    return false;
+  }
   // Get the number of rigid bodies and primitives
   auto rigid_body_count = static_cast<u32>(rigid_bodies.size());
   auto primitive_count = static_cast<u32>(primitives.size());
@@ -381,6 +394,9 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
 void AccelerationStructureManager::update_TLAS(daxa::BufferId sim_config) 
 {
+  if(!initialized) {
+    return;
+  }
   update_buffers(sim_config);
   TLAS_update_TG.execute();
 }
