@@ -33,7 +33,7 @@ struct GUIDrawTask : GUITaskHead::Task
     render_recorder.push_constant(GUIPushConstants{
       .task_head = ti.attachment_shader_blob,
     });
-    render_recorder.draw({.vertex_count = 3});
+    render_recorder.draw({.vertex_count = sim_config.g_c_info.collision_point_count});
     ti.recorder = std::move(render_recorder).end_renderpass();
   }
 };

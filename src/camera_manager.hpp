@@ -59,6 +59,8 @@ struct CameraManager{
     CameraView camera_view = {
         .inv_view = get_inverse_view_matrix(camera),
         .inv_proj = get_inverse_projection_matrix(camera, true),
+        .view = get_view_matrix(camera),
+        .proj = get_projection_matrix(camera, true),
     };
 
     device.buffer_host_address_as<CameraView>(camera_buffer).value()[0] = camera_view;

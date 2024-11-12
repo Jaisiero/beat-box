@@ -376,7 +376,7 @@ struct UIPipeline
                 .format = daxa::Format::R8G8B8A8_UNORM,
             },
         },
-        .raster = {},
+        .raster = {.primitive_topology = daxa::PrimitiveTopology::POINT_LIST},
         .push_constant_size = sizeof(GUIPushConstants),
         .name = GUI_pipeline_name,
     };

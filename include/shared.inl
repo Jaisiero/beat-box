@@ -12,7 +12,7 @@ static const daxa_f32 POINT_SIZE = 0.01f;
 
 #define BB_DEBUG 1
 #if defined(BB_DEBUG) 
-#define BB_DYNAMIC_DEBUG 1
+// #define BB_DYNAMIC_DEBUG 1
 #define BB_RT_DEBUG 1  
 #endif // BB_DEBUG
 
@@ -234,6 +234,8 @@ struct CameraView
 {
   daxa_f32mat4x4 inv_view;
   daxa_f32mat4x4 inv_proj;
+  daxa_f32mat4x4 view;
+  daxa_f32mat4x4 proj;
 };
 DAXA_DECL_BUFFER_PTR(CameraView)
 
