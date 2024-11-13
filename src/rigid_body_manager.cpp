@@ -4,7 +4,8 @@
 BB_NAMESPACE_BEGIN
 
 RigidBodyManager::RigidBodyManager(daxa::Device &device,
-                                            std::shared_ptr<TaskManager> task_manager) : device(device), task_manager(task_manager)
+                                            std::shared_ptr<TaskManager> task_manager,
+                                            std::shared_ptr<AccelerationStructureManager> accel_struct_mngr) : device(device), task_manager(task_manager), accel_struct_mngr(accel_struct_mngr)
 {
   if (device.is_valid())
   {
@@ -14,6 +15,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_CPS = task_manager->create_compute(CollisionPreSolverInfo{}.info);
     pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
+    update_pipeline = task_manager->create_compute(UpdateRigidBodies{}.info);
   }
 }
 
@@ -24,8 +26,12 @@ RigidBodyManager::~RigidBodyManager()
 
 daxa::BufferId RigidBodyManager::get_sim_config_buffer()
 {
-  // TODO: should frame_index be passed as a parameter?
   return sim_config[renderer_manager->get_frame_index()];
+}
+
+daxa::BufferId RigidBodyManager::get_previous_sim_config_buffer()
+{
+  return sim_config[renderer_manager->get_previous_frame_index()];
 }
 
 daxa::BufferId RigidBodyManager::get_collision_buffer()
@@ -73,27 +79,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       },
   };
   
-  daxa::InlineTaskInfo task_old_RC({
-      .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_sim_config),
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_old_sim_config),
-      },
-      .task = [this](daxa::TaskInterface const &ti)
-      {
-        auto offset_collision_count = sizeof(SimConfig) - sizeof(GlobalCollisionInfo) - sizeof(GlobalCollisionInfo);
-        auto offset_old_collision_count = sizeof(SimConfig) - sizeof(GlobalCollisionInfo);
-
-        ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = ti.get(task_sim_config).ids[0],
-            .dst_buffer = ti.get(task_old_sim_config).ids[0],
-            .src_offset = offset_collision_count,
-            .dst_offset = offset_old_collision_count,
-            .size = sizeof(GlobalCollisionInfo),
-        });
-      },
-      .name = "reset sim config",
-  });
-
   daxa::InlineTaskInfo task_RC({
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_sim_config),
@@ -105,7 +90,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
             .collision_point_count = 0,
         };
 
-        auto dst_offset = sizeof(SimConfig) - sizeof(GlobalCollisionInfo) - sizeof(GlobalCollisionInfo);
+        auto dst_offset = sizeof(SimConfig) - sizeof(GlobalCollisionInfo);
         
         allocate_fill_copy(ti, reset_c_info, ti.get(task_sim_config), dst_offset);
       },
@@ -125,6 +110,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask task(std::array{
                  daxa::attachment_view(BroadPhaseTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.sim_config, task_sim_config),
+                 daxa::attachment_view(BroadPhaseTaskHead::AT.previous_sim_config, task_old_sim_config),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.aabbs, task_aabbs),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.collisions, task_collisions),
@@ -222,11 +208,30 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                   },
                   user_callback_CP);
 
-  std::array<daxa::TaskBuffer, 9> buffers = {
+  auto user_callback_update = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*update_pipeline);
+    ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyUpdateTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
+  };
+
+  using TTaskUpdate = TaskTemplate<RigidBodyUpdateTaskHead::Task, decltype(user_callback_update)>;
+
+  // Instantiate the task using the template class
+  TTaskUpdate task_update(std::array{
+                   daxa::attachment_view(RigidBodyUpdateTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                   daxa::attachment_view(RigidBodyUpdateTaskHead::AT.sim_config, task_sim_config),
+                   daxa::attachment_view(RigidBodyUpdateTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                  daxa::attachment_view(RigidBodyUpdateTaskHead::AT.rigid_bodies_update, task_next_rigid_bodies),
+               },
+               user_callback_update);
+
+  std::array<daxa::TaskBuffer, 10> buffers = {
       task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
       task_rigid_bodies,
+      task_next_rigid_bodies,
       task_aabbs,
       task_collisions,
       task_old_collisions,
@@ -236,7 +241,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
 
-  RB_TG.add_task(task_old_RC);
   RB_TG.add_task(task_RC);
   RB_TG.add_task(task);
   RB_TG.add_task(task_CS_dispatcher);
@@ -245,6 +249,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   for(auto i = 0u; i < iteration_count; ++i)
     RB_TG.add_task(task_CS);
   RB_TG.add_task(task_CP);
+  RB_TG.add_task(task_update);
 
   RB_TG.submit();
   RB_TG.complete();
@@ -269,7 +274,7 @@ void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &readback_SC_
       .task = [this](daxa::TaskInterface const &ti)
       {
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = sim_config[renderer_manager->get_frame_index()],
+            .src_buffer = sim_config[renderer_manager->get_previous_frame_index()],
             .dst_buffer = sim_config_host_buffer,
             .size = sizeof(SimConfig),
         });
@@ -332,17 +337,14 @@ void RigidBodyManager::destroy()
   initialized = false;
 }
 
-bool RigidBodyManager::simulate(daxa::BufferId rigid_bodies,
-                                daxa::BufferId points_buffer)
+bool RigidBodyManager::simulate()
 {
   if (!initialized)
   {
     return !initialized;
   }
   
-  update_buffers(rigid_bodies);
-  // TODO: refactor
-  task_points.set_buffers({.buffers = std::array{points_buffer}});
+  update_buffers();
 
   RB_TG.execute();
 
@@ -365,7 +367,7 @@ bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::Bu
 }
 
 // NOTE: this function reset simulation configuration
-bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count, daxa::BufferId rigid_body_buffer)
+bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count)
 {
   if (!initialized)
   {
@@ -383,7 +385,7 @@ bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count, daxa::BufferId rigi
       },
   };
 
-  update_buffers(rigid_body_buffer);
+  update_buffers();
 
   update_SC_TG.execute();
 
@@ -397,6 +399,8 @@ bool RigidBodyManager::read_back_sim_config()
     return !initialized;
   }
 
+  update_buffers();
+
   readback_SC_TG.execute();
   // TODO: change for wait queue
   device.wait_idle();
@@ -404,15 +408,18 @@ bool RigidBodyManager::read_back_sim_config()
   return initialized;
 }
 
-void RigidBodyManager::update_buffers(daxa::BufferId rigid_bodies)
+void RigidBodyManager::update_buffers()
 {
-  daxa_u32 previous_frame = (renderer_manager->get_frame_index() + DOUBLE_BUFFERING - 1) % DOUBLE_BUFFERING;
+  daxa_u32 previous_frame = renderer_manager->get_previous_frame_index();
+  daxa_u32 current_frame = renderer_manager->get_frame_index();
 
-  task_sim_config.set_buffers({.buffers = std::array{sim_config[renderer_manager->get_frame_index()]}});
+  task_sim_config.set_buffers({.buffers = std::array{sim_config[current_frame]}});
   task_old_sim_config.set_buffers({.buffers = std::array{sim_config[previous_frame]}});
-  task_rigid_bodies.set_buffers({.buffers = std::array{rigid_bodies}});
-  task_collisions.set_buffers({.buffers = std::array{collisions[renderer_manager->get_frame_index()]}});
+  task_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_rigid_body_buffer()}});
+  task_next_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_next_rigid_body_buffer()}});
+  task_collisions.set_buffers({.buffers = std::array{collisions[current_frame]}});
   task_old_collisions.set_buffers({.buffers = std::array{collisions[previous_frame]}});
+  task_points.set_buffers({.buffers = std::array{accel_struct_mngr->get_points_buffer()}});
 }
 
 BB_NAMESPACE_END

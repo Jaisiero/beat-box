@@ -71,9 +71,9 @@ struct SceneManager
 
     // TODO: Compute queue here to push an update for all frames?
     // Update simulation info
-    rigid_body_manager->update_sim(get_rigid_body_count(), accel_struct_mngr->get_rigid_body_buffer());
+    rigid_body_manager->update_sim(get_rigid_body_count());
     status_manager->next_frame();
-    rigid_body_manager->update_sim(get_rigid_body_count(), accel_struct_mngr->get_rigid_body_buffer());
+    rigid_body_manager->update_sim(get_rigid_body_count());
     status_manager->next_frame();
 
     return initialized;

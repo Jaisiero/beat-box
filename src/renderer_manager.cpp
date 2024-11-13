@@ -105,18 +105,21 @@ void RendererManager::render()
     
     // Simulate rigid bodies
     if(status_manager->is_simulating()) {
-      rigid_body_manager->simulate(accel_struct_mngr->get_rigid_body_buffer(),
-      accel_struct_mngr->get_points_buffer());
+      rigid_body_manager->simulate();
     }
 
     if (!window.update())
       continue;
 
     // Update the acceleration structures
-    if(status_manager->is_simulating()) {
+    if(status_manager->is_simulating() || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
-      accel_struct_mngr->update();
-      accel_struct_mngr->update_TLAS(rigid_body_manager->get_sim_config_buffer());
+      if(status_manager->is_updating()) {
+        if(!status_manager->reset_update_sim_buffer()) {
+          accel_struct_mngr->update_AS_buffers();
+        }
+      }
+      accel_struct_mngr->update_TLAS();
     }
 
     // Rebuild swapchain
@@ -158,9 +161,19 @@ void RendererManager::render()
 
 RendererManager::~RendererManager() {}
 
+daxa_u32 RendererManager::get_previous_frame_index()
+{
+  return (status_manager->get_frame_index() + DOUBLE_BUFFERING - 1) % DOUBLE_BUFFERING;
+}
+
 daxa_u32 RendererManager::get_frame_index()
 {
   return status_manager->get_frame_index();
+}
+
+daxa_u32 RendererManager::get_next_frame_index()
+{
+  return (status_manager->get_frame_index() + 1) % DOUBLE_BUFFERING;
 }
 
 BB_NAMESPACE_END

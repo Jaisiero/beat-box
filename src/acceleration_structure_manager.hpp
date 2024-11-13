@@ -6,6 +6,8 @@
 BB_NAMESPACE_BEGIN
 
 class RendererManager;
+class RigidBodyManager;
+class GUIManager;
 
 struct AccelerationStructureManager
 {
@@ -17,6 +19,10 @@ struct AccelerationStructureManager
   std::shared_ptr<TaskManager> task_manager;
   // Renderer manager reference
   std::shared_ptr<RendererManager> renderer_manager;
+  // Rigid body manager reference
+  std::shared_ptr<RigidBodyManager> rigid_body_manager;
+  // GUI manager reference
+  std::shared_ptr<GUIManager> gui_manager;
   // Compute pipeline for updating acceleration structures
   std::shared_ptr<daxa::ComputePipeline> update_pipeline;
 
@@ -100,8 +106,10 @@ struct AccelerationStructureManager
   daxa::TaskBuffer task_rigid_body_buffer{{.name = "rigid_body_buffer_task"}};
   // task for the AABB buffer
   daxa::TaskBuffer task_aabb_buffer{{.name = "aabb_buffer_task"}};
-  // task for the points AABB buffer
+  // task for points AABB buffer
   daxa::TaskBuffer task_points_aabb_buffer{{.name = "points_aabb_buffer_task"}};
+  // task for previous points AABB buffer
+  daxa::TaskBuffer task_previous_points_aabb_buffer{{.name = "previous_points_aabb_buffer_task"}};
   // task for the BLAS
   daxa::TaskBlas task_blas{{.name = "blas_task"}};
   // task for the TLAS
@@ -111,6 +119,8 @@ struct AccelerationStructureManager
   TaskGraph AS_build_TG;
   // TaskGraph for updating acceleration structures
   TaskGraph TLAS_update_TG;
+  // TaskGraph for updating acceleration structures
+  TaskGraph AS_update_buffers_TG;
 
   daxa::TaskBuffer task_dispatch_buffer{{.name = "dispatch_buffer"}};
   daxa::TaskBuffer task_sim_config{{.name = "sim_config"}};
@@ -123,26 +133,28 @@ struct AccelerationStructureManager
   explicit AccelerationStructureManager(daxa::Device &device, std::shared_ptr<TaskManager> task_manager);
   ~AccelerationStructureManager();
 
-  bool create(std::shared_ptr<RendererManager> renderer);
+  bool create(std::shared_ptr<RendererManager> renderer, std::shared_ptr<RigidBodyManager> rigid_body, std::shared_ptr<GUIManager> gui);
   void destroy();
   void free_accel_structs();
 
   daxa::TlasId get_tlas();
   daxa::BufferId get_rigid_body_buffer();
+  daxa::BufferId get_next_rigid_body_buffer();
   daxa::BufferId get_points_buffer();
 
 
   // NOTE: queue sync assures double buffering is filled
   void build_AS();
   bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives);
-  void update_TLAS(daxa::BufferId sim_config);
-  bool update();
+  void update_TLAS();
   bool update_TLAS_resources(daxa::BufferId dispatch_buffer, daxa::BufferId collisions, daxa::BufferId sim_config_host_buffer);
-
+  void update_AS_buffers();
 private:
+  bool update();
   void record_accel_struct_tasks(TaskGraph &AS_TG);
   void record_update_TLAS_tasks(TaskGraph &TLAS_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline);
-  void update_buffers(daxa::BufferId sim_config);
+  void record_update_AS_buffers_tasks(TaskGraph &AS_buffers_TG);
+  void update_buffers();
 
 }; // struct AccelerationStructureManager
 

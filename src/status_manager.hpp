@@ -9,21 +9,6 @@ BB_NAMESPACE_BEGIN
 
 struct StatusManager
 {
-  // Gpu context reference
-  std::shared_ptr<GPUcontext> gpu;
-  // Acceleration structure manager reference
-  std::shared_ptr<AccelerationStructureManager> accel_struct_mngr;
-  // Rigid body manager reference
-  std::shared_ptr<RigidBodyManager> rigid_body_manager;
-  // flag for initialization
-  bool initialized = false;
-  // flag for simulation
-  bool simulating = true;
-  // frame index
-  daxa_u32 frame_index = 0;
-  
-  // Dispatch buffer
-  daxa::BufferId dispatch_buffer;
 
   explicit StatusManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager) : gpu(gpu), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager)
   {
@@ -106,7 +91,56 @@ struct StatusManager
   void switch_simulating()
   {
     simulating = !simulating;
+    if(!simulating)
+    {
+      update_sim_buffer = true;
+      double_buffering_counter = 2;
+    }
   }
+
+  bool is_updating()
+  {
+    return update_sim_buffer;
+  }
+
+  bool reset_update_sim_buffer()
+  {
+    if(--double_buffering_counter == 0)
+      update_sim_buffer = false;
+    return !update_sim_buffer;
+  }
+
+  bool is_gui_enabled()
+  {
+    return gui_enabled;
+  }
+
+  void switch_gui_enabled()
+  {
+    gui_enabled = !gui_enabled;
+  }
+
+private:
+  // Gpu context reference
+  std::shared_ptr<GPUcontext> gpu;
+  // Acceleration structure manager reference
+  std::shared_ptr<AccelerationStructureManager> accel_struct_mngr;
+  // Rigid body manager reference
+  std::shared_ptr<RigidBodyManager> rigid_body_manager;
+  // flag for initialization
+  bool initialized = false;
+  // flag for simulation
+  bool simulating = true;
+  // update simulation buffer
+  bool update_sim_buffer = false;
+  // double buffering counter
+  daxa_u32 double_buffering_counter = 0;
+  // flag for gui
+  bool gui_enabled = true;
+  // frame index
+  daxa_u32 frame_index = 0;
+  // Dispatch buffer
+  daxa::BufferId dispatch_buffer;
 };
 
 BB_NAMESPACE_END

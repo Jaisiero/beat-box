@@ -32,7 +32,7 @@ int main(int argc, char const *argv[])
   auto camera_manager = std::make_shared<CameraManager>(gpu->device);
   auto accel_struct_mngr = std::make_shared<AccelerationStructureManager>(gpu->device, task_manager);
   // Rigid body simulator pipeline
-  auto rigid_body_manager = std::make_shared<RigidBodyManager>(gpu->device, task_manager);
+  auto rigid_body_manager = std::make_shared<RigidBodyManager>(gpu->device, task_manager, accel_struct_mngr);
   // Status manager
   auto status_manager = std::make_shared<StatusManager>(gpu, accel_struct_mngr, rigid_body_manager);
   // Scene manager
@@ -49,13 +49,13 @@ int main(int argc, char const *argv[])
   // Create input manager which depends on camera manager and window
   input_manager.create(camera_manager, status_manager);
   // Create GUI manager
-  gui_manager->create(renderer);
+  gui_manager->create(renderer, status_manager);
   // Create task graph
   renderer->create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->build_SBT());
   // Create rigid body simulator
   rigid_body_manager->create("Rigid Body Manager", renderer, gui_manager, 10);
   // Create acceleration structure manager
-  accel_struct_mngr->create(renderer);
+  accel_struct_mngr->create(renderer, rigid_body_manager, gui_manager);
   // Create status manager
   status_manager->create();
   // Create scene manager

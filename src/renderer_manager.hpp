@@ -60,10 +60,15 @@ struct RendererManager
   bool update_resources(daxa::ImageId swapchain_image, CameraManager &cam_mngr, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer);
 
   void render();
+  daxa_u32 get_previous_frame_index();
   daxa_u32 get_frame_index();
+  daxa_u32 get_next_frame_index();
 
 private:
   bool execute();
+  bool is_gui_enabled() {
+    return status_manager->is_gui_enabled();
+  }
 };
 
 BB_NAMESPACE_END

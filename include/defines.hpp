@@ -95,8 +95,12 @@ const auto collision_solver_pipeline_name = "Collision Solver";
 // sim
 const auto entry_rigid_body_sim = "entry_rigid_body_sim";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
+// create contact points
 const auto entry_create_contact_points = "entry_create_contact_points";
 const auto create_contact_points_pipeline_name = "Create Contact Points";
+// update
+const auto entry_update_rigid_bodies = "entry_update_rigid_bodies";
+const auto update_rigid_bodies_pipeline_name = "Update Rigid Bodies";
 
 const auto AS_shader_file_string = "AS_mngr.slang";
 const auto entry_update_acceleration_structures = "entry_update_acceleration_structures";
@@ -380,6 +384,21 @@ struct UIPipeline
         .push_constant_size = sizeof(GUIPushConstants),
         .name = GUI_pipeline_name,
     };
+};
+
+struct UpdateRigidBodies {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_update_rigid_bodies
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyUpdatePushConstants),
+      .name = update_rigid_bodies_pipeline_name,
+  };
 };
 
 BB_NAMESPACE_END

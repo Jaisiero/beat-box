@@ -7,6 +7,7 @@
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] CreatePointsPushConstants CP;
+[[vk::push_constant]] RigidBodyUpdatePushConstants RB_update;
 
 
 
@@ -21,6 +22,9 @@
   {
     return;
   }
+  
+  let previous_sim_config =
+      *BP.task_head.previous_sim_config;
 
   Ptr<RigidBody> r =
       Ptr<RigidBody>(&BP.task_head.rigid_bodies[pixel_i.x]);
@@ -32,7 +36,7 @@
       Ptr<Manifold>(BP.task_head.old_collisions);
 
 
-  broad_phase(pixel_i.x, r, sim_config, collisions, old_collisions);
+  broad_phase(pixel_i.x, r, sim_config, previous_sim_config, collisions, old_collisions);
 }
 
 
@@ -53,7 +57,6 @@
       Ptr<DispatchBuffer>(CSD.task_head.dispatch_buffer);
 
   dispatch_buffer->solver_dispatch.x = (sim_config->g_c_info.collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
-
 }
 
 [shader("compute")]
@@ -183,4 +186,31 @@
 
     vertex_buffer[current_index].position = m.contacts[i].position;
   }
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] 
+    void entry_update_rigid_bodies(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(RB_update.task_head.sim_config);
+
+  if (pixel_i.x >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+
+  Ptr<RigidBody> r =
+      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies[pixel_i.x]);
+  Ptr<RigidBody> r_copy =
+      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies_update[pixel_i.x]);
+
+  r_copy->position = r->position;
+  r_copy->rotation = r->rotation;
+  r_copy->velocity = r->velocity;
+  r_copy->omega = r->omega;
+  r_copy->flags = r->flags;
+#if defined(BB_DEBUG)
+  r_copy->face_collided = r->face_collided;
+#endif // BB_DEBUG
 }

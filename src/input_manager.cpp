@@ -83,6 +83,12 @@ void InputManager::on_key(i32 key, i32 action) {
       status_mngr->switch_simulating();
     }
     break;
+  case GLFW_KEY_TAB:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->switch_gui_enabled();
+    }
+    break;
   case GLFW_KEY_LEFT_SHIFT:
       if (action == GLFW_PRESS)
       {

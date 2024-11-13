@@ -2,7 +2,9 @@
 
 [[vk::push_constant]] GUIPushConstants UI;
 
-static const daxa_f32vec3 POINT_COLOR = daxa_f32vec3(1.0, 1.0, 1.0);
+static const daxa_f32vec3 POINT_COLOR = daxa_f32vec3(0.5, 0.5, 0.5);
+static const daxa_f32 POINT_MIN_SIZE = 2.0;
+static const daxa_f32 POINT_MAX_SIZE = 5.0;
 
 // Per-vertex attributes to be assembled from bound vertex buffers.
 struct AssembledVertex
@@ -39,6 +41,7 @@ struct VertexStageOutput
 
   daxa_f32mat4x4 view = Ptr<CameraView>(UI.task_head.camera).view;
   daxa_f32mat4x4 proj = Ptr<CameraView>(UI.task_head.camera).proj;
+  daxa_f32mat4x4 inv_view = Ptr<CameraView>(UI.task_head.camera).inv_view;
 
   daxa_f32mat4x4 mvp = mul(proj, view);
 
@@ -46,10 +49,14 @@ struct VertexStageOutput
 
   float3 position = gui_vertices[vertexID].position;
   float3 color = POINT_COLOR;
+  
+  daxa_f32vec4 origin = mul(inv_view, daxa_f32vec4(0, 0, 0, 1));
+  daxa_f32 distance = length(position - origin.xyz);
 
   output.coarseVertex.color = color;
   output.sv_position = mul(mvp, float4(position, 1.0));
-  output.pointSize = 10.0;
+  // mix between min and max size based on distance
+  output.pointSize = lerp(POINT_MIN_SIZE, POINT_MAX_SIZE, 10.0 / distance);
 
   return output;
 }

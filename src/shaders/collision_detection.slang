@@ -919,7 +919,7 @@ struct OBBvsOBBCollision {
 
 
 func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
-         Ptr<SimConfig> sim_config, Ptr<Manifold> collisions,
+         Ptr<SimConfig> sim_config, SimConfig previous_sim_config, Ptr<Manifold> collisions,
          Ptr<Manifold> old_collisions) -> void
 {
 #if defined(BB_DEBUG)
@@ -951,7 +951,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
       if(warm_starting) {
         Manifold old_manifold;
-        if(find_old_collision(rigid_body_index, i, sim_config->g_c_info_old.collision_count, old_collisions, old_manifold))
+        if(find_old_collision(rigid_body_index, i, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold))
         {
           // printf("Found old collision %d %d\n", rigid_body_index, i);
           manifold.update(old_manifold);
