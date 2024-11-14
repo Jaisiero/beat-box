@@ -34,7 +34,7 @@ struct StatusManager
     *gpu->device.buffer_host_address_as<DispatchBuffer>(dispatch_buffer).value() = DispatchBuffer(daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u));
 
     // Link resources
-    accel_struct_mngr->update_TLAS_resources(dispatch_buffer, rigid_body_manager->get_collision_buffer(), rigid_body_manager->sim_config_host_buffer);
+    accel_struct_mngr->update_TLAS_resources(dispatch_buffer);
 
     rigid_body_manager->update_resources(dispatch_buffer, accel_struct_mngr->get_rigid_body_buffer(), accel_struct_mngr->primitive_buffer, accel_struct_mngr->get_points_buffer());
 
@@ -120,6 +120,24 @@ struct StatusManager
     gui_enabled = !gui_enabled;
   }
 
+  bool is_advection()
+  {
+    return advection;
+  }
+
+  void switch_advection()
+  {
+    advection = !advection;
+    if(advection)
+    {
+      rigid_body_manager->set_sim_flags(SimFlag::ADVECTION);
+    }
+    else
+    {
+      rigid_body_manager->clear_sim_flags(SimFlag::ADVECTION);
+    }
+  }
+
 private:
   // Gpu context reference
   std::shared_ptr<GPUcontext> gpu;
@@ -133,10 +151,12 @@ private:
   bool simulating = true;
   // update simulation buffer
   bool update_sim_buffer = false;
-  // double buffering counter
-  daxa_u32 double_buffering_counter = 0;
   // flag for gui
   bool gui_enabled = true;
+  // flag for advection
+  bool advection = true;
+  // double buffering counter
+  daxa_u32 double_buffering_counter = 0;
   // frame index
   daxa_u32 frame_index = 0;
   // Dispatch buffer

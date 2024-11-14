@@ -72,7 +72,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .rigid_body_count = 0,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
-      .flags = SimFlag::NO_SIM_FLAG,
+      .flags = sim_flags,
       .g_c_info = GlobalCollisionInfo{
           .collision_count = 0,
           .collision_point_count = 0
@@ -339,6 +339,14 @@ void RigidBodyManager::destroy()
   initialized = false;
 }
 
+bool RigidBodyManager::is_dirty(){
+  return sim_flag_dirty[renderer_manager->get_frame_index()];
+}
+
+void RigidBodyManager::clean_dirty(){
+  sim_flag_dirty[renderer_manager->get_frame_index()] = false;
+}
+
 bool RigidBodyManager::simulate()
 {
   if (!initialized)
@@ -380,7 +388,7 @@ bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count)
       .rigid_body_count = rigid_body_count,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
-      .flags = SimFlag::NO_SIM_FLAG,
+      .flags = sim_flags,
       .g_c_info = GlobalCollisionInfo{
           .collision_count = 0,
           .collision_point_count = 0,

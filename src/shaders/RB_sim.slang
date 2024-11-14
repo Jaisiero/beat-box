@@ -74,7 +74,10 @@
   Ptr<RigidBody> r =
       Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[pixel_i.x]);
 
-  r->advect(sim_config);
+  if(sim_config->flags & SimFlag::ADVECTION)
+  {
+    r->advect(sim_config);
+  }
 
   // printf("rigid body %d position %f %f %f velocity %f %f %f omega %f %f %f\n", pixel_i.x, r->position.x, r->position.y, r->position.z, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
 }

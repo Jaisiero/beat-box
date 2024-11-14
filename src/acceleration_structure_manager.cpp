@@ -461,7 +461,7 @@ bool AccelerationStructureManager::update()
     return ((operand + (granularity - 1)) & ~(granularity - 1));
   };
 
-  auto sim_config = device.buffer_host_address_as<SimConfig>(sim_host_buffer).value();
+  auto sim_config = device.buffer_host_address_as<SimConfig>(rigid_body_manager->get_sim_config_host_buffer()).value();
 
   daxa_u32 total_instances = current_rigid_body_count;
 
@@ -582,7 +582,7 @@ bool AccelerationStructureManager::update()
   return true;
 }
 
-bool AccelerationStructureManager::update_TLAS_resources(daxa::BufferId dispatch_buffer, daxa::BufferId collisions, daxa::BufferId sim_config_host_buffer)
+bool AccelerationStructureManager::update_TLAS_resources(daxa::BufferId dispatch_buffer)
 {
   if (!initialized)
   {
@@ -590,8 +590,6 @@ bool AccelerationStructureManager::update_TLAS_resources(daxa::BufferId dispatch
   }
 
   task_dispatch_buffer.set_buffers({.buffers = std::array{dispatch_buffer}});
-
-  sim_host_buffer = sim_config_host_buffer;
 
   return initialized;
 }
@@ -804,7 +802,7 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
-        auto sim_config = device.buffer_host_address_as<SimConfig>(sim_host_buffer).value();
+        auto sim_config = device.buffer_host_address_as<SimConfig>(rigid_body_manager->get_sim_config_host_buffer()).value();
         auto current_frame_index = renderer_manager->get_frame_index();
         auto previous_frame_index = renderer_manager->get_previous_frame_index();
 

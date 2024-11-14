@@ -127,9 +127,6 @@ struct AccelerationStructureManager
   daxa::TaskBuffer task_blas_instance_data{{.name = "blas_instance_data"}};
   daxa::TaskBuffer task_collisions{{.name = "RB_collisions"}};
 
-  // TODO: is this the right way to do this?
-  daxa::BufferId sim_host_buffer;
-
   explicit AccelerationStructureManager(daxa::Device &device, std::shared_ptr<TaskManager> task_manager);
   ~AccelerationStructureManager();
 
@@ -147,7 +144,7 @@ struct AccelerationStructureManager
   void build_AS();
   bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives);
   void update_TLAS();
-  bool update_TLAS_resources(daxa::BufferId dispatch_buffer, daxa::BufferId collisions, daxa::BufferId sim_config_host_buffer);
+  bool update_TLAS_resources(daxa::BufferId dispatch_buffer);
   void update_AS_buffers();
 private:
   bool update();

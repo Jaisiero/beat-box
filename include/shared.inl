@@ -80,6 +80,7 @@ enum SimFlag : daxa_u32
   ACCUM_IMPULSE = 1 << 0,
   FRICTION = 1 << 1,
   WARM_STARTING = 1 << 2,
+  ADVECTION = 1 << 3,
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 SimFlag  operator|(SimFlag a, SimFlag b)
@@ -102,6 +103,11 @@ void operator&=(inout SimFlag a, SimFlag b)
     a = a & b;
 }
 #elif defined(__cplusplus)
+inline SimFlag operator~(SimFlag a)
+{
+    return SimFlag(~(daxa_u32)a);
+}
+
 inline SimFlag operator|(SimFlag a, SimFlag b)
 {
     return SimFlag((daxa_u32)a | (daxa_u32)b);
@@ -110,6 +116,16 @@ inline SimFlag operator|(SimFlag a, SimFlag b)
 inline void operator|=(SimFlag &a, SimFlag b)
 {
     a = a | b;
+}
+
+inline SimFlag operator&(SimFlag a, SimFlag b)
+{
+    return SimFlag((daxa_u32)a & (daxa_u32)b);
+}
+
+inline void operator&=(SimFlag &a, SimFlag b)
+{
+    a = a & b;
 }
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 

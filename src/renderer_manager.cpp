@@ -104,6 +104,11 @@ void RendererManager::render()
   {
     // Update the GUI
     gui_manager->update();
+
+    if(rigid_body_manager->is_dirty()) {
+      rigid_body_manager->clean_dirty();
+      rigid_body_manager->update_sim(scene_manager->get_rigid_body_count());
+    }
     
     // Simulate rigid bodies
     if(status_manager->is_simulating()) {
