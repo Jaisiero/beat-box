@@ -107,10 +107,14 @@ const auto entry_update_acceleration_structures = "entry_update_acceleration_str
 const auto AS_update_pipeline_name = "Update Acceleration Structures";
 
 const auto GUI_shader_file_string = "GUI.slang";
-// broad phase
+// GUI points
 const auto GUI_vertex = "entry_vertex";
 const auto GUI_fragment = "entry_fragment";
 const auto GUI_pipeline_name = "GUI Pipeline";
+// GUI lines
+const auto GUI_line_vertex = "entry_line_vertex";
+const auto GUI_line_fragment = "entry_line_fragment";
+const auto GUI_line_pipeline_name = "GUI Line Pipeline";
 
 struct MainRayTracingPipeline
 {
@@ -383,6 +387,36 @@ struct UIPipeline
         .raster = {.primitive_topology = daxa::PrimitiveTopology::POINT_LIST},
         .push_constant_size = sizeof(GUIPushConstants),
         .name = GUI_pipeline_name,
+    };
+};
+
+struct UILinePipeline
+{
+    daxa::ShaderCompileInfo vertex_shader = daxa::ShaderCompileInfo{
+        .source = daxa::ShaderFile{GUI_shader_file_string},
+        .compile_options = {
+            .entry_point = GUI_line_vertex,
+        },
+    };
+    
+    daxa::ShaderCompileInfo fragment_shader = daxa::ShaderCompileInfo{
+        .source = daxa::ShaderFile{GUI_shader_file_string},
+        .compile_options = {
+            .entry_point = GUI_line_fragment,
+        },
+    };
+    
+    daxa::RasterPipelineCompileInfo info = {
+        .vertex_shader_info = vertex_shader,
+        .fragment_shader_info = fragment_shader,
+        .color_attachments = {
+            daxa::RenderAttachment{
+                .format = daxa::Format::R8G8B8A8_UNORM,
+            },
+        },
+        .raster = {.primitive_topology = daxa::PrimitiveTopology::LINE_LIST, .line_width = 5.0f},
+        .push_constant_size = sizeof(GUILinePushConstants),
+        .name = GUI_line_pipeline_name,
     };
 };
 

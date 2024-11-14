@@ -273,6 +273,17 @@ struct GUIPushConstants
   DAXA_TH_BLOB(GUITaskHead, task_head)
 };
 
+DAXA_DECL_TASK_HEAD_BEGIN(GUILineTaskHead)
+DAXA_TH_IMAGE(COLOR_ATTACHMENT, REGULAR_2D, render_target)
+DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(CameraView), camera)
+DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertex), vertex_buffer)
+DAXA_DECL_TASK_HEAD_END
+
+struct GUILinePushConstants
+{
+  DAXA_TH_BLOB(GUILineTaskHead, task_head)
+};
+
 static const daxa_f32 T_MIN = 1e-3f;
 static const daxa_f32 T_MAX = 1e9f;
 static const daxa_f32 PI = 3.14159265359f;
@@ -434,6 +445,7 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), collisions)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), point_aabbs)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertex), vertex_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertex), line_vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 struct CreatePointsPushConstants

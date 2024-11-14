@@ -205,6 +205,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                       daxa::attachment_view(CreatePointsTaskHead::AT.collisions, task_collisions),
                       daxa::attachment_view(CreatePointsTaskHead::AT.point_aabbs, task_points),
                       daxa::attachment_view(CreatePointsTaskHead::AT.vertex_buffer, gui->task_vertex_buffer),
+                      daxa::attachment_view(CreatePointsTaskHead::AT.line_vertex_buffer, gui->task_line_vertex_buffer),
                   },
                   user_callback_CP);
 
@@ -226,7 +227,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                },
                user_callback_update);
 
-  std::array<daxa::TaskBuffer, 10> buffers = {
+  std::array<daxa::TaskBuffer, 11> buffers = {
       task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -237,6 +238,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_old_collisions,
       task_points,
       gui->task_vertex_buffer,
+      gui->task_line_vertex_buffer,
   };
 
   RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});

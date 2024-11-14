@@ -12,12 +12,11 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
 
   auto ui_pipeline = UIPipeline{};
   ui_pipeline.info.color_attachments.at(0).format = gpu->swapchain.get_format();
-
   gui_pipeline = task_manager->create_raster(ui_pipeline.info);
 
   for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
     vertex_buffer[f] = gpu->device.create_buffer({
-      .size = sizeof(daxa_f32vec2) * MAX_VERTEX_COUNT,
+      .size = sizeof(daxa_f32vec3) * MAX_VERTEX_COUNT,
       .name = "GUI vertex buffer " + std::to_string(f),
     });
 
@@ -31,6 +30,30 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
       daxa::attachment_view(GUITaskHead::AT.vertex_buffer, task_vertex_buffer),
     },
     .gui_pipeline = gui_pipeline,
+    .rigid_body_manager = rigid_body_manager,
+    .status_manager = status,
+  };
+
+  auto ui_line_pipeline = UILinePipeline{};
+  ui_line_pipeline.info.color_attachments.at(0).format = gpu->swapchain.get_format();
+  gui_line_pipeline = task_manager->create_raster(ui_line_pipeline.info);
+
+  for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
+    vertex_line_buffer[f] = gpu->device.create_buffer({
+      .size = sizeof(daxa_f32vec3) * MAX_VERTEX_COUNT,
+      .name = "GUI line vertex buffer " + std::to_string(f),
+    });
+
+  task_line_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[0]}});
+  task_line_previous_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[1]}});
+
+  gui_line_task_info = GUILineDrawTask{
+    .views = std::array{
+      daxa::attachment_view(GUILineTaskHead::AT.render_target, renderer_manager->task_swapchain_image),
+      daxa::attachment_view(GUILineTaskHead::AT.camera, renderer_manager->task_camera_buffer),
+      daxa::attachment_view(GUILineTaskHead::AT.vertex_buffer, task_line_vertex_buffer),
+    },
+    .gui_pipeline = gui_line_pipeline,
     .rigid_body_manager = rigid_body_manager,
     .status_manager = status,
   };
@@ -54,9 +77,27 @@ daxa::BufferId GUIManager::get_previous_vertex_buffer()
   return vertex_buffer[renderer_manager->get_previous_frame_index()];
 }
 
+daxa::BufferId GUIManager::get_line_vertex_buffer()
+{
+  if(!initialized) {
+    return {};
+  }
+  return vertex_line_buffer[renderer_manager->get_frame_index()];
+}
+
+daxa::BufferId GUIManager::get_line_previous_vertex_buffer()
+{
+  if(!initialized) {
+    return {};
+  }
+  return vertex_line_buffer[renderer_manager->get_previous_frame_index()];
+}
+
 void GUIManager::update_buffers() {
   task_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[renderer_manager->get_frame_index()]}});
   task_previous_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[renderer_manager->get_previous_frame_index()]}});
+  task_line_vertex_buffer.set_buffers({.buffers = std::array{vertex_line_buffer[renderer_manager->get_frame_index()]}});
+  task_line_previous_vertex_buffer.set_buffers({.buffers = std::array{vertex_line_buffer[renderer_manager->get_previous_frame_index()]}});
 }
 
 BB_NAMESPACE_END

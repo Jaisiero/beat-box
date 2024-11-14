@@ -42,7 +42,8 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
               user_callback);
   
 
-  std::array<daxa::TaskBuffer, 5> buffers = {task_camera_buffer, task_rigid_bodies, task_aabbs, task_points, gui_manager->task_vertex_buffer};
+  std::array<daxa::TaskBuffer, 6> buffers = {task_camera_buffer, task_rigid_bodies, task_aabbs, task_points, gui_manager->task_vertex_buffer,
+  gui_manager->task_line_vertex_buffer};
 
   std::array<daxa::TaskImage, 1> images = {task_swapchain_image};
 
@@ -52,6 +53,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
 
   RT_TG = task_manager->create_task_graph(RT_TG_name, std::span<TTask>(tasks), buffers, images, {}, tlases, true);
 
+  RT_TG.add_task(gui_manager->gui_line_task_info);
   RT_TG.add_task(gui_manager->gui_task_info);
 
   RT_TG.submit();

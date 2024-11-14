@@ -924,6 +924,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
 {
 #if defined(BB_DEBUG)
   r->clear_flag(RigidBodyFlag::COLLIDING);
+  r->face_collided = 0u;
 #endif // BB_DEBUG
   for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {

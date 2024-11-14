@@ -176,6 +176,7 @@
   InterlockedAdd(sim_config->g_c_info.collision_point_count, m.contact_count, index);
 
   var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
+  var line_vertex_buffer = Ptr<GUIVertex>(CP.task_head.line_vertex_buffer);
 
   for(int i = 0; i < m.contact_count; i++)
   {
@@ -185,6 +186,9 @@
     aabb->maximum = m.contacts[i].position + daxa_f32vec3(POINT_SIZE, POINT_SIZE, POINT_SIZE);
 
     vertex_buffer[current_index].position = m.contacts[i].position;
+
+    line_vertex_buffer[current_index*2].position = m.contacts[i].position;
+    line_vertex_buffer[current_index*2+1].position = m.contacts[i].position + m.normal * 0.5f;
   }
 }
 
