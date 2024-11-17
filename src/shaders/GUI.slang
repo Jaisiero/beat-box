@@ -2,6 +2,7 @@
 
 [[vk::push_constant]] GUIPushConstants UI;
 [[vk::push_constant]] GUILinePushConstants UIL;
+[[vk::push_constant]] GUIAxesPushConstants UIA;
 
 static const daxa_f32vec3 POINT_COLOR = daxa_f32vec3(0.5, 0.5, 0.5);
 static const daxa_f32 POINT_MIN_SIZE = 2.0;
@@ -106,6 +107,43 @@ struct VertexLineStageOutput
 
 // Fragment Shader
 [shader("fragment")] float4 entry_line_fragment(
+  CoarseVertex coarse_vertex : CoarseVertex) : SV_Target
+{
+  float3 color = coarse_vertex.color;
+
+  return float4(color, 1.0);
+}
+
+
+static const daxa_f32vec3 AXIS_X_COLOR = daxa_f32vec3(1.0, 0.0, 0.0);
+static const daxa_f32vec3 AXIS_Y_COLOR = daxa_f32vec3(0.0, 1.0, 0.0);
+static const daxa_f32vec3 AXIS_Z_COLOR = daxa_f32vec3(0.0, 0.0, 1.0);
+
+// Vertex  Shader
+[shader("vertex")] VertexLineStageOutput entry_axes_vertex(
+    uint vertexID : SV_VertexID  // Current vertex index
+)
+{
+  VertexLineStageOutput output;
+
+  daxa_f32mat4x4 view = Ptr<CameraView>(UIA.task_head.camera).view;
+  daxa_f32mat4x4 proj = Ptr<CameraView>(UIA.task_head.camera).proj;
+
+  daxa_f32mat4x4 mvp = mul(proj, view);
+
+  Ptr<GUIVertex> gui_vertices = Ptr<GUIVertex>(UIA.task_head.vertex_buffer);
+
+  float3 position = gui_vertices[vertexID].position;
+  float3 color = vertexID % 6 == 0 || vertexID % 6 == 1 ? AXIS_X_COLOR : vertexID % 6 == 2 || vertexID % 6 == 3 ? AXIS_Y_COLOR : AXIS_Z_COLOR;
+
+  output.coarse_vertex.color = color;
+  output.sv_position = mul(mvp, float4(position, 1.0));
+
+  return output;
+}
+
+// Fragment Shader
+[shader("fragment")] float4 entry_axes_fragment(
   CoarseVertex coarse_vertex : CoarseVertex) : SV_Target
 {
   float3 color = coarse_vertex.color;

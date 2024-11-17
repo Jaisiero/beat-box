@@ -90,7 +90,7 @@ private:
   // Acceleration Structure manager reference
   std::shared_ptr<AccelerationStructureManager> accel_struct_mngr;
   // Simulation flags
-  SimFlag sim_flags = SimFlag::ADVECTION;
+  SimFlag sim_flags = SimFlag::ADVECTION | SimFlag::DEBUG_INFO;
   // simulating flag update 
   bool sim_flag_dirty[DOUBLE_BUFFERING] = {};
 

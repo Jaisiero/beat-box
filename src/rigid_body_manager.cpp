@@ -212,7 +212,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   auto user_callback_update = [this](daxa::TaskInterface ti, auto &self)
   {
     ti.recorder.set_pipeline(*update_pipeline);
-    ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.push_constant(RigidBodyUpdatePushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyUpdateTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
   };
 
@@ -220,14 +220,15 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // Instantiate the task using the template class
   TTaskUpdate task_update(std::array{
-                   daxa::attachment_view(RigidBodyUpdateTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
-                   daxa::attachment_view(RigidBodyUpdateTaskHead::AT.sim_config, task_sim_config),
-                   daxa::attachment_view(RigidBodyUpdateTaskHead::AT.rigid_bodies, task_rigid_bodies),
-                  daxa::attachment_view(RigidBodyUpdateTaskHead::AT.rigid_bodies_update, task_next_rigid_bodies),
-               },
-               user_callback_update);
+                              daxa::attachment_view(RigidBodyUpdateTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                              daxa::attachment_view(RigidBodyUpdateTaskHead::AT.sim_config, task_sim_config),
+                              daxa::attachment_view(RigidBodyUpdateTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                              daxa::attachment_view(RigidBodyUpdateTaskHead::AT.rigid_bodies_update, task_next_rigid_bodies),
+                              daxa::attachment_view(RigidBodyUpdateTaskHead::AT.axes_vertex_buffer, gui->task_axes_vertex_buffer),
+                          },
+                          user_callback_update);
 
-  std::array<daxa::TaskBuffer, 11> buffers = {
+  std::array<daxa::TaskBuffer, 12> buffers = {
       task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -239,6 +240,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_points,
       gui->task_vertex_buffer,
       gui->task_line_vertex_buffer,
+      gui->task_axes_vertex_buffer,
   };
 
   RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});

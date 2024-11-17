@@ -30,7 +30,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   using TTask = TaskTemplate<RayTracingTaskHead::Task, decltype(user_callback)>;
 
   // Instantiate the task using the template class
-  TTask task1(std::array{
+  TTask task_RT(std::array{
                   daxa::attachment_view(RayTracingTaskHead::AT.camera, task_camera_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.swapchain, task_swapchain_image),
                   daxa::attachment_view(RayTracingTaskHead::AT.tlas, task_tlas),
@@ -42,17 +42,17 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
               user_callback);
   
 
-  std::array<daxa::TaskBuffer, 6> buffers = {task_camera_buffer, task_rigid_bodies, task_aabbs, task_points, gui_manager->task_vertex_buffer,
-  gui_manager->task_line_vertex_buffer};
+  std::array<daxa::TaskBuffer, 7> buffers = {task_camera_buffer, task_rigid_bodies, task_aabbs, task_points, gui_manager->task_vertex_buffer,
+  gui_manager->task_line_vertex_buffer, gui_manager->task_axes_vertex_buffer};
 
   std::array<daxa::TaskImage, 1> images = {task_swapchain_image};
 
   std::array<daxa::TaskTlas, 1> tlases = {task_tlas};
 
-  std::array<TTask, 1> tasks = {task1};
+  RT_TG = task_manager->create_task_graph(RT_TG_name, buffers, images, {}, tlases, true);
 
-  RT_TG = task_manager->create_task_graph(RT_TG_name, std::span<TTask>(tasks), buffers, images, {}, tlases, true);
-
+  RT_TG.add_task(task_RT);
+  RT_TG.add_task(gui_manager->gui_axes_task_info);
   RT_TG.add_task(gui_manager->gui_line_task_info);
   RT_TG.add_task(gui_manager->gui_task_info);
 

@@ -74,7 +74,7 @@
   Ptr<RigidBody> r =
       Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[pixel_i.x]);
 
-  if(sim_config->flags & SimFlag::ADVECTION)
+  if(sim_config->has_flag(SimFlag::ADVECTION))
   {
     r->advect(sim_config);
   }
@@ -160,6 +160,9 @@
   }
 }
 
+const static daxa_u32 LINE_POINT_COUNT = 2;
+const static daxa_f32 LINE_SIZE = 0.5f;
+
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_create_contact_points(uint3 pixel_i : SV_DispatchThreadID)
@@ -181,19 +184,26 @@
   var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
   var line_vertex_buffer = Ptr<GUIVertex>(CP.task_head.line_vertex_buffer);
 
-  for(int i = 0; i < m.contact_count; i++)
+  if(sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
-    daxa_u32 current_index = index + i;
-    Ptr<Aabb> aabb = Ptr<Aabb>(&CP.task_head.point_aabbs[current_index]);
-    aabb->minimum = m.contacts[i].position + daxa_f32vec3(-POINT_SIZE, -POINT_SIZE, -POINT_SIZE);
-    aabb->maximum = m.contacts[i].position + daxa_f32vec3(POINT_SIZE, POINT_SIZE, POINT_SIZE);
+    for(int i = 0; i < m.contact_count; i++)
+    {
+      daxa_u32 current_index = index + i;
+      Ptr<Aabb> aabb = Ptr<Aabb>(&CP.task_head.point_aabbs[current_index]);
+      aabb->minimum = m.contacts[i].position + daxa_f32vec3(-POINT_SIZE, -POINT_SIZE, -POINT_SIZE);
+      aabb->maximum = m.contacts[i].position + daxa_f32vec3(POINT_SIZE, POINT_SIZE, POINT_SIZE);
+      if(sim_config->has_flag(SimFlag::DEBUG_INFO))
+      {
+        vertex_buffer[current_index].position = m.contacts[i].position;
 
-    vertex_buffer[current_index].position = m.contacts[i].position;
-
-    line_vertex_buffer[current_index*2].position = m.contacts[i].position;
-    line_vertex_buffer[current_index*2+1].position = m.contacts[i].position + m.normal * 0.5f;
+        line_vertex_buffer[current_index*LINE_POINT_COUNT].position = m.contacts[i].position;
+        line_vertex_buffer[current_index*LINE_POINT_COUNT+1].position = m.contacts[i].position + m.normal * LINE_SIZE;
+      }
+    }
   }
 }
+
+const static daxa_u32 AXES_POINT_COUNT = 6;
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] 
@@ -207,10 +217,12 @@
     return;
   }
 
+  daxa_u32 index = pixel_i.x;
+
   Ptr<RigidBody> r =
-      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies[pixel_i.x]);
+      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies[index]);
   Ptr<RigidBody> r_copy =
-      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies_update[pixel_i.x]);
+      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies_update[index]);
 
   r_copy->position = r->position;
   r_copy->rotation = r->rotation;
@@ -220,4 +232,24 @@
 #if defined(BB_DEBUG)
   r_copy->face_collided = r->face_collided;
 #endif // BB_DEBUG
+
+  if(sim_config->has_flag(SimFlag::DEBUG_INFO))
+  {
+    daxa_f32vec3 _min = r->minimum;
+    daxa_f32vec3 _max = r->maximum;
+    daxa_f32vec3 center = (_min + _max) * 0.5f;
+    var axes_vertex_buffer = Ptr<GUIVertex>(RB_update.task_head.axes_vertex_buffer);
+    let x_axis = r->rotate_vector(daxa_f32vec3(1.0f, 0.0f, 0.0f));
+    let y_axis = r->rotate_vector(daxa_f32vec3(0.0f, 1.0f, 0.0f));
+    let z_axis = r->rotate_vector(daxa_f32vec3(0.0f, 0.0f, 1.0f));
+
+    center = r->object_to_world(center);
+
+    axes_vertex_buffer[index*AXES_POINT_COUNT].position = center;
+    axes_vertex_buffer[index*AXES_POINT_COUNT+1].position = center + x_axis;
+    axes_vertex_buffer[index*AXES_POINT_COUNT+2].position = center;
+    axes_vertex_buffer[index*AXES_POINT_COUNT+3].position = center + y_axis;
+    axes_vertex_buffer[index*AXES_POINT_COUNT+4].position = center;
+    axes_vertex_buffer[index*AXES_POINT_COUNT+5].position = center + z_axis;
+  }
 }

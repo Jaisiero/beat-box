@@ -791,14 +791,16 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
 {
  daxa::InlineTaskInfo task0({
       .attachments = {
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_sim_config),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_old_sim_config),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_previous_points_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_points_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, gui_manager->task_vertex_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, gui_manager->task_previous_vertex_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, gui_manager->task_line_vertex_buffer),
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, gui_manager->task_line_previous_vertex_buffer),
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_sim_config),
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_old_sim_config),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, gui_manager->task_previous_line_vertex_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, gui_manager->task_axes_vertex_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, gui_manager->task_previous_axes_vertex_buffer),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
@@ -831,8 +833,16 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
         if(line_count > 0) {
           ti.recorder.copy_buffer_to_buffer({
               .src_buffer = gui_manager->get_line_vertex_buffer(),
-              .dst_buffer = gui_manager->get_line_previous_vertex_buffer(),
+              .dst_buffer = gui_manager->get_previous_line_vertex_buffer(),
               .size = line_count * sizeof(daxa_f32vec3),
+          });
+        }
+        auto axes_count = sim_config->rigid_body_count * 6;
+        if(axes_count > 0) {
+          ti.recorder.copy_buffer_to_buffer({
+              .src_buffer = gui_manager->get_axes_vertex_buffer(),
+              .dst_buffer = gui_manager->get_previous_axes_vertex_buffer(),
+              .size = axes_count * sizeof(daxa_f32vec3),
           });
         }
       },
@@ -843,15 +853,17 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
       task0,
   };
 
-  std::array<daxa::TaskBuffer, 8> buffers = {
+  std::array<daxa::TaskBuffer, 10> buffers = {
       task_points_aabb_buffer,
       task_previous_points_aabb_buffer,
       gui_manager->task_previous_vertex_buffer,
       gui_manager->task_vertex_buffer,
       rigid_body_manager->task_old_sim_config,
       rigid_body_manager->task_sim_config,
-      gui_manager->task_line_previous_vertex_buffer,
+      gui_manager->task_previous_line_vertex_buffer,
       gui_manager->task_line_vertex_buffer,
+      gui_manager->task_previous_axes_vertex_buffer,
+      gui_manager->task_axes_vertex_buffer,
   };
 
   AS_buffers_TG = task_manager->create_task_graph("Update Acceleration Structure Buffers", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});

@@ -81,6 +81,7 @@ enum SimFlag : daxa_u32
   FRICTION = 1 << 1,
   WARM_STARTING = 1 << 2,
   ADVECTION = 1 << 3,
+  DEBUG_INFO = 1 << 4,
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 SimFlag  operator|(SimFlag a, SimFlag b)
@@ -300,6 +301,17 @@ struct GUILinePushConstants
   DAXA_TH_BLOB(GUILineTaskHead, task_head)
 };
 
+DAXA_DECL_TASK_HEAD_BEGIN(GUIAxesTaskHead)
+DAXA_TH_IMAGE(COLOR_ATTACHMENT, REGULAR_2D, render_target)
+DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(CameraView), camera)
+DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertex), vertex_buffer)
+DAXA_DECL_TASK_HEAD_END
+
+struct GUIAxesPushConstants
+{
+  DAXA_TH_BLOB(GUIAxesTaskHead, task_head)
+};
+
 static const daxa_f32 T_MIN = 1e-3f;
 static const daxa_f32 T_MAX = 1e9f;
 static const daxa_f32 PI = 3.14159265359f;
@@ -419,6 +431,7 @@ DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies_update)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertex), axes_vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 
