@@ -63,12 +63,12 @@ struct RendererManager
   daxa_u32 get_previous_frame_index();
   daxa_u32 get_frame_index();
   daxa_u32 get_next_frame_index();
-
-private:
-  bool execute();
   bool is_gui_enabled() {
     return status_manager->is_gui_enabled();
   }
+
+private:
+  bool execute();
 };
 
 BB_NAMESPACE_END

@@ -821,29 +821,33 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
               .dst_buffer = points_buffer[previous_frame_index],
               .size = point_count * sizeof(Aabb),
           });
-
-          ti.recorder.copy_buffer_to_buffer({
-              .src_buffer = gui_manager->get_vertex_buffer(),
-              .dst_buffer = gui_manager->get_previous_vertex_buffer(),
-              .size = point_count * sizeof(daxa_f32vec3),
-          });
         }
 
-        auto line_count = sim_config->rigid_body_count * 2;
-        if(line_count > 0) {
-          ti.recorder.copy_buffer_to_buffer({
-              .src_buffer = gui_manager->get_line_vertex_buffer(),
-              .dst_buffer = gui_manager->get_previous_line_vertex_buffer(),
-              .size = line_count * sizeof(daxa_f32vec3),
-          });
-        }
-        auto axes_count = sim_config->rigid_body_count * 6;
-        if(axes_count > 0) {
-          ti.recorder.copy_buffer_to_buffer({
-              .src_buffer = gui_manager->get_axes_vertex_buffer(),
-              .dst_buffer = gui_manager->get_previous_axes_vertex_buffer(),
-              .size = axes_count * sizeof(daxa_f32vec3),
-          });
+        if(renderer_manager->is_gui_enabled()) {
+          if(point_count > 0) {
+            ti.recorder.copy_buffer_to_buffer({
+                .src_buffer = gui_manager->get_vertex_buffer(),
+                .dst_buffer = gui_manager->get_previous_vertex_buffer(),
+                .size = point_count * sizeof(daxa_f32vec3),
+            });
+          }
+
+          auto line_count = sim_config->rigid_body_count * 2;
+          if(line_count > 0) {
+            ti.recorder.copy_buffer_to_buffer({
+                .src_buffer = gui_manager->get_line_vertex_buffer(),
+                .dst_buffer = gui_manager->get_previous_line_vertex_buffer(),
+                .size = line_count * sizeof(daxa_f32vec3),
+            });
+          }
+          auto axes_count = sim_config->rigid_body_count * 6;
+          if(axes_count > 0) {
+            ti.recorder.copy_buffer_to_buffer({
+                .src_buffer = gui_manager->get_axes_vertex_buffer(),
+                .dst_buffer = gui_manager->get_previous_axes_vertex_buffer(),
+                .size = axes_count * sizeof(daxa_f32vec3),
+            });
+          }
         }
       },
       .name = "copy points",

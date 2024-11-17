@@ -118,6 +118,14 @@ struct StatusManager
   void switch_gui_enabled()
   {
     gui_enabled = !gui_enabled;
+    if(gui_enabled)
+    {
+      rigid_body_manager->set_sim_flags(SimFlag::DEBUG_INFO);
+    }
+    else
+    {
+      rigid_body_manager->clear_sim_flags(SimFlag::DEBUG_INFO);
+    }
   }
 
   bool is_advection()

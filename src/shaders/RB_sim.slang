@@ -184,21 +184,18 @@ const static daxa_f32 LINE_SIZE = 0.5f;
   var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
   var line_vertex_buffer = Ptr<GUIVertex>(CP.task_head.line_vertex_buffer);
 
-  if(sim_config->has_flag(SimFlag::DEBUG_INFO))
+  for(int i = 0; i < m.contact_count; i++)
   {
-    for(int i = 0; i < m.contact_count; i++)
+    daxa_u32 current_index = index + i;
+    Ptr<Aabb> aabb = Ptr<Aabb>(&CP.task_head.point_aabbs[current_index]);
+    aabb->minimum = m.contacts[i].position + daxa_f32vec3(-POINT_SIZE, -POINT_SIZE, -POINT_SIZE);
+    aabb->maximum = m.contacts[i].position + daxa_f32vec3(POINT_SIZE, POINT_SIZE, POINT_SIZE);
+    if(sim_config->has_flag(SimFlag::DEBUG_INFO))
     {
-      daxa_u32 current_index = index + i;
-      Ptr<Aabb> aabb = Ptr<Aabb>(&CP.task_head.point_aabbs[current_index]);
-      aabb->minimum = m.contacts[i].position + daxa_f32vec3(-POINT_SIZE, -POINT_SIZE, -POINT_SIZE);
-      aabb->maximum = m.contacts[i].position + daxa_f32vec3(POINT_SIZE, POINT_SIZE, POINT_SIZE);
-      if(sim_config->has_flag(SimFlag::DEBUG_INFO))
-      {
-        vertex_buffer[current_index].position = m.contacts[i].position;
+      vertex_buffer[current_index].position = m.contacts[i].position;
 
-        line_vertex_buffer[current_index*LINE_POINT_COUNT].position = m.contacts[i].position;
-        line_vertex_buffer[current_index*LINE_POINT_COUNT+1].position = m.contacts[i].position + m.normal * LINE_SIZE;
-      }
+      line_vertex_buffer[current_index*LINE_POINT_COUNT].position = m.contacts[i].position;
+      line_vertex_buffer[current_index*LINE_POINT_COUNT+1].position = m.contacts[i].position + m.normal * LINE_SIZE;
     }
   }
 }
