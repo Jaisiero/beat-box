@@ -78,8 +78,6 @@
   {
     r->advect(sim_config);
   }
-
-  // printf("rigid body %d position %f %f %f velocity %f %f %f omega %f %f %f\n", pixel_i.x, r->position.x, r->position.y, r->position.z, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
 }
 
 [shader("compute")]
@@ -95,7 +93,7 @@
   }
   
   // TODO: Implement parallel collision solver
-  // atomicAdd to velocity and omega
+  // atomicAdd to velocity and omega?
   for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
   {
     Manifold manifold =
@@ -134,7 +132,7 @@
   }
   
   // TODO: Implement parallel collision solver
-  // atomicAdd to velocity and omega
+  // atomicAdd to velocity and omega?
   for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
   {
     Manifold manifold =
