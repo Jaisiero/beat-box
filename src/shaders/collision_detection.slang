@@ -96,6 +96,22 @@ struct OBBvsOBBCollision {
     return false;
   }
 
+  // TODO: check if this is correct
+  static daxa_i32 get_axis_enum(daxa_u32 number) {
+    switch(number) {
+      case 0: return A_X_B_X_EDGE;
+      case 1: return A_X_B_Y_EDGE;
+      case 2: return A_X_B_Z_EDGE;
+      case 3: return A_Y_B_X_EDGE;
+      case 4: return A_Y_B_Y_EDGE;
+      case 5: return A_Y_B_Z_EDGE;
+      case 6: return A_Z_B_X_EDGE;
+      case 7: return A_Z_B_Y_EDGE;
+      case 8: return A_Z_B_Z_EDGE;
+      default: return -1;
+    }
+  }
+
 
   static void compute_incident_face(const Transform itx, const daxa_f32vec3 e, daxa_f32vec3 n, out ClipVertex incident[MAX_INCIDENT_VERTEX_COUNT], out BoxFace incident_face) {
     // Transform the incident face to local space and flip the normal because we are interested in the face of the incident box that is facing away from the reference box
@@ -226,7 +242,6 @@ struct OBBvsOBBCollision {
       axis -= (A_AXIS_NUM + 1);
     }
 
-    // TODO: check if this is correct
     daxa_f32mat3x3 r = rtx.rotation;
 
     switch(axis) {
@@ -378,6 +393,7 @@ struct OBBvsOBBCollision {
 
     for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
       in[i].v = tx.transform_transpose(incident[i].v);
+      in[i].f = FeaturePair(-1, -1, -1, -1);
     }
 
     out_count = ortographic_clip(1.0f, e.x, 0, clip_edges[0], in, in_count, out);
@@ -385,15 +401,6 @@ struct OBBvsOBBCollision {
     if(out_count == 0) {
       // DEBUGGING
       error = 10;
-      // // ClipVertex a = in[in_count - 1];
-      // for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
-      //   ClipVertex b = in[i];
-      //   daxa_f32 da = e.x - 1.0 * b.v[0];
-      //   daxa_f32 db = e.y - 1.0 * b.v[1];
-      //   out_vertices[i] = in[i];
-      //   depths[i] = da;
-      //   depths[i+MAX_INCIDENT_VERTEX_COUNT] = db;
-      // }
       return 0;
     }
 
@@ -402,15 +409,6 @@ struct OBBvsOBBCollision {
     if(in_count == 0) {
       // DEBUGGING
       error = 11; 
-      // // ClipVertex a = in[in_count - 1];
-      // for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
-      //   ClipVertex b = in[i];
-      //   daxa_f32 da = e.x - 1.0 * b.v[0];
-      //   daxa_f32 db = e.y - 1.0 * b.v[1];
-      //   out_vertices[i] = in[i];
-      //   depths[i] = da;
-      //   depths[i+MAX_INCIDENT_VERTEX_COUNT] = db;
-      // }
       return 0;
     }
 
@@ -447,46 +445,42 @@ struct OBBvsOBBCollision {
   static void support_edge(const Transform tx, const daxa_f32vec3 e, daxa_f32vec3 n, out daxa_f32vec3 CA, out daxa_f32vec3 CB) {
     n = tx.rotate_transpose(n);
     daxa_f32vec3 abs_n = abs(n);
-    daxa_f32vec3 a, b;
 
-	  // x > y
-    if(abs_n.x > abs_n.y) {
-		  // x > y > z
-      if(abs_n.y > abs_n.z) {
-        a = daxa_f32vec3(e.x, e.y, e.z);
-        b = daxa_f32vec3(e.x, e.y, -e.z);
-		  // x > z > y || z > x > y
-      } else {
-        a = daxa_f32vec3(e.x, e.y, e.z);
-        b = daxa_f32vec3(e.x, -e.y, e.z);
-      }
-	  // y > x
-    } else  {
-		  // y > x > z
-      if(abs_n.x > abs_n.z) {
-        a = daxa_f32vec3(e.x, e.y, e.z);
-        b = daxa_f32vec3(e.x, e.y, -e.z);
-      } else {
-        a = daxa_f32vec3(e.x, e.y, e.z);
-        b = daxa_f32vec3(-e.x, e.y, e.z);
-      }
-		// z > y > x || y > z > x
+    // Dominant axis
+    int axis;
+    if (abs_n.x <= abs_n.y && abs_n.x <= abs_n.z) {
+        axis = 0; // X Axis
+    } else if (abs_n.y <= abs_n.x && abs_n.y <= abs_n.z) {
+        axis = 1; // Y Axis
+    } else {
+        axis = 2; // Z Axis
     }
 
+    // Determine the sign of the normal
+    daxa_f32vec3 v0, v1;
     daxa_f32 sign_x = c_sign(n.x);
     daxa_f32 sign_y = c_sign(n.y);
     daxa_f32 sign_z = c_sign(n.z);
 
-    a.x *= sign_x;
-    a.y *= sign_y;
-    a.z *= sign_z;
+    // Determine the support points
+    v0 = daxa_f32vec3(sign_x * e.x, sign_y * e.y, sign_z * e.z);
+    v1 = v0;
 
-    b.x *= sign_x;
-    b.y *= sign_y;
-    b.z *= sign_z;
+    // Adjust the support points based on the dominant axis
+    if (axis == 0) {
+        v0.x = e.x;
+        v1.x = -e.x;
+    } else if (axis == 1) {
+        v0.y = e.y;
+        v1.y = -e.y;
+    } else {
+        v0.z = e.z;
+        v1.z = -e.z;
+    }
 
-    CA = tx.transform(a);
-    CB = tx.transform(b);
+    // Transform the support points to world space
+    CA = tx.transform(v0);
+    CB = tx.transform(v1);
   }
 
   static void edges_contact(
@@ -501,19 +495,30 @@ struct OBBvsOBBCollision {
     daxa_f32 e = dot(DB, DB);
     daxa_f32 f = dot(DB, r);
     daxa_f32 c = dot(DA, r);
-
     daxa_f32 b = dot(DA, DB);
     daxa_f32 denom = a * e - b * b;
 
-    // If denom is zero, then the line segments are parallel
+    // If denom is zero, try finding the closest point on the segment to the other segment
     if (denom == 0.0f) {
-      CA = PA;
-      CB = PB;
-      return;
+        // Find the closest point on segment A to segment B
+        daxa_f32 t = (dot(r, DA) / a);
+        t = clamp(t, 0.0f, 1.0f);
+        CA = PA + DA * t;
+
+        // Find the closest point on segment B to segment A
+        daxa_f32vec3 s = CA - PB;
+        daxa_f32 u = (dot(s, DB) / e);
+        u = clamp(u, 0.0f, 1.0f);
+        CB = PB + DB * u;
+        return;
     }
 
     daxa_f32 TA = (b * f - c * e) / denom;
     daxa_f32 TB = (b * TA + f) / e;
+
+    // Clamp the values of TA and TB
+    TA = clamp(TA, 0.0f, 1.0f);
+    TB = clamp(TB, 0.0f, 1.0f);
 
     CA = PA + DA * TA;
     CB = PB + DB * TB;
@@ -531,7 +536,9 @@ struct OBBvsOBBCollision {
     }
   }
 
-  static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, inout Manifold manifold, out daxa_u32 obb1_faces, out daxa_u32 obb2_faces) {
+  static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, out Manifold manifold, out daxa_u32 obb1_faces, out daxa_u32 obb2_faces) {
+    manifold.contact_count = 0;
+    manifold.key = -1;
     
     obb1_faces = 0;
     obb2_faces = 0;
@@ -639,136 +646,37 @@ struct OBBvsOBBCollision {
 
     // Edge cross product axes
     if(!parallel) {
-      
-      // Edge axis checks
-      daxa_f32 rA;
-      daxa_f32 rB;
-      daxa_f32 s;
 
-      // Cross (a.x, b.x)
-      rA = e_A.y * abs_C[0][2] + e_A.z * abs_C[0][1];
-      rB = e_B.y * abs_C[2][0] + e_B.z * abs_C[1][0];
+      // Iterate over A's axes
+      for (int i = 0; i < 3; ++i)
+      {
+        // Iterate over B's axes
+        for (int j = 0; j < 3; ++j)
+        {
+          // Calculate the cross product of the axes
+          int i1 = (i + 1) % 3;
+          int i2 = (i + 2) % 3;
+          int j1 = (j + 1) % 3;
+          int j2 = (j + 2) % 3;
 
-      s = abs(t.z * C[0][1] - t.y * C[0][2]) - (rA + rB);
-      if(track_edge_axis(e_axis, 
-                         A_X_B_X_EDGE, 
-                         s, 
-                         e_max, 
-                         daxa_f32vec3(0, -C[0][2], C[0][1]), 
-                         n_e)) {
-          return false; // Separating axis found
-      }
+          // Calculate rA y rB
+          daxa_f32 rA = e_A[i1] * abs_C[i2][j] + e_A[i2] * abs_C[i1][j];
+          daxa_f32 rB = e_B[j1] * abs_C[i][j2] + e_B[j2] * abs_C[i][j1];
 
-      // Cross (a.x, b.y)
-      rA = e_A.y * abs_C[1][2] + e_A.z * abs_C[1][1];
-      rB = e_B.x * abs_C[2][0] + e_B.z * abs_C[0][0];
+          // Calculate s
+          daxa_f32 s = abs(t[i1] * C[i2][j] - t[i2] * C[i1][j]) - (rA + rB);
 
-      s = abs(t.z * C[1][1] - t.y * C[1][2]) - (rA + rB);
-      if(track_edge_axis(e_axis, 
-                         A_X_B_Y_EDGE, 
-                         s, 
-                         e_max, 
-                         daxa_f32vec3(0, -C[1][2], C[1][1]), 
-                         n_e)) {
-          return false; // Separating axis found
-      }
+          // Axis vector
+          daxa_f32vec3 axis = daxa_f32vec3(0.0f);
+          axis[i1] = -C[i1][j];
+          axis[i2] = C[i2][j];
 
-      // Cross (a.x, b.z)
-      rA = e_A.y * abs_C[2][2] + e_A.z * abs_C[2][1];
-      rB = e_B.x * abs_C[1][0] + e_B.y * abs_C[0][0];
-
-      s = abs(t.z * C[2][1] - t.y * C[2][2]) - (rA + rB);
-      if(track_edge_axis(e_axis, 
-                         A_X_B_Z_EDGE, 
-                         s, 
-                         e_max, 
-                         daxa_f32vec3(0, -C[2][2], C[2][1]), 
-                         n_e)) {
-          return false; // Separating axis found
-      }
-
-      // Cross (a.y, b.x)
-      rA = e_A.x * abs_C[0][2] + e_A.z * abs_C[0][0];
-      rB = e_B.y * abs_C[2][1] + e_B.z * abs_C[1][1];
-
-      s = abs(t.x * C[0][2] - t.z * C[0][0]) - (rA + rB);
-      if(track_edge_axis(e_axis, 
-                         A_Y_B_X_EDGE, 
-                         s, 
-                         e_max, 
-                         daxa_f32vec3(C[0][2], 0, -C[0][0]), 
-                         n_e)) {
-          return false; // Separating axis found
-      }
-
-      // Cross (a.y, b.y)
-      rA = e_A.x * abs_C[1][2] + e_A.z * abs_C[1][0];
-      rB = e_B.x * abs_C[2][1] + e_B.z * abs_C[0][1];
-
-      s = abs(t.x * C[1][2] - t.z * C[1][0]) - (rA + rB);
-      if(track_edge_axis(e_axis, 
-                         A_Y_B_Y_EDGE, 
-                         s, 
-                         e_max, 
-                         daxa_f32vec3(C[1][2], 0, -C[1][0]), 
-                         n_e)) {
-          return false; // Separating axis found
-      }
-
-      // Cross (a.y, b.z)
-      rA = e_A.x * abs_C[2][2] + e_A.z * abs_C[2][0];
-      rB = e_B.x * abs_C[1][1] + e_B.y * abs_C[0][1];
-
-      s = abs(t.x * C[2][2] - t.z * C[2][0]) - (rA + rB);
-      if(track_edge_axis(e_axis, 
-                         A_Y_B_Z_EDGE, 
-                         s, 
-                         e_max, 
-                         daxa_f32vec3(C[2][2], 0, -C[2][0]), 
-                         n_e)) {
-          return false; // Separating axis found
-      }
-
-      // Cross (a.z, b.x)
-      rA = e_A.x * abs_C[0][1] + e_A.y * abs_C[0][0];
-      rB = e_B.y * abs_C[2][2] + e_B.z * abs_C[1][2];
-
-      s = abs(t.y * C[0][0] - t.x * C[0][1]) - (rA + rB);
-      if(track_edge_axis(e_axis, 
-                         A_Z_B_X_EDGE, 
-                         s, 
-                         e_max, 
-                         daxa_f32vec3(-C[0][1], C[0][0], 0), 
-                         n_e)) {
-          return false; // Separating axis found
-      }
-
-      // Cross (a.z, b.y)
-      rA = e_A.x * abs_C[1][1] + e_A.y * abs_C[1][0];
-      rB = e_B.x * abs_C[2][2] + e_B.z * abs_C[0][2];
-
-      s = abs(t.y * C[1][0] - t.x * C[1][1]) - (rA + rB);
-      if(track_edge_axis(e_axis, 
-                         A_Z_B_Y_EDGE, 
-                         s, 
-                         e_max, 
-                         daxa_f32vec3(-C[1][1], C[1][0], 0), 
-                         n_e)) {
-          return false; // Separating axis found
-      }
-
-      // Cross (a.z, b.z)
-      rA = e_A.x * abs_C[2][1] + e_A.y * abs_C[2][0];
-      rB = e_B.x * abs_C[1][2] + e_B.y * abs_C[0][2];
-
-      s = abs(t.y * C[2][0] - t.x * C[2][1]) - (rA + rB);
-      if(track_edge_axis(e_axis, 
-                         A_Z_B_Z_EDGE, 
-                         s, 
-                         e_max, 
-                         daxa_f32vec3(-C[2][1], C[2][0], 0), 
-                         n_e)) {
-          return false; // Separating axis found
+          // Track the axis
+          if (track_edge_axis(e_axis, get_axis_enum(i * 3 + j), s, e_max, axis, n_e))
+          {
+            return false; // Separating axis found
+          }
+        }
       }
     }
 
@@ -939,15 +847,14 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     Ptr<RigidBody> r2 = Ptr<RigidBody>(&BP.task_head.rigid_bodies[i]);
 
     Manifold manifold;
-    manifold.obb1_index = rigid_body_index;
-    manifold.obb2_index = i;
-    manifold.contact_count = 0;
-    manifold.key = -1;
 
     var obb1_faces = 0u;
     var obb2_faces = 0u;
 
     let collision = OBBvsOBBCollision.collision_detection(r, r2, manifold, obb1_faces, obb2_faces);
+    
+    manifold.obb1_index = rigid_body_index;
+    manifold.obb2_index = i;
 
     // 
     if (collision)

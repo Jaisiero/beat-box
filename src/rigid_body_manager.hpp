@@ -94,7 +94,7 @@ private:
   | SimFlag::DEBUG_INFO 
   | SimFlag::FRICTION 
   | SimFlag::ACCUM_IMPULSE 
-  // | SimFlag::WARM_STARTING
+  | SimFlag::WARM_STARTING
   ;
   // simulating flag update 
   bool sim_flag_dirty[DOUBLE_BUFFERING] = {};
