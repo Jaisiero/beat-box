@@ -219,6 +219,9 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   Ptr<RigidBody> r_copy =
       Ptr<RigidBody>(&RB_update.task_head.rigid_bodies_update[index]);
 
+  // printf("Updating pos rigid body %d, pos: %f %f %f, rot: %f %f %f %f\n", index, r->position.x, r->position.y, r->position.z, r->rotation.v.x, r->rotation.v.y, r->rotation.v.z, r->rotation.w);
+  // printf("Updating vel rigid body %d, vel: %f %f %f, omega: %f %f %f\n", index, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
+
   r_copy->position = r->position;
   r_copy->rotation = r->rotation;
   r_copy->velocity = r->velocity;

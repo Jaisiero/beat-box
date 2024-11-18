@@ -80,21 +80,6 @@ extension RigidBody
     return mul(rotation_matrix, mul(inv_inertia, transpose(rotation_matrix)));
   }
 
-  daxa_f32mat3x3 cross_product_matrix(daxa_f32vec3 v)
-  {
-    return daxa_f32mat3x3(0, -v.z, v.y,
-                          v.z, 0, -v.x,
-                          -v.y, v.x, 0);
-  }
-
-  daxa_f32 get_impulse_contribution(daxa_f32vec3 position, daxa_f32vec3 normal)
-  {
-    daxa_f32mat3x3 inv_inertia = get_transformed_inertia();
-    daxa_f32mat3x3 rn = cross_product_matrix(position);
-    daxa_f32mat3x3 K = mul(rn, mul(inv_inertia, transpose(rn)));
-    return (this.inv_mass + dot(normal, mul(K, normal)));
-  }
-
   Aabb get_min_max_from_OBB()
   {
     Aabb aabb = Aabb(this.minimum, this.maximum);
@@ -110,35 +95,6 @@ extension RigidBody
     }
 
     return Aabb(minimum, maximum);
-  }
-
-  [mutating] 
-  void apply_contact(daxa_f32vec3 collision_point, daxa_f32vec3 normal) {
-    daxa_f32 friction = friction;
-    daxa_f32 restitution = restitution;
-    daxa_f32vec3 v_at_point = get_velocity_at(collision_point);
-    daxa_f32vec3 r0 = collision_point - position;
-    daxa_f32 v_normal = dot(normal, v_at_point);
-
-    daxa_f32 impulse_denom = get_impulse_contribution(r0, normal);
-    daxa_f32 J = -(1 + restitution) * v_normal / impulse_denom;
-
-    if (J > 0) {
-      daxa_f32vec3 impulse = J * normal;
-      apply_impulse(impulse, collision_point);
-
-      // Friction
-      daxa_f32vec3 v_after = get_velocity_at(collision_point);
-      daxa_f32vec3 v_tangent = v_after - dot(v_after, normal) * normal;
-      
-      if (length(v_tangent) > COLLISION_GUARD) {
-          daxa_f32vec3 tangent = normalize(v_tangent);
-          daxa_f32 j_tangent = -dot(v_after, tangent) / get_impulse_contribution(r0, tangent);
-          j_tangent = clamp(j_tangent, -friction * J, friction * J);
-          daxa_f32vec3 friction_impulse = j_tangent * tangent;
-          apply_impulse(friction_impulse, collision_point);
-      }
-    }
   }
 };
 
@@ -222,7 +178,9 @@ extension Manifold {
 
     for(daxa_u32 i = 0u; i < contact_count; i++) {
       for(daxa_u32 j = 0u; j < old_manifold.contact_count; j++) {
-        if(is_same_contact(old_manifold.contacts[j].fp, contacts[i].fp) && is_valid_contact(contacts[i].fp)) {
+        if(is_same_contact(old_manifold.contacts[j].fp, contacts[i].fp) 
+        && is_valid_contact(contacts[i].fp)
+        ) {
         // TODO: Check why -1 make system unstable
 
             contacts[i].normal_impulse = old_manifold.contacts[j].normal_impulse;
@@ -242,10 +200,7 @@ extension Manifold {
     }
   }
 
-  [mutating] void pre_step(daxa_f32 inv_dt, Ptr<RigidBody> body_a,  Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction) {
-    let k_allowed_penetration = 0.01f;
-    // let k_allowed_penetration = 0.001f;
-    let k_bias_factor = 0.2f;
+  [mutating] void pre_step(daxa_f32 inv_dt, Ptr<RigidBody> body_a,  Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_f32 k_allowed_penetration = PENETRATION_FACTOR, daxa_f32 k_bias_factor = BIAS_FACTOR) {
 
     for(daxa_u32 i = 0u; i < contact_count; i++) {
 

@@ -9,6 +9,8 @@
 static const daxa_f32 LINEAR_DAMPING = 0.1f;
 static const daxa_f32 ANGULAR_DAMPING = 0.1f;
 static const daxa_f32 POINT_SIZE = 0.01f;
+static const daxa_f32 PENETRATION_FACTOR = 0.01f;
+static const daxa_f32 BIAS_FACTOR = 0.2f;
 
 #define BB_DEBUG 1
 #if defined(BB_DEBUG) 
