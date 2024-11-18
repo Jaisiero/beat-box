@@ -439,6 +439,10 @@ struct OBBvsOBBCollision {
     return out_count;
   }
 
+  static daxa_f32 c_sign(daxa_f32 x) {
+    return x < 0.0f ? -1.0f : 1.0f;
+  }
+
 
   static void support_edge(const Transform tx, const daxa_f32vec3 e, daxa_f32vec3 n, out daxa_f32vec3 CA, out daxa_f32vec3 CB) {
     n = tx.rotate_transpose(n);
@@ -469,9 +473,9 @@ struct OBBvsOBBCollision {
 		// z > y > x || y > z > x
     }
 
-    daxa_f32 sign_x = sign(n.x);
-    daxa_f32 sign_y = sign(n.y);
-    daxa_f32 sign_z = sign(n.z);
+    daxa_f32 sign_x = c_sign(n.x);
+    daxa_f32 sign_y = c_sign(n.y);
+    daxa_f32 sign_z = c_sign(n.z);
 
     a.x *= sign_x;
     a.y *= sign_y;
@@ -547,12 +551,14 @@ struct OBBvsOBBCollision {
     daxa_f32mat3x3 C = mul(tx_A.get_inverse_rotation_matrix(), tx_B.get_rotation_matrix());
     daxa_f32mat3x3 abs_C = abs(C);
 
+    // const daxa_f32 THRESHOLD_ERROR = 0.98f;
+    const daxa_f32 THRESHOLD_ERROR = 0.9999f;
     daxa_b32 parallel = false;
     {
       // r2 to r1
       for (daxa_u32 i = 0; i < 3; i++) {
         for (daxa_u32 j = 0; j < 3; j++) {
-          if (abs_C[i][j] > 0.999f) {
+          if (abs_C[i][j] > THRESHOLD_ERROR) {
             parallel = true;
             break;
           }
@@ -637,12 +643,13 @@ struct OBBvsOBBCollision {
       // Edge axis checks
       daxa_f32 rA;
       daxa_f32 rB;
+      daxa_f32 s;
 
       // Cross (a.x, b.x)
       rA = e_A.y * abs_C[0][2] + e_A.z * abs_C[0][1];
       rB = e_B.y * abs_C[2][0] + e_B.z * abs_C[1][0];
 
-      daxa_f32 s = abs(t.z * C[0][1] - t.y * C[0][2]) - (rA + rB);
+      s = abs(t.z * C[0][1] - t.y * C[0][2]) - (rA + rB);
       if(track_edge_axis(e_axis, 
                          A_X_B_X_EDGE, 
                          s, 
