@@ -4,8 +4,7 @@ extension RigidBody
 {
   [mutating] void advect(Ptr<SimConfig> sim_config)
   {
-    integrate_velocities(sim_config->dt);
-    apply_temporal_velocity();
+    // apply_temporal_velocity();
     advance(sim_config->dt, LINEAR_DAMPING, ANGULAR_DAMPING);
     if(has_flag(RigidBodyFlag::GRAVITY)){
       apply_impulse(this.mass * daxa_f32vec3(0, sim_config->gravity, 0) *       sim_config->dt, this.position);
@@ -211,16 +210,16 @@ extension Manifold {
       daxa_f32vec3 rn1 = cross(r1, normal);
       daxa_f32vec3 rn2 = cross(r2, normal);
       daxa_f32 k_normal = body_a->inv_mass + body_b->inv_mass;
-      k_normal += dot(rn1, mul(body_a->inv_inertia, rn1));
-      k_normal += dot(rn2, mul(body_b->inv_inertia, rn2));
+      k_normal += dot(rn1, mul(body_a->get_transformed_inertia(), rn1));
+      k_normal += dot(rn2, mul(body_b->get_transformed_inertia(), rn2));
       contacts[i].normal_mass = 1.0f / k_normal;
 
       for(daxa_u32 j = 0u; j < 2; j++) {
         daxa_f32vec3 rt1 = cross(r1, tangent_vectors[j]);
         daxa_f32vec3 rt2 = cross(r2, tangent_vectors[j]);
         daxa_f32 k_tangent = body_a->inv_mass + body_b->inv_mass;
-        k_tangent += dot(rt1, mul(body_a->inv_inertia, rt1));
-        k_tangent += dot(rt2, mul(body_b->inv_inertia, rt2));
+        k_tangent += dot(rt1, mul(body_a->get_transformed_inertia(), rt1));
+        k_tangent += dot(rt2, mul(body_b->get_transformed_inertia(), rt2));
         contacts[i].tangent_mass[j] = 1.0f / k_tangent;
       }
 
@@ -239,12 +238,12 @@ extension Manifold {
 
         if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
           body_a->velocity -= P * body_a->inv_mass;
-          body_a->omega -= mul(body_a->inv_inertia, cross(r1, P));
+          body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
         } 
 
         if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
           body_b->velocity += P * body_b->inv_mass;
-          body_b->omega += mul(body_b->inv_inertia, cross(r2, P));
+          body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
         }
       }
 
@@ -295,12 +294,12 @@ extension Manifold {
 
             if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
               body_a->velocity -= tangent_impulse_vector * body_a->inv_mass;
-              body_a->omega -= mul(body_a->inv_inertia, cross(r1_to_point, tangent_impulse_vector));
+              body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1_to_point, tangent_impulse_vector));
             }
 
             if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
               body_b->velocity += tangent_impulse_vector * body_b->inv_mass;
-              body_b->omega += mul(body_b->inv_inertia, cross(r2_to_point, tangent_impulse_vector));
+              body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2_to_point, tangent_impulse_vector));
             }
           }
       }
@@ -326,12 +325,12 @@ extension Manifold {
 
       if(body_a->has_flag(RigidBodyFlag::DYNAMIC)) {
         body_a->velocity -= normal_impulse_vector * body_a->inv_mass;
-        body_a->omega -= mul(body_a->inv_inertia, cross(r1_to_point, normal_impulse_vector));
+        body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1_to_point, normal_impulse_vector));
       }
 
       if(body_b->has_flag(RigidBodyFlag::DYNAMIC)) {
         body_b->velocity += normal_impulse_vector * body_b->inv_mass;
-        body_b->omega += mul(body_b->inv_inertia, cross(r2_to_point, normal_impulse_vector));
+        body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2_to_point, normal_impulse_vector));
       }
 
     }
