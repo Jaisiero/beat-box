@@ -393,7 +393,7 @@ struct OBBvsOBBCollision {
 
     for(daxa_i32 i = 0; i < MAX_INCIDENT_VERTEX_COUNT; ++i) {
       in[i].v = tx.transform_transpose(incident[i].v);
-      in[i].f = FeaturePair(-1, -1, -1, -1);
+      in[i].f = incident[i].f;
     }
 
     out_count = ortographic_clip(1.0f, e.x, 0, clip_edges[0], in, in_count, out);
