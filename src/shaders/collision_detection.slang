@@ -559,7 +559,8 @@ struct OBBvsOBBCollision {
     daxa_f32mat3x3 abs_C = abs(C);
 
     // const daxa_f32 THRESHOLD_ERROR = 0.98f;
-    const daxa_f32 THRESHOLD_ERROR = 0.9999f;
+    // const daxa_f32 THRESHOLD_ERROR = 0.9999f;
+    const daxa_f32 THRESHOLD_ERROR = 0.9998f;
     daxa_b32 parallel = false;
     {
       // r2 to r1

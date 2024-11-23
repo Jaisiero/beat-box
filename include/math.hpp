@@ -90,24 +90,28 @@ FORCE_INLINE daxa_f32mat3x3 daxa_mat3_from_glm_mat3(glm::mat3 const& m)
 
 FORCE_INLINE auto cuboid_get_inverse_intertia(daxa_f32 mass, daxa_f32vec3 min, daxa_f32vec3 max) -> daxa_f32mat3x3
 {
-    daxa_f32vec3 size = max - min; // (width, height, depth)
-    daxa_f32 w = size.x;
-    daxa_f32 h = size.y;
-    daxa_f32 d = size.z;
+  if(mass == 0.0f) {
+    return daxa_f32mat3x3(daxa_f32vec3(0.0f), daxa_f32vec3(0.0f), daxa_f32vec3(0.0f));
+  }
 
-    daxa_f32 Ixx = (1.0f / 12.0f) * mass * (h * h + d * d);
-    daxa_f32 Iyy = (1.0f / 12.0f) * mass * (w * w + d * d);
-    daxa_f32 Izz = (1.0f / 12.0f) * mass * (w * w + h * h);
+  daxa_f32vec3 size = max - min; // (width, height, depth)
+  daxa_f32 w = size.x;
+  daxa_f32 h = size.y;
+  daxa_f32 d = size.z;
 
-    daxa_f32 inv_Ixx = 1.0f / Ixx;
-    daxa_f32 inv_Iyy = 1.0f / Iyy;
-    daxa_f32 inv_Izz = 1.0f / Izz;
+  daxa_f32 Ixx = (1.0f / 12.0f) * mass * (h * h + d * d);
+  daxa_f32 Iyy = (1.0f / 12.0f) * mass * (w * w + d * d);
+  daxa_f32 Izz = (1.0f / 12.0f) * mass * (w * w + h * h);
 
-    return daxa_f32mat3x3(
-        daxa_f32vec3(inv_Ixx, 0.0f, 0.0f),
-        daxa_f32vec3(0.0f, inv_Iyy, 0.0f),
-        daxa_f32vec3(0.0f, 0.0f, inv_Izz)
-    );
+  daxa_f32 inv_Ixx = 1.0f / Ixx;
+  daxa_f32 inv_Iyy = 1.0f / Iyy;
+  daxa_f32 inv_Izz = 1.0f / Izz;
+
+  return daxa_f32mat3x3(
+      daxa_f32vec3(inv_Ixx, 0.0f, 0.0f),
+      daxa_f32vec3(0.0f, inv_Iyy, 0.0f),
+      daxa_f32vec3(0.0f, 0.0f, inv_Izz)
+  );
 }
 
 #else 

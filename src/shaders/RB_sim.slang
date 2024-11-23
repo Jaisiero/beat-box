@@ -99,9 +99,9 @@
     Manifold manifold =
       CPS.task_head.collisions[m];
 
-    if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count)
+    if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
     {
-      return;
+      continue;
     }
 
     Ptr<RigidBody> r1 =
@@ -138,9 +138,9 @@
     Manifold manifold =
       CS.task_head.collisions[m];
 
-    if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count)
+    if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
     {
-      return;
+      continue;
     }
 
     Ptr<RigidBody> r1 =
