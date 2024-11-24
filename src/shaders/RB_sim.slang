@@ -5,6 +5,8 @@
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
+[[vk::push_constant]] RigidBodyIntegratePositionsPushConstants RB_integrate;
+[[vk::push_constant]] CollisionSolverRelaxationPushConstants CSR;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] CreatePointsPushConstants CP;
 [[vk::push_constant]] RigidBodyUpdatePushConstants RB_update;
@@ -92,8 +94,7 @@
     return;
   }
   
-  // TODO: Implement parallel collision solver
-  // atomicAdd to velocity and omega?
+  // TODO: Implement islands
   for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
   {
     Manifold manifold =
@@ -112,7 +113,9 @@
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
-    manifold.pre_step(inv_dt, r1, r2, accum_impulse, friction);
+    daxa_f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
+
+    manifold.pre_step(inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
 
     CPS.task_head.collisions[m] = manifold;
   }
@@ -131,8 +134,7 @@
     return;
   }
   
-  // TODO: Implement parallel collision solver
-  // atomicAdd to velocity and omega?
+  // TODO: Implement islands
   for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
   {
     Manifold manifold =
@@ -150,11 +152,75 @@
 
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+    daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
 
     // Solve the collision
-    manifold.solve(r1, r2, accum_impulse, friction);
+    manifold.solve(r1, r2, accum_impulse, friction, true, inv_dt);
     
     CS.task_head.collisions[m] = manifold;
+  }
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] 
+    void entry_integrate_positions_rigid_bodies(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(RB_integrate.task_head.sim_config);
+
+  if (pixel_i.x >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+
+  daxa_u32 index = pixel_i.x;
+
+  Ptr<RigidBody> r =
+      Ptr<RigidBody>(&RB_integrate.task_head.rigid_bodies[index]);
+
+  // Integrate positions
+  if(sim_config->has_flag(SimFlag::ADVECTION))
+  {
+    r->integrate_positions(sim_config->dt);
+  }
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_collision_solver_relaxation(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(CSR.task_head.sim_config);
+
+  if (pixel_i.x >= 1)
+  {
+    return;
+  }
+  
+  // TODO: Implement islands
+  for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
+  {
+    Manifold manifold =
+      CSR.task_head.collisions[m];
+
+    if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
+    {
+      continue;
+    }
+
+    Ptr<RigidBody> r1 =
+        Ptr<RigidBody>(&CSR.task_head.rigid_bodies[manifold.obb1_index]);
+    Ptr<RigidBody> r2 =
+        Ptr<RigidBody>(&CSR.task_head.rigid_bodies[manifold.obb2_index]);
+
+    daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+    daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+    daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+
+    // Solve the collision with relaxation
+    manifold.solve(r1, r2, accum_impulse, friction, false, inv_dt);
+    
+    CSR.task_head.collisions[m] = manifold;
   }
 }
 
@@ -219,10 +285,10 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   Ptr<RigidBody> r_copy =
       Ptr<RigidBody>(&RB_update.task_head.rigid_bodies_update[index]);
 
-  if(sim_config->has_flag(SimFlag::ADVECTION))
-  {
-    r->integrate_velocities(sim_config->dt);
-  }
+  // if(sim_config->has_flag(SimFlag::ADVECTION))
+  // {
+  //   r->integrate_positions(sim_config->dt);
+  // }
   // printf("Updating pos rigid body %d, pos: %f %f %f, rot: %f %f %f %f\n", index, r->position.x, r->position.y, r->position.z, r->rotation.v.x, r->rotation.v.y, r->rotation.v.z, r->rotation.w);
   // printf("Updating vel rigid body %d, vel: %f %f %f, omega: %f %f %f\n", index, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
 

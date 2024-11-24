@@ -5,10 +5,10 @@ extension RigidBody
   [mutating] void advect(Ptr<SimConfig> sim_config)
   {
     // apply_temporal_velocity();
-    advance(sim_config->dt, LINEAR_DAMPING, ANGULAR_DAMPING);
     if(has_flag(RigidBodyFlag::GRAVITY)){
-      apply_impulse(this.mass * daxa_f32vec3(0, sim_config->gravity, 0) *       sim_config->dt, this.position);
+      apply_impulse(daxa_f32vec3(0, sim_config->gravity, 0) *       sim_config->dt, this.position);
     }
+    advance(sim_config->dt, LINEAR_DAMPING, ANGULAR_DAMPING);
     reset_state();
   }
 
@@ -24,7 +24,7 @@ extension RigidBody
     this.omega *= exp(-dt * angular_damping);
   }
 
-  [mutating] void integrate_velocities(daxa_f32 dt) {
+  [mutating] void integrate_positions(daxa_f32 dt) {
     
     this.position += this.velocity * dt;
     this.rotation = apply_angular_velocity(this.rotation, this.omega, dt);
@@ -180,6 +180,7 @@ extension Manifold {
         if(is_same_contact(old_manifold.contacts[j].fp, contacts[i].fp) 
         && is_valid_contact(contacts[i].fp)
         ) {
+          // printf("Found same contact\n");
         // TODO: Check why -1 make system unstable
 
             contacts[i].normal_impulse = old_manifold.contacts[j].normal_impulse;
@@ -199,7 +200,7 @@ extension Manifold {
     }
   }
 
-  [mutating] void pre_step(daxa_f32 inv_dt, Ptr<RigidBody> body_a,  Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_f32 k_allowed_penetration = PENETRATION_FACTOR, daxa_f32 k_bias_factor = BIAS_FACTOR) {
+  [mutating] void pre_step(daxa_f32 inv_dt, Ptr<RigidBody> body_a,  Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_f32 h, daxa_f32 hertz) {
 
     for(daxa_u32 i = 0u; i < contact_count; i++) {
 
@@ -223,7 +224,16 @@ extension Manifold {
         contacts[i].tangent_mass[j] = k_tangent == 0.0 ? 0.0 : 1.0f / k_tangent;
       }
 
-      contacts[i].bias = -k_bias_factor * inv_dt * min(contacts[i].penetration + k_allowed_penetration, 0.0f);
+      daxa_f32 contact_hertz = (body_a->inv_mass == 0.0f || body_b->inv_mass == 0.0f) ? 2.0f * hertz : hertz;
+
+      // soft contact
+			// should use the substep not the full time step
+			const float zeta = 10.0f;
+			float omega = 2.0f * _PI * contact_hertz;
+			float c = h * omega * (2.0f * zeta + h * omega);
+			contacts[i].bias_factor = omega / (2.0f * zeta + h * omega);
+			contacts[i].impulse_coefficient = 1.0f / (1.0f + c);
+			contacts[i].mass_coefficient = c * contacts[i].impulse_coefficient;
 
       // accumlate impulse
       if(accumulate_impulses) {
@@ -243,18 +253,19 @@ extension Manifold {
         body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
       }
 
-      // Apply restitution
-      daxa_f32 relative_velocity = dot(body_b->velocity + cross(body_b->omega, r2) - body_a->velocity - cross(body_a->omega, r1), normal);
+      // TODO: Revisit this
+      // // Apply restitution
+      // daxa_f32 relative_velocity = dot(body_b->velocity + cross(body_b->omega, r2) - body_a->velocity - cross(body_a->omega, r1), normal);
 
-      if(relative_velocity < -1.0f) {
-        daxa_f32 restitution = max(body_a->restitution, body_b->restitution);
-        contacts[i].bias += -restitution * relative_velocity;
-      }
+      // if(relative_velocity < -1.0f) {
+      //   daxa_f32 restitution = max(body_a->restitution, body_b->restitution);
+      //   contacts[i].bias_factor += -restitution * relative_velocity;
+      // }
     }
   }
 
   [mutating]
-  void solve(Ptr<RigidBody> body_a, Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction) {
+  void solve(Ptr<RigidBody> body_a, Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_b32 use_bias, daxa_f32 inv_h) {
 
     daxa_f32 friction = sqrt(body_a->friction * body_b->friction);
     for(daxa_u32 c = 0u; c < contact_count; ++c)
@@ -300,20 +311,31 @@ extension Manifold {
 
       // Calculate normal impulse
       daxa_f32 normal_velocity = dot(relative_velocity, normal);
+      daxa_f32 bias = 0.0f;
+      daxa_f32 mass_scale = 1.0f;
+      daxa_f32 impulse_scale = 0.0f;
 
-      daxa_f32 normal_impulse = contacts[c].normal_mass * (-normal_velocity + contacts[c].bias);
+      if(contacts[c].penetration > 0.0f) {
+        bias = contacts[c].penetration * inv_h;
+      } else if(use_bias) {
+        bias = max(contacts[c].bias_factor * contacts[c].penetration, -4.0f);
+        mass_scale = contacts[c].mass_coefficient;
+        impulse_scale = contacts[c].impulse_coefficient;
+      }
+
+      daxa_f32 impulse = -contacts[c].normal_mass * mass_scale * (normal_velocity + bias) - impulse_scale * contacts[c].normal_impulse;
 
       // Clamp the accumulated impulse
       if(accumulate_impulses) {
         daxa_f32 old_normal_impulse = contacts[c].normal_impulse;
-        contacts[c].normal_impulse = max(old_normal_impulse + normal_impulse, 0.0f);
-        normal_impulse = contacts[c].normal_impulse - old_normal_impulse;
+        contacts[c].normal_impulse = max(old_normal_impulse + impulse, 0.0f);
+        impulse = contacts[c].normal_impulse - old_normal_impulse;
       } else {
-        normal_impulse = max(normal_impulse, 0.0f);
+        impulse = max(impulse, 0.0f);
       }
 
       // Apply contact impulse
-      daxa_f32vec3 normal_impulse_vector = normal * normal_impulse;
+      daxa_f32vec3 normal_impulse_vector = normal * impulse;
 
       body_a->velocity -= normal_impulse_vector * body_a->inv_mass;
       body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1_to_point, normal_impulse_vector));

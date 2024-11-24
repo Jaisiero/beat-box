@@ -9,8 +9,8 @@
 static const daxa_f32 LINEAR_DAMPING = 0.1f;
 static const daxa_f32 ANGULAR_DAMPING = 0.1f;
 static const daxa_f32 POINT_SIZE = 0.01f;
-static const daxa_f32 PENETRATION_FACTOR = 0.01f;
-static const daxa_f32 BIAS_FACTOR = 0.2f;
+static const daxa_f32 MIN_CONTACT_HERTZ = 30.0f;
+static const daxa_f32 _PI = 3.14159265359f;
 
 #define BB_DEBUG 1
 #if defined(BB_DEBUG) 
@@ -412,6 +412,29 @@ DAXA_DECL_TASK_HEAD_END
 struct CollisionSolverPushConstants
 {
   DAXA_TH_BLOB(CollisionSolverTaskHead, task_head)
+};
+
+DAXA_DECL_TASK_HEAD_BEGIN(IntegratePositionsTaskHead)
+DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_DECL_TASK_HEAD_END
+
+struct RigidBodyIntegratePositionsPushConstants
+{
+  DAXA_TH_BLOB(IntegratePositionsTaskHead, task_head)
+};
+
+DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverRelaxationTaskHead)
+DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
+DAXA_DECL_TASK_HEAD_END
+
+struct CollisionSolverRelaxationPushConstants
+{
+  DAXA_TH_BLOB(CollisionSolverRelaxationTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)

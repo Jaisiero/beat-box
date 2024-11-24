@@ -105,6 +105,8 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CPS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_IP;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_CSR;
   std::shared_ptr<daxa::ComputePipeline> pipeline;
   std::shared_ptr<daxa::ComputePipeline> create_points_pipeline;
   std::shared_ptr<daxa::ComputePipeline> update_pipeline;

@@ -328,7 +328,9 @@ struct Contact {
   daxa_f32 penetration;
   daxa_f32 normal_impulse;
   daxa_f32 tangent_impulse[2];
-  daxa_f32 bias;
+  daxa_f32 bias_factor;
+  daxa_f32 impulse_coefficient;
+  daxa_f32 mass_coefficient;
   daxa_f32 normal_mass;
   daxa_f32 tangent_mass[2];
   FeaturePair fp;

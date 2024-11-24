@@ -26,8 +26,8 @@ static constexpr u32 DOUBLE_BUFFERING = 2;
 
 // static constexpr f32 TIME_STEP = 0.001667f;
 // static constexpr f32 TIME_STEP = 0.003334f;
-static constexpr f32 TIME_STEP = 0.006668f;
-// static constexpr f32 TIME_STEP = 0.01667f; // TODO: stabilize system to allow for larger time steps
+// static constexpr f32 TIME_STEP = 0.006668f;
+static constexpr f32 TIME_STEP = 0.01667f; // TODO: stabilize system to allow for larger time steps
 static constexpr f32 GRAVITY = 9.81f;
 static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
 static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
@@ -94,6 +94,12 @@ const auto collision_pre_solver_pipeline_name = "Collision Pre-Solver";
 // collision solver
 const auto entry_collision_solver = "entry_collision_solver";
 const auto collision_solver_pipeline_name = "Collision Solver";
+// integrate positions
+const auto entry_integrate_positions = "entry_integrate_positions_rigid_bodies";
+const auto integrate_positions_pipeline_name = "Integrate Positions Rigid Bodies";
+// collision solver
+const auto entry_collision_relaxation_solver = "entry_collision_solver_relaxation";
+const auto collision_solver_relaxation_pipeline_name = "Collision Solver Relaxation";
 // sim
 const auto entry_rigid_body_sim = "entry_rigid_body_sim";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
@@ -314,6 +320,36 @@ struct CollisionSolverInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(CollisionSolverPushConstants),
       .name = collision_solver_pipeline_name,
+  };
+};
+
+struct IntegratePositionsInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_integrate_positions
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyIntegratePositionsPushConstants),
+      .name = integrate_positions_pipeline_name,
+  };
+};
+
+struct CollisionSolverRelaxationInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_collision_relaxation_solver
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(CollisionSolverRelaxationPushConstants),
+      .name = collision_solver_relaxation_pipeline_name,
   };
 };
 

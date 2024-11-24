@@ -14,6 +14,8 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline = task_manager->create_compute(RigidBodySim{}.info);
     pipeline_CPS = task_manager->create_compute(CollisionPreSolverInfo{}.info);
     pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
+    pipeline_IP = task_manager->create_compute(IntegratePositionsInfo{}.info);
+    pipeline_CSR = task_manager->create_compute(CollisionSolverRelaxationInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
     update_pipeline = task_manager->create_compute(UpdateRigidBodies{}.info);
   }
@@ -170,6 +172,42 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_CS);
 
+
+  auto user_callback_IP = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_IP);
+    ti.recorder.push_constant(RigidBodyIntegratePositionsPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IntegratePositionsTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3)});
+  };
+
+  using TTask_IP = TaskTemplate<IntegratePositionsTaskHead::Task, decltype(user_callback_IP)>;
+
+  // Instantiate the task using the template class
+  TTask_IP task_IP(std::array{
+                       daxa::attachment_view(IntegratePositionsTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                       daxa::attachment_view(IntegratePositionsTaskHead::AT.sim_config, task_sim_config),
+                       daxa::attachment_view(IntegratePositionsTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                   },
+                   user_callback_IP);
+
+  auto user_callback_CSR = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_CSR);
+    ti.recorder.push_constant(CollisionSolverRelaxationPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3)});
+  };
+
+  using TTask_CSR = TaskTemplate<CollisionSolverRelaxationTaskHead::Task, decltype(user_callback_CSR)>;
+
+  // Instantiate the task using the template class
+  TTask_CSR task_CSR(std::array{
+                       daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                       daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.sim_config, task_sim_config),
+                       daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                       daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.collisions, task_collisions),
+                   },
+                   user_callback_CSR);
+
   auto user_callback_advect = [this](daxa::TaskInterface ti, auto &self)
   {
     ti.recorder.set_pipeline(*pipeline);
@@ -252,6 +290,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_CPS);
   for(auto i = 0u; i < iteration_count; ++i)
     RB_TG.add_task(task_CS);
+  RB_TG.add_task(task_IP);
+  for(auto i = 0u; i < iteration_count; ++i)
+    RB_TG.add_task(task_CSR);
   RB_TG.add_task(task_CP);
   RB_TG.add_task(task_update);
 
