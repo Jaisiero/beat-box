@@ -192,7 +192,7 @@ extension Manifold {
             contacts[i].tangent_impulse[0] = old_manifold.contacts[j].tangent_impulse[0];
             contacts[i].tangent_impulse[1] = old_manifold.contacts[j].tangent_impulse[1];
 
-            contacts[i].warm_start = max(old_manifold.contacts[j].warm_start, old_manifold.contacts[j].warm_start + 1u);
+            contacts[i].warm_start = max(255, old_manifold.contacts[j].warm_start + 1u);
           break;
         }
       }

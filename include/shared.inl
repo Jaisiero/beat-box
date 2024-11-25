@@ -276,9 +276,17 @@ struct RTPushConstants
 struct GUIVertex
 {
   daxa_f32vec3 position;
+  daxa_f32vec3 color;
 };
 
 DAXA_DECL_BUFFER_PTR(GUIVertex)
+
+struct GUIVertexLine
+{
+  daxa_f32vec3 position;
+};
+
+DAXA_DECL_BUFFER_PTR(GUIVertexLine)
 
 DAXA_DECL_TASK_HEAD_BEGIN(GUITaskHead)
 DAXA_TH_IMAGE(COLOR_ATTACHMENT, REGULAR_2D, render_target)
@@ -294,7 +302,7 @@ struct GUIPushConstants
 DAXA_DECL_TASK_HEAD_BEGIN(GUILineTaskHead)
 DAXA_TH_IMAGE(COLOR_ATTACHMENT, REGULAR_2D, render_target)
 DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(CameraView), camera)
-DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertex), vertex_buffer)
+DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertexLine), vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 struct GUILinePushConstants
@@ -305,7 +313,7 @@ struct GUILinePushConstants
 DAXA_DECL_TASK_HEAD_BEGIN(GUIAxesTaskHead)
 DAXA_TH_IMAGE(COLOR_ATTACHMENT, REGULAR_2D, render_target)
 DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(CameraView), camera)
-DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertex), vertex_buffer)
+DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertexLine), vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 struct GUIAxesPushConstants
@@ -432,7 +440,7 @@ DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies_update)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertex), axes_vertex_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertexLine), axes_vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 
@@ -475,7 +483,7 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), collisions)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), point_aabbs)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertex), vertex_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertex), line_vertex_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertexLine), line_vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 struct CreatePointsPushConstants

@@ -180,7 +180,7 @@ const static daxa_f32 LINE_SIZE = 0.5f;
   InterlockedAdd(sim_config->g_c_info.collision_point_count, m.contact_count, index);
 
   var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
-  var line_vertex_buffer = Ptr<GUIVertex>(CP.task_head.line_vertex_buffer);
+  var line_vertex_buffer = Ptr<GUIVertexLine>(CP.task_head.line_vertex_buffer);
 
   for(int i = 0; i < m.contact_count; i++)
   {
@@ -191,6 +191,9 @@ const static daxa_f32 LINE_SIZE = 0.5f;
     if(sim_config->has_flag(SimFlag::DEBUG_INFO))
     {
       vertex_buffer[current_index].position = m.contacts[i].position;
+      daxa_f32 blue = (daxa_f32)(255 - m.contacts[i].warm_start) / 255.0f;
+      daxa_f32 red = 1.0f - blue;
+      vertex_buffer[current_index].color = daxa_f32vec3(red, 0.0f, blue);
 
       line_vertex_buffer[current_index*LINE_POINT_COUNT].position = m.contacts[i].position;
       line_vertex_buffer[current_index*LINE_POINT_COUNT+1].position = m.contacts[i].position + m.normal * LINE_SIZE;
@@ -240,7 +243,7 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     daxa_f32vec3 _min = r->minimum;
     daxa_f32vec3 _max = r->maximum;
     daxa_f32vec3 center = (_min + _max) * 0.5f;
-    var axes_vertex_buffer = Ptr<GUIVertex>(RB_update.task_head.axes_vertex_buffer);
+    var axes_vertex_buffer = Ptr<GUIVertexLine>(RB_update.task_head.axes_vertex_buffer);
     let x_axis = r->rotate_vector(daxa_f32vec3(1.0f, 0.0f, 0.0f));
     let y_axis = r->rotate_vector(daxa_f32vec3(0.0f, 1.0f, 0.0f));
     let z_axis = r->rotate_vector(daxa_f32vec3(0.0f, 0.0f, 1.0f));

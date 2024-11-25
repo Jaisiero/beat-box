@@ -16,7 +16,7 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
 
   for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
     vertex_buffer[f] = gpu->device.create_buffer({
-      .size = sizeof(daxa_f32vec3) * MAX_VERTEX_COUNT,
+      .size = sizeof(GUIVertex) * MAX_VERTEX_COUNT,
       .name = "GUI vertex buffer " + std::to_string(f),
     });
 
@@ -40,7 +40,7 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
 
   for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
     vertex_line_buffer[f] = gpu->device.create_buffer({
-      .size = sizeof(daxa_f32vec3) * MAX_VERTEX_COUNT,
+      .size = sizeof(GUIVertexLine) * MAX_VERTEX_COUNT,
       .name = "GUI line vertex buffer " + std::to_string(f),
     });
 
@@ -65,7 +65,7 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
 
   for(auto f = 0; f < DOUBLE_BUFFERING; ++f)
     axes_vertex_buffer[f] = gpu->device.create_buffer({
-      .size = sizeof(daxa_f32vec3) * MAX_VERTEX_COUNT,
+      .size = sizeof(GUIVertexLine) * MAX_VERTEX_COUNT,
       .name = "GUI axes vertex buffer " + std::to_string(f),
     });
 
