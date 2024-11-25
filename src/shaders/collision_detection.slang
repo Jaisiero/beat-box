@@ -856,6 +856,8 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
     
     manifold.obb1_index = rigid_body_index;
     manifold.obb2_index = i;
+    manifold.anchor_a = r->position;
+    manifold.anchor_b = r2->position;
 
     // 
     if (collision)

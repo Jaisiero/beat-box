@@ -31,7 +31,7 @@ static constexpr f32 TIME_STEP = 0.01667f; // TODO: stabilize system to allow fo
 static constexpr f32 GRAVITY = 9.81f;
 static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
 static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
-static constexpr u32 DEFAULT_ITERATION_COUNT = 10;
+static constexpr u32 DEFAULT_ITERATION_COUNT = 4;
 
 enum StageIndex : u32
 {

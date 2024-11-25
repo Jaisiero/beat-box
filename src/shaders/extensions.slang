@@ -200,12 +200,12 @@ extension Manifold {
     }
   }
 
-  [mutating] void pre_step(daxa_f32 inv_dt, Ptr<RigidBody> body_a,  Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_f32 h, daxa_f32 hertz) {
+  [mutating] void pre_step(daxa_f32 inv_dt, Ptr<RigidBody> body_a,  Ptr<RigidBody> body_b, daxa_b32 warm_starting, daxa_b32 enable_friction, daxa_f32 h, daxa_f32 hertz) {
 
     for(daxa_u32 i = 0u; i < contact_count; i++) {
 
-      daxa_f32vec3 r1 = contacts[i].position - body_a->position;
-      daxa_f32vec3 r2 = contacts[i].position - body_b->position;
+      daxa_f32vec3 r1 = contacts[i].position - anchor_a;
+      daxa_f32vec3 r2 = contacts[i].position - anchor_b;
 
       // Precompute normal mass, tangent mass, and bias
       daxa_f32vec3 rn1 = cross(r1, normal);
@@ -236,7 +236,7 @@ extension Manifold {
 			contacts[i].mass_coefficient = c * contacts[i].impulse_coefficient;
 
       // accumlate impulse
-      if(accumulate_impulses) {
+      if(warm_starting) {
         // Apply normal + friction impulse
         daxa_f32vec3 P = normal * contacts[i].normal_impulse;
 
@@ -252,15 +252,6 @@ extension Manifold {
         body_b->velocity += P * body_b->inv_mass;
         body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
       }
-
-      // TODO: Revisit this
-      // // Apply restitution
-      // daxa_f32 relative_velocity = dot(body_b->velocity + cross(body_b->omega, r2) - body_a->velocity - cross(body_a->omega, r1), normal);
-
-      // if(relative_velocity < -1.0f) {
-      //   daxa_f32 restitution = max(body_a->restitution, body_b->restitution);
-      //   contacts[i].bias_factor += -restitution * relative_velocity;
-      // }
     }
   }
 
@@ -273,8 +264,8 @@ extension Manifold {
       daxa_f32vec3 collision_point = contacts[c].position;
 
       // Calculate relative velocity
-      daxa_f32vec3 r1_to_point = collision_point - body_a->position;
-      daxa_f32vec3 r2_to_point = collision_point - body_b->position;
+      daxa_f32vec3 r1_to_point = collision_point - anchor_a;
+      daxa_f32vec3 r2_to_point = collision_point - anchor_b;
 
       daxa_f32vec3 relative_velocity = body_b->velocity + cross(body_b->omega, r2_to_point) - body_a->velocity - cross(body_a->omega, r1_to_point);
 

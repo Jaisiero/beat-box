@@ -110,12 +110,12 @@
     Ptr<RigidBody> r2 =
         Ptr<RigidBody>(&CPS.task_head.rigid_bodies[manifold.obb2_index]);
 
-    daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+    daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
     daxa_f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
 
-    manifold.pre_step(inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
+    manifold.pre_step(inv_dt, r1, r2, warm_starting, friction, sim_config->dt, hertz);
 
     CPS.task_head.collisions[m] = manifold;
   }
@@ -285,10 +285,6 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   Ptr<RigidBody> r_copy =
       Ptr<RigidBody>(&RB_update.task_head.rigid_bodies_update[index]);
 
-  // if(sim_config->has_flag(SimFlag::ADVECTION))
-  // {
-  //   r->integrate_positions(sim_config->dt);
-  // }
   // printf("Updating pos rigid body %d, pos: %f %f %f, rot: %f %f %f %f\n", index, r->position.x, r->position.y, r->position.z, r->rotation.v.x, r->rotation.v.y, r->rotation.v.z, r->rotation.w);
   // printf("Updating vel rigid body %d, vel: %f %f %f, omega: %f %f %f\n", index, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
 
