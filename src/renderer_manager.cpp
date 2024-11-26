@@ -33,21 +33,21 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   TTask task_RT(std::array{
                   daxa::attachment_view(RayTracingTaskHead::AT.camera, task_camera_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.swapchain, task_swapchain_image),
-                  daxa::attachment_view(RayTracingTaskHead::AT.tlas, task_tlas),
+                  daxa::attachment_view(RayTracingTaskHead::AT.tlas, accel_struct_mngr->task_tlas),
                   daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies,
-                                        task_rigid_bodies),
-                  daxa::attachment_view(RayTracingTaskHead::AT.aabbs, task_aabbs),
-                  daxa::attachment_view(RayTracingTaskHead::AT.point_aabbs, task_points),
+                                        rigid_body_manager->task_rigid_bodies),
+                  daxa::attachment_view(RayTracingTaskHead::AT.aabbs, accel_struct_mngr->task_aabb_buffer),
+                  daxa::attachment_view(RayTracingTaskHead::AT.point_aabbs, accel_struct_mngr->task_points_aabb_buffer),
               },
               user_callback);
   
 
-  std::array<daxa::TaskBuffer, 7> buffers = {task_camera_buffer, task_rigid_bodies, task_aabbs, task_points, gui_manager->task_vertex_buffer,
+  std::array<daxa::TaskBuffer, 7> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer, accel_struct_mngr->task_points_aabb_buffer, gui_manager->task_vertex_buffer,
   gui_manager->task_line_vertex_buffer, gui_manager->task_axes_vertex_buffer};
 
   std::array<daxa::TaskImage, 1> images = {task_swapchain_image};
 
-  std::array<daxa::TaskTlas, 1> tlases = {task_tlas};
+  std::array<daxa::TaskTlas, 1> tlases = {accel_struct_mngr->task_tlas};
 
   RT_TG = task_manager->create_task_graph(RT_TG_name, buffers, images, {}, tlases, true);
 
@@ -90,10 +90,6 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
 
   task_swapchain_image.set_images({.images = std::array{swapchain_image}});
   task_camera_buffer.set_buffers({.buffers = std::array{cam_mngr.camera_buffer}});
-  task_tlas.set_tlas({.tlas = std::array{tlas}});
-  task_rigid_bodies.set_buffers({.buffers = std::array{rigid_bodies}});
-  task_aabbs.set_buffers({.buffers = std::array{aabbs}});
-  task_points.set_buffers({.buffers = std::array{points_buffer}});
 
   return true;
 }

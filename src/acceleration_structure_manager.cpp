@@ -621,13 +621,14 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
   daxa::InlineTaskInfo task1({
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_aabb_buffer),
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_rigid_bodies),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_next_rigid_bodies),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = rigid_body_buffer[renderer_manager->get_frame_index()],
-            .dst_buffer = rigid_body_buffer[renderer_manager->get_next_frame_index()],
+            .src_buffer = ti.get(rigid_body_manager->task_rigid_bodies).ids[0],
+            .dst_buffer = ti.get(rigid_body_manager->task_next_rigid_bodies).ids[0],
             .src_offset = previous_rigid_body_count * sizeof(RigidBody),
             .dst_offset = previous_rigid_body_count * sizeof(RigidBody),
             .size = rigid_body_scratch_offset,
@@ -675,8 +676,9 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
       task3,
   };
 
-  std::array<daxa::TaskBuffer, 2> buffers = {
+  std::array<daxa::TaskBuffer, 3> buffers = {
       rigid_body_manager->task_rigid_bodies,
+      rigid_body_manager->task_next_rigid_bodies,
       task_aabb_buffer,
   };
   std::array<daxa::TaskBlas, 1> blas = {

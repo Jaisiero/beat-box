@@ -82,11 +82,6 @@ struct SceneManager
       aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
     }
 
-    // TODO: Handle error
-    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb))
-      return false;
-    accel_struct_mngr->build_AS();
-
     status_manager->update_dispatch_buffer(get_rigid_body_count());
 
     // TODO: Compute queue here to push an update for all frames?
@@ -95,6 +90,11 @@ struct SceneManager
     status_manager->next_frame();
     rigid_body_manager->update_sim(get_rigid_body_count());
     status_manager->next_frame();
+
+    // TODO: Handle error
+    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb))
+      return false;
+    accel_struct_mngr->build_AS();
 
     return initialized;
   }

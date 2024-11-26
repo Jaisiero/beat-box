@@ -28,6 +28,7 @@ struct RigidBodyManager{
     return *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer).value();
   }
 
+  bool update();
   bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer);
   // NOTE: this function reset simulation configuration
   bool update_sim(daxa_u32 rigid_body_count);

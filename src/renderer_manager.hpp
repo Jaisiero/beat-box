@@ -46,10 +46,6 @@ struct RendererManager
   TaskGraph RT_TG;
   daxa::TaskImage task_swapchain_image{{.swapchain_image = true, .name = "swapchain_image"}};
   daxa::TaskBuffer task_camera_buffer{{.initial_buffers = {}, .name = "camera_buffer"}};
-  daxa::TaskTlas task_tlas{{.name = "tlas"}};
-  daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "rigid_bodies"}};
-  daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "aabbs"}};
-  daxa::TaskBuffer task_points{{.initial_buffers = {}, .name = "points"}};
 
   explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<GUIManager> gui_manager);
   ~RendererManager();
