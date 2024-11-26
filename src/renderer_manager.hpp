@@ -53,7 +53,7 @@ struct RendererManager
   bool create(char const *RT_TG_name, std::shared_ptr<RayTracingPipeline> pipeline, daxa::RayTracingShaderBindingTable SBT);
   void destroy();
 
-  bool update_resources(daxa::ImageId swapchain_image, CameraManager &cam_mngr, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer);
+  bool update_resources(daxa::ImageId swapchain_image, CameraManager &cam_mngr);
 
   void render();
   daxa_u32 get_previous_frame_index();

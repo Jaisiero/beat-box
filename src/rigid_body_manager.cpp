@@ -363,7 +363,7 @@ bool RigidBodyManager::simulate()
   return initialized;
 }
 
-bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer)
+bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId aabbs, daxa::BufferId points_buffer)
 {
   if (!initialized)
   {
@@ -371,7 +371,7 @@ bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::Bu
   }
 
   task_dispatch_buffer.set_buffers({.buffers = std::array{dispatch_buffer}});
-  task_rigid_bodies.set_buffers({.buffers = std::array{rigid_bodies}});
+  task_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_rigid_body_buffer()}});
   task_aabbs.set_buffers({.buffers = std::array{aabbs}});
   task_points.set_buffers({.buffers = std::array{points_buffer}});
 

@@ -81,7 +81,7 @@ bool RendererManager::execute()
   return true;
 }
 
-bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraManager &cam_mngr, daxa::TlasId tlas, daxa::BufferId rigid_bodies, daxa::BufferId aabbs, daxa::BufferId points_buffer)
+bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraManager &cam_mngr)
 {
   if (!initialized)
   {
@@ -151,7 +151,7 @@ void RendererManager::render()
     {
       handle_reload_result(task_manager->reload(), RT_pipeline, this);
       camera_manager->update(gpu->swapchain_get_extent());
-      update_resources(swapchain_image, *camera_manager, accel_struct_mngr->get_tlas(), accel_struct_mngr->get_rigid_body_buffer(), accel_struct_mngr->primitive_buffer, accel_struct_mngr->get_points_buffer());
+      update_resources(swapchain_image, *camera_manager);
       execute();
       gpu->garbage_collector();
 

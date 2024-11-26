@@ -808,16 +808,16 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
         auto previous_frame_index = renderer_manager->get_previous_frame_index();
 
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = rigid_body_manager->get_sim_config_buffer(),
-            .dst_buffer = rigid_body_manager->get_previous_sim_config_buffer(),
+            .src_buffer = ti.get(rigid_body_manager->task_sim_config).ids[0],
+            .dst_buffer = ti.get(rigid_body_manager->task_old_sim_config).ids[0],
             .size = sizeof(SimConfig),
         });
 
         auto point_count = sim_config->g_c_info.collision_point_count;
         if(point_count > 0) {
           ti.recorder.copy_buffer_to_buffer({
-              .src_buffer = points_buffer[current_frame_index],
-              .dst_buffer = points_buffer[previous_frame_index],
+              .src_buffer = ti.get(task_points_aabb_buffer).ids[0],
+              .dst_buffer = ti.get(task_previous_points_aabb_buffer).ids[0],
               .size = point_count * sizeof(Aabb),
           });
         }
@@ -825,8 +825,8 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
         if(renderer_manager->is_gui_enabled()) {
           if(point_count > 0) {
             ti.recorder.copy_buffer_to_buffer({
-                .src_buffer = gui_manager->get_vertex_buffer(),
-                .dst_buffer = gui_manager->get_previous_vertex_buffer(),
+                .src_buffer = ti.get(gui_manager->task_vertex_buffer).ids[0],
+                .dst_buffer = ti.get(gui_manager->task_previous_vertex_buffer).ids[0],
                 .size = point_count * sizeof(daxa_f32vec3),
             });
           }
@@ -834,16 +834,16 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
           auto line_count = sim_config->rigid_body_count * 2;
           if(line_count > 0) {
             ti.recorder.copy_buffer_to_buffer({
-                .src_buffer = gui_manager->get_line_vertex_buffer(),
-                .dst_buffer = gui_manager->get_previous_line_vertex_buffer(),
+                .src_buffer = ti.get(gui_manager->task_line_vertex_buffer).ids[0],
+                .dst_buffer = ti.get(gui_manager->task_previous_line_vertex_buffer).ids[0],
                 .size = line_count * sizeof(daxa_f32vec3),
             });
           }
           auto axes_count = sim_config->rigid_body_count * 6;
           if(axes_count > 0) {
             ti.recorder.copy_buffer_to_buffer({
-                .src_buffer = gui_manager->get_axes_vertex_buffer(),
-                .dst_buffer = gui_manager->get_previous_axes_vertex_buffer(),
+                .src_buffer = ti.get(gui_manager->task_axes_vertex_buffer).ids[0],
+                .dst_buffer = ti.get(gui_manager->task_previous_axes_vertex_buffer).ids[0],
                 .size = axes_count * sizeof(daxa_f32vec3),
             });
           }
