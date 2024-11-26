@@ -102,8 +102,6 @@ struct AccelerationStructureManager
   // TLAS
   daxa::TlasId tlas[DOUBLE_BUFFERING] = {};
 
-  // task for the RigidBodies
-  daxa::TaskBuffer task_rigid_body_buffer{{.name = "rigid_body_buffer_task"}};
   // task for the AABB buffer
   daxa::TaskBuffer task_aabb_buffer{{.name = "aabb_buffer_task"}};
   // task for points AABB buffer
@@ -123,9 +121,7 @@ struct AccelerationStructureManager
   TaskGraph AS_update_buffers_TG;
 
   daxa::TaskBuffer task_dispatch_buffer{{.name = "dispatch_buffer"}};
-  daxa::TaskBuffer task_sim_config{{.name = "sim_config"}};
   daxa::TaskBuffer task_blas_instance_data{{.name = "blas_instance_data"}};
-  daxa::TaskBuffer task_collisions{{.name = "RB_collisions"}};
 
   explicit AccelerationStructureManager(daxa::Device &device, std::shared_ptr<TaskManager> task_manager);
   ~AccelerationStructureManager();

@@ -834,18 +834,18 @@ struct OBBvsOBBCollision {
 
 
 
-func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
+func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
          Ptr<SimConfig> sim_config, SimConfig previous_sim_config, Ptr<Manifold> collisions,
          Ptr<Manifold> old_collisions) -> void
 {
+   Ptr<RigidBody> r = Ptr<RigidBody>(&rigid_bodies[rigid_body_index]);
 #if defined(BB_DEBUG)
   r->clear_flag(RigidBodyFlag::COLLIDING);
   r->face_collided = 0u;
 #endif // BB_DEBUG
   for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {
-    // Simplex simplex;
-    Ptr<RigidBody> r2 = Ptr<RigidBody>(&BP.task_head.rigid_bodies[i]);
+    Ptr<RigidBody> r2 = Ptr<RigidBody>(&rigid_bodies[i]);
 
     Manifold manifold;
 
@@ -867,9 +867,10 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> r,
       daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
       if(warm_starting) {
         Manifold old_manifold;
-        if(find_old_collision(rigid_body_index, i, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold))
+        daxa_u32 old_index = 0;
+        if(find_old_collision(rigid_body_index, i, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
         {
-          // printf("Found old collision %d %d\n", rigid_body_index, i);
+          printf("Found index %d old index %d collision %d %d new cc: %d old cc: %d\n", index, old_index, rigid_body_index, i, manifold.contact_count, old_manifold.contact_count);
           manifold.update(old_manifold);
         }
       }

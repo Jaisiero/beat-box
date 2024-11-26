@@ -352,8 +352,8 @@ struct Manifold {
 
   daxa_f32vec3 normal;
   daxa_f32vec3 tangent_vectors[2];
-  Contact contacts[MAX_CONTACT_POINT_COUNT];
   daxa_i32 contact_count;
+  Contact contacts[MAX_CONTACT_POINT_COUNT];
 };
 DAXA_DECL_BUFFER_PTR(Manifold)
 

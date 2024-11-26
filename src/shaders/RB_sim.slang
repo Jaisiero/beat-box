@@ -3,9 +3,9 @@
 
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
+[[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
-[[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] CreatePointsPushConstants CP;
 [[vk::push_constant]] RigidBodyUpdatePushConstants RB_update;
 
@@ -26,9 +26,6 @@
   let previous_sim_config =
       *BP.task_head.previous_sim_config;
 
-  Ptr<RigidBody> r =
-      Ptr<RigidBody>(&BP.task_head.rigid_bodies[pixel_i.x]);
-
   Ptr<Manifold> collisions =
       Ptr<Manifold>(BP.task_head.collisions);
 
@@ -36,7 +33,7 @@
       Ptr<Manifold>(BP.task_head.old_collisions);
 
 
-  broad_phase(pixel_i.x, r, sim_config, previous_sim_config, collisions, old_collisions);
+  broad_phase(pixel_i.x, BP.task_head.rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions);
 }
 
 
@@ -92,8 +89,7 @@
     return;
   }
   
-  // TODO: Implement parallel collision solver
-  // atomicAdd to velocity and omega?
+  // TODO: Islands?
   for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
   {
     Manifold manifold =
@@ -104,10 +100,8 @@
       continue;
     }
 
-    Ptr<RigidBody> r1 =
-        Ptr<RigidBody>(&CPS.task_head.rigid_bodies[manifold.obb1_index]);
-    Ptr<RigidBody> r2 =
-        Ptr<RigidBody>(&CPS.task_head.rigid_bodies[manifold.obb2_index]);
+    RigidBody r1 = CPS.task_head.rigid_bodies[manifold.obb1_index];
+    RigidBody r2 = CPS.task_head.rigid_bodies[manifold.obb2_index];
 
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
@@ -115,6 +109,8 @@
     manifold.pre_step(inv_dt, r1, r2, accum_impulse, friction);
 
     CPS.task_head.collisions[m] = manifold;
+    CPS.task_head.rigid_bodies[manifold.obb1_index] = r1;
+    CPS.task_head.rigid_bodies[manifold.obb2_index] = r2;
   }
 }
 
@@ -131,8 +127,8 @@
     return;
   }
   
-  // TODO: Implement parallel collision solver
-  // atomicAdd to velocity and omega?
+  
+  // TODO: Islands?
   for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
   {
     Manifold manifold =
@@ -143,10 +139,10 @@
       continue;
     }
 
-    Ptr<RigidBody> r1 =
-        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb1_index]);
-    Ptr<RigidBody> r2 =
-        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb2_index]);
+    // printf("Solving collision %d, rigid_body_a %d, rigid_body_b %d cc: %d\n", m, manifold.obb1_index, manifold.obb2_index, manifold.contact_count);
+
+    RigidBody r1 = CS.task_head.rigid_bodies[manifold.obb1_index];
+    RigidBody r2 = CS.task_head.rigid_bodies[manifold.obb2_index];
 
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
@@ -155,6 +151,8 @@
     manifold.solve(r1, r2, accum_impulse, friction);
     
     CS.task_head.collisions[m] = manifold;
+    CS.task_head.rigid_bodies[manifold.obb1_index] = r1;
+    CS.task_head.rigid_bodies[manifold.obb2_index] = r2;
   }
 }
 

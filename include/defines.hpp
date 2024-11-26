@@ -26,8 +26,8 @@ static constexpr u32 DOUBLE_BUFFERING = 2;
 
 // static constexpr f32 TIME_STEP = 0.001667f;
 // static constexpr f32 TIME_STEP = 0.003334f;
-static constexpr f32 TIME_STEP = 0.006668f;
-// static constexpr f32 TIME_STEP = 0.01667f; // TODO: stabilize system to allow for larger time steps
+// static constexpr f32 TIME_STEP = 0.006668f;
+static constexpr f32 TIME_STEP = 0.01667f; // TODO: stabilize system to allow for larger time steps
 static constexpr f32 GRAVITY = 9.81f;
 static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
 static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;

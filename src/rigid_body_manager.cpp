@@ -307,7 +307,7 @@ void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &update_SC_TG)
       {
         ti.recorder.copy_buffer_to_buffer({
             .src_buffer = sim_config_host_buffer,
-            .dst_buffer = sim_config[renderer_manager->get_frame_index()],
+            .dst_buffer = ti.get(task_sim_config).ids[0],
             .size = sizeof(SimConfig),
         });
       },

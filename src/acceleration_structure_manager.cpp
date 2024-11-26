@@ -106,7 +106,6 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
       });
 
     // Set the buffers for the tasks
-    task_rigid_body_buffer.set_buffers({.buffers = std::array{rigid_body_buffer[0]}});
     task_aabb_buffer.set_buffers({.buffers = std::array{primitive_buffer}});
     task_blas_instance_data.set_buffers({.buffers = std::array{blas_instances_buffer}});
     task_points_aabb_buffer.set_buffers({.buffers = std::array{points_buffer[0]}});
@@ -598,21 +597,21 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
 {
   daxa::InlineTaskInfo task0({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_rigid_body_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_rigid_bodies),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_aabb_buffer),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
         ti.recorder.copy_buffer_to_buffer({
             .src_buffer = primitive_scratch_buffer,
-            .dst_buffer = primitive_buffer,
+            .dst_buffer = ti.get(task_aabb_buffer).ids[0],
             .dst_offset = previous_primitive_count * sizeof(Aabb),
             .size = primitive_scratch_offset,
         });
 
         ti.recorder.copy_buffer_to_buffer({
             .src_buffer = rigid_body_scratch_buffer,
-            .dst_buffer = rigid_body_buffer[renderer_manager->get_frame_index()],
+            .dst_buffer = ti.get(rigid_body_manager->task_rigid_bodies).ids[0],
             .dst_offset = previous_rigid_body_count * sizeof(RigidBody),
             .size = rigid_body_scratch_offset,
         });
@@ -621,8 +620,8 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
   });
   daxa::InlineTaskInfo task1({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_rigid_body_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_aabb_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_rigid_bodies),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
@@ -641,7 +640,7 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
   });
   daxa::InlineTaskInfo task2({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_rigid_body_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_WRITE, task_blas),
       },
@@ -677,7 +676,7 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
   };
 
   std::array<daxa::TaskBuffer, 2> buffers = {
-      task_rigid_body_buffer,
+      rigid_body_manager->task_rigid_bodies,
       task_aabb_buffer,
   };
   std::array<daxa::TaskBlas, 1> blas = {
@@ -705,16 +704,16 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
   // Instantiate the task using the template class
   TTaskUI task_UI(std::array{
                       daxa::attachment_view(UpdateInstancesTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
-                      daxa::attachment_view(UpdateInstancesTaskHead::AT.sim_config, task_sim_config),
+                      daxa::attachment_view(UpdateInstancesTaskHead::AT.sim_config, rigid_body_manager->task_sim_config),
                       daxa::attachment_view(UpdateInstancesTaskHead::AT.blas_instance_data, task_blas_instance_data),
-                      daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_bodies, task_rigid_body_buffer),
+                      daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_bodies, rigid_body_manager->task_rigid_bodies),
                       daxa::attachment_view(UpdateInstancesTaskHead::AT.aabbs, task_aabb_buffer),
                   },
                   user_callback_UI);
 
   daxa::InlineTaskInfo task_BB({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_rigid_body_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_points_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_WRITE, task_blas),
@@ -731,7 +730,7 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
 
   daxa::InlineTaskInfo task_BT({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_rigid_body_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_points_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_READ, task_blas),
@@ -749,9 +748,9 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
 
   std::array<daxa::TaskBuffer, 6> buffers = {
       task_dispatch_buffer,
-      task_sim_config,
+      rigid_body_manager->task_sim_config,
       task_blas_instance_data,
-      task_rigid_body_buffer,
+      rigid_body_manager->task_rigid_bodies,
       task_aabb_buffer,
       task_points_aabb_buffer,
   };
@@ -771,8 +770,6 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
 
 void AccelerationStructureManager::update_buffers()
 {
-  task_sim_config.set_buffers({.buffers = std::array{rigid_body_manager->get_sim_config_buffer()}});
-  task_rigid_body_buffer.set_buffers({.buffers = std::array{rigid_body_buffer[renderer_manager->get_frame_index()]}});
   task_blas_instance_data.set_buffers({.buffers = std::array{blas_instances_buffer}});
   task_points_aabb_buffer.set_buffers({.buffers = std::array{points_buffer[renderer_manager->get_frame_index()]}});
   task_previous_points_aabb_buffer.set_buffers({.buffers = std::array{points_buffer[renderer_manager->get_previous_frame_index()]}});
