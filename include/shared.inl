@@ -139,6 +139,7 @@ struct RigidBody
   RigidBodyFlag flags;
 #if defined(BB_DEBUG)
   daxa_u32 face_collided;
+  daxa_u64 frame_count;
 #endif // BB_DEBUG
   daxa_u32 primitive_count;
   daxa_u32 primitive_offset;
@@ -339,6 +340,7 @@ struct SimConfig
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
+  daxa_u64 frame_count;
   GlobalCollisionInfo g_c_info;
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
   [mutating] bool has_flag(SimFlag flag)
@@ -388,6 +390,19 @@ struct BroadPhasePushConstants
   DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
 };
 
+DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
+DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
+DAXA_DECL_TASK_HEAD_END
+
+
+struct RigidBodySimPushConstants
+{
+  DAXA_TH_BLOB(RigidBodySimTaskHead, task_head)
+};
+
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverDispatcherTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
@@ -420,19 +435,6 @@ DAXA_DECL_TASK_HEAD_END
 struct CollisionSolverPushConstants
 {
   DAXA_TH_BLOB(CollisionSolverTaskHead, task_head)
-};
-
-DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
-DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
-DAXA_DECL_TASK_HEAD_END
-
-
-struct RigidBodySimPushConstants
-{
-  DAXA_TH_BLOB(RigidBodySimTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyUpdateTaskHead)

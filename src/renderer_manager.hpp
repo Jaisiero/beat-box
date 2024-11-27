@@ -62,6 +62,12 @@ struct RendererManager
   bool is_gui_enabled() {
     return status_manager->is_gui_enabled();
   }
+  daxa_u64 get_frame_count() {
+    return status_manager->get_frame_count();
+  }
+  daxa_u32 get_rigid_body_count() {
+    return scene_manager->get_rigid_body_count();
+  }
 
 private:
   bool execute();

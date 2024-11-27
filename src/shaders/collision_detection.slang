@@ -842,6 +842,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
 #if defined(BB_DEBUG)
   r->clear_flag(RigidBodyFlag::COLLIDING);
   r->face_collided = 0u;
+  r->frame_count = sim_config.frame_count;
 #endif // BB_DEBUG
   for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {
@@ -856,6 +857,9 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
     
     manifold.obb1_index = rigid_body_index;
     manifold.obb2_index = i;
+#if defined(BB_DEBUG)
+    manifold.frame_count = sim_config.frame_count;
+#endif // BB_DEBUG
 
     // 
     if (collision)
@@ -870,7 +874,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
         daxa_u32 old_index = 0;
         if(find_old_collision(rigid_body_index, i, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
         {
-          printf("Found index %d old index %d collision %d %d new cc: %d old cc: %d\n", index, old_index, rigid_body_index, i, manifold.contact_count, old_manifold.contact_count);
+          // printf("Found index %d old index %d collision %d %d new cc: %d old cc: %d\n", index, old_index, rigid_body_index, i, manifold.contact_count, old_manifold.contact_count);
           manifold.update(old_manifold);
         }
       }

@@ -193,6 +193,8 @@ extension Manifold {
             contacts[i].tangent_impulse[1] = old_manifold.contacts[j].tangent_impulse[1];
 
             contacts[i].warm_start = min(255, old_manifold.contacts[j].warm_start + 1u);
+
+            printf("update - contact pos %f %f %f old pos %f %f %f contacts[%d].warm_start: %d\n", contacts[i].position.x, contacts[i].position.y, contacts[i].position.z, old_manifold.contacts[j].position.x, old_manifold.contacts[j].position.y, old_manifold.contacts[j].position.z, i,contacts[i].warm_start);
           break;
         }
       }
@@ -229,7 +231,7 @@ extension Manifold {
       if(accumulate_impulses) {
         // Apply normal + friction impulse
         daxa_f32vec3 P = normal * contacts[i].normal_impulse;
-        // printf("presolver - contact normal_impulse: %f, tangent_impulse[0]: %f, tangent_impulse[1]: %f, contacts[%d].warm_start: %d\n", contacts[i].normal_impulse, contacts[i].tangent_impulse[0], contacts[i].tangent_impulse[1], contacts[i].warm_start, i);
+        printf("presolver - contact normal_impulse: %f, tangent_impulse[0]: %f, tangent_impulse[1]: %f, contacts[%d].warm_start: %d\n", contacts[i].normal_impulse, contacts[i].tangent_impulse[0], contacts[i].tangent_impulse[1], i, contacts[i].warm_start);
 
         if(enable_friction) {
           for(daxa_u32 j = 0u; j < 2; j++) {
@@ -253,7 +255,9 @@ extension Manifold {
       }
     }
 
-    // printf("pre_step - velocity: %f, %f, %f, omega: %f, %f, %f\n", body_b.velocity.x, body_b.velocity.y, body_b.velocity.z, body_b.omega.x, body_b.omega.y, body_b.omega.z);
+#if defined(BB_DEBUG)
+    // printf("pre_step %lu - %lu - velocity: %f, %f, %f, omega: %f, %f, %f\n", frame_count, body_b.frame_count, body_b.velocity.x, body_b.velocity.y, body_b.velocity.z, body_b.omega.x, body_b.omega.y, body_b.omega.z);
+#endif // BB_DEBUG
   }
 
   [mutating]
@@ -327,7 +331,9 @@ extension Manifold {
 
     }
 
-    // printf("solve - velocity: %f, %f, %f, omega: %f, %f, %f\n", body_b.velocity.x, body_b.velocity.y, body_b.velocity.z, body_b.omega.x, body_b.omega.y, body_b.omega.z);
+#if defined(BB_DEBUG)
+    // printf("solve %lu - %lu - velocity: %f, %f, %f, omega: %f, %f, %f\n", frame_count, body_b.frame_count, body_b.velocity.x, body_b.velocity.y, body_b.velocity.z, body_b.omega.x, body_b.omega.y, body_b.omega.z);
+#endif // BB_DEBUG
   }
 };
 

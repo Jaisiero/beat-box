@@ -74,6 +74,7 @@ struct StatusManager
     }
 
     frame_index = (frame_index + 1) % DOUBLE_BUFFERING;
+    ++frame_count;
 
     return true;
   }
@@ -81,6 +82,11 @@ struct StatusManager
   daxa_u32 get_frame_index()
   {
     return frame_index;
+  }
+
+  daxa_u64 get_frame_count()
+  {
+    return frame_count;
   }
 
   bool is_simulating()
@@ -128,6 +134,19 @@ struct StatusManager
     }
   }
 
+  void switch_warm_starting()
+  {
+    warm_starting = !warm_starting;
+    if(warm_starting)
+    {
+      rigid_body_manager->set_sim_flags(SimFlag::WARM_STARTING);
+    }
+    else
+    {
+      rigid_body_manager->clear_sim_flags(SimFlag::WARM_STARTING);
+    }
+  }
+
   bool is_advection()
   {
     return advection;
@@ -163,10 +182,14 @@ private:
   bool gui_enabled = true;
   // flag for advection
   bool advection = true;
+  // flag for warm starting
+  bool warm_starting = true;
   // double buffering counter
   daxa_u32 double_buffering_counter = 0;
   // frame index
   daxa_u32 frame_index = 0;
+  // frame counter
+  daxa_u32 frame_count = 0;
   // Dispatch buffer
   daxa::BufferId dispatch_buffer;
 };

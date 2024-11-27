@@ -24,14 +24,12 @@ struct RigidBodyManager{
 
   bool simulate();
   bool read_back_sim_config();
-  SimConfig& get_sim_config_reference() {
-    return *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer).value();
-  }
+  SimConfig& get_sim_config_reference();
 
   bool update();
   bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId aabbs, daxa::BufferId points_buffer);
   // NOTE: this function reset simulation configuration
-  bool update_sim(daxa_u32 rigid_body_count);
+  bool update_sim();
 
   SimFlag get_sim_flags() const {
     return sim_flags;
@@ -53,15 +51,14 @@ struct RigidBodyManager{
     return sim_flags;
   }
 
-  daxa::BufferId get_sim_config_host_buffer() {
-    return sim_config_host_buffer;
-  }
+  daxa::BufferId get_sim_config_host_buffer();
 
   bool is_dirty();
   void clean_dirty();
 
   // Task graph information for rigid body simulation
   daxa::TaskBuffer task_dispatch_buffer{{.initial_buffers = {}, .name = "RB_dispatch"}};
+  daxa::TaskBuffer task_sim_config_host{{.initial_buffers = {}, .name = "RB_sim_config_host"}};
   daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config"}};
   daxa::TaskBuffer task_old_sim_config{{.initial_buffers = {}, .name = "RB_old_sim_config"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
@@ -119,7 +116,7 @@ private:
   // TaskGraph to update simulation configuration
   TaskGraph update_SC_TG;
 
-  daxa::BufferId sim_config_host_buffer;
+  daxa::BufferId sim_config_host_buffer[DOUBLE_BUFFERING] = {};
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
 };

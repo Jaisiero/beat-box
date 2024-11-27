@@ -34,6 +34,10 @@
 
 
   broad_phase(pixel_i.x, BP.task_head.rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions);
+
+#if defined(BB_DEBUG)
+  // printf("Broad phase frame %lu\n", sim_config->frame_count);
+#endif // BB_DEBUG
 }
 
 
@@ -215,38 +219,36 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
 
   daxa_u32 index = pixel_i.x;
 
-  Ptr<RigidBody> r =
-      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies[index]);
-  Ptr<RigidBody> r_copy =
-      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies_update[index]);
+  RigidBody r = RB_update.task_head.rigid_bodies[index];
+  RigidBody r_copy = RB_update.task_head.rigid_bodies_update[index];
 
   if(sim_config->has_flag(SimFlag::ADVECTION))
   {
-    r->integrate_velocities(sim_config->dt);
+    r.integrate_velocities(sim_config->dt);
   }
-  // printf("Updating pos rigid body %d, pos: %f %f %f, rot: %f %f %f %f\n", index, r->position.x, r->position.y, r->position.z, r->rotation.v.x, r->rotation.v.y, r->rotation.v.z, r->rotation.w);
-  // printf("Updating vel rigid body %d, vel: %f %f %f, omega: %f %f %f\n", index, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
+  // printf("Updating pos rigid body %d, pos: %f %f %f, rot: %f %f %f %f\n", index, r.position.x, r.position.y, r.position.z, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w);
+  // printf("Updating rigid body %d, frame: %lu, vel: %f %f %f, omega: %f %f %f\n", index, r.frame_count, r.velocity.x, r.velocity.y, r.velocity.z, r.omega.x, r.omega.y, r.omega.z);
 
-  r_copy->position = r->position;
-  r_copy->rotation = r->rotation;
-  r_copy->velocity = r->velocity;
-  r_copy->omega = r->omega;
-  r_copy->flags = r->flags;
+  r_copy.position = r.position;
+  r_copy.rotation = r.rotation;
+  r_copy.velocity = r.velocity;
+  r_copy.omega = r.omega;
+  r_copy.flags = r.flags;
 #if defined(BB_DEBUG)
-  r_copy->face_collided = r->face_collided;
+  r_copy.face_collided = r.face_collided;
 #endif // BB_DEBUG
 
   if(sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
-    daxa_f32vec3 _min = r->minimum;
-    daxa_f32vec3 _max = r->maximum;
+    daxa_f32vec3 _min = r.minimum;
+    daxa_f32vec3 _max = r.maximum;
     daxa_f32vec3 center = (_min + _max) * 0.5f;
     var axes_vertex_buffer = Ptr<GUIVertexLine>(RB_update.task_head.axes_vertex_buffer);
-    let x_axis = r->rotate_vector(daxa_f32vec3(1.0f, 0.0f, 0.0f));
-    let y_axis = r->rotate_vector(daxa_f32vec3(0.0f, 1.0f, 0.0f));
-    let z_axis = r->rotate_vector(daxa_f32vec3(0.0f, 0.0f, 1.0f));
+    let x_axis = r.rotate_vector(daxa_f32vec3(1.0f, 0.0f, 0.0f));
+    let y_axis = r.rotate_vector(daxa_f32vec3(0.0f, 1.0f, 0.0f));
+    let z_axis = r.rotate_vector(daxa_f32vec3(0.0f, 0.0f, 1.0f));
 
-    center = r->object_to_world(center);
+    center = r.object_to_world(center);
 
     axes_vertex_buffer[index*AXES_POINT_COUNT].position = center;
     axes_vertex_buffer[index*AXES_POINT_COUNT+1].position = center + x_axis;
@@ -255,4 +257,12 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     axes_vertex_buffer[index*AXES_POINT_COUNT+4].position = center;
     axes_vertex_buffer[index*AXES_POINT_COUNT+5].position = center + z_axis;
   }
+
+  RB_update.task_head.rigid_bodies[index] = r;
+  RB_update.task_head.rigid_bodies_update[index] = r_copy;
+
+
+#if defined(BB_DEBUG)
+  // printf("Updating rigid body %d sim frame: %lu c frame: %lu p frame: %lu\n", index, sim_config->frame_count, r.frame_count, r_copy.frame_count);
+#endif // BB_DEBUG
 }

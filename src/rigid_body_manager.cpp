@@ -39,6 +39,14 @@ daxa::BufferId RigidBodyManager::get_collision_buffer()
   return collisions[renderer_manager->get_frame_index()];
 }
 
+SimConfig& RigidBodyManager::get_sim_config_reference() {
+  return *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[renderer_manager->get_frame_index()]).value();
+}
+
+daxa::BufferId RigidBodyManager::get_sim_config_host_buffer() {
+  return sim_config_host_buffer[renderer_manager->get_frame_index()];
+}
+
 bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager> renderer, std::shared_ptr<GUIManager> gui, daxa_u32 iterations)
 {
   if (initialized)
@@ -50,11 +58,12 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   gui_manager = gui;
   iteration_count = iterations;
 
-  sim_config_host_buffer = device.create_buffer({
-      .size = sizeof(SimConfig),
-      .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
-      .name = "sim_config_host",
-  });
+  for(auto i = 0u; i < DOUBLE_BUFFERING; ++i)
+    sim_config_host_buffer[i] = device.create_buffer({
+        .size = sizeof(SimConfig),
+        .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+        .name = "sim_config_host",
+    });
 
   for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
     sim_config[i] = device.create_buffer({
@@ -64,20 +73,23 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
     collisions[i] = device.create_buffer({
-        .size = sizeof(Manifold) * MAX_RIGID_BODY_COUNT * MAX_RIGID_BODY_COUNT, // TODO: Change to a more reasonable size
+        .size = sizeof(Manifold) * MAX_RIGID_BODY_COUNT * 6, // TODO: Change to a more reasonable size
         .name = "collisions" + std::to_string(i),
     });
 
-  *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer).value() = SimConfig{
-      .rigid_body_count = 0,
-      .dt = TIME_STEP,
-      .gravity = -GRAVITY,
-      .flags = sim_flags,
-      .g_c_info = GlobalCollisionInfo{
-          .collision_count = 0,
-          .collision_point_count = 0
-      },
-  };
+  for (auto i = 0u; i < DOUBLE_BUFFERING; ++i){
+    *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[i]).value() = SimConfig{
+        .rigid_body_count = 0,
+        .dt = TIME_STEP,
+        .gravity = -GRAVITY,
+        .flags = sim_flags,
+        .frame_count = 0,
+        .g_c_info = GlobalCollisionInfo{
+            .collision_count = 0,
+            .collision_point_count = 0
+        },
+    };
+  }
   
   daxa::InlineTaskInfo task_RC({
       .attachments = {
@@ -85,6 +97,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
+
+        auto frame_count_dst_offset = sizeof(SimConfig) - sizeof(GlobalCollisionInfo) - sizeof(daxa_u64);
+        
+        allocate_fill_copy(ti, renderer_manager->get_frame_count(), ti.get(task_sim_config), frame_count_dst_offset);
+
         auto reset_c_info = GlobalCollisionInfo{
             .collision_count = 0,
             .collision_point_count = 0,
@@ -97,17 +114,17 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .name = "reset sim config",
   });
 
-  auto user_callback = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_BP = [this](daxa::TaskInterface ti, auto &self)
   {
     ti.recorder.set_pipeline(*pipeline_BP);
     ti.recorder.push_constant(BroadPhasePushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(BroadPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = 0});
   };
 
-  using TTask = TaskTemplate<BroadPhaseTaskHead::Task, decltype(user_callback)>;
+  using TTask_BP = TaskTemplate<BroadPhaseTaskHead::Task, decltype(user_callback_BP)>;
 
   // Instantiate the task using the template class
-  TTask task(std::array{
+  TTask_BP task_BP(std::array{
                  daxa::attachment_view(BroadPhaseTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.sim_config, task_sim_config),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.previous_sim_config, task_old_sim_config),
@@ -116,7 +133,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                  daxa::attachment_view(BroadPhaseTaskHead::AT.collisions, task_collisions),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.old_collisions, task_old_collisions),
              },
-             user_callback);
+             user_callback_BP);
 
   auto user_callback_CS_dispatcher = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -246,7 +263,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
 
   RB_TG.add_task(task_RC);
-  RB_TG.add_task(task);
+  RB_TG.add_task(task_BP);
   RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_advect);
   RB_TG.add_task(task_CPS);
@@ -279,7 +296,7 @@ void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &readback_SC_
       {
         ti.recorder.copy_buffer_to_buffer({
             .src_buffer = sim_config[renderer_manager->get_previous_frame_index()],
-            .dst_buffer = sim_config_host_buffer,
+            .dst_buffer = sim_config_host_buffer[renderer_manager->get_frame_index()],
             .size = sizeof(SimConfig),
         });
       },
@@ -306,7 +323,7 @@ void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &update_SC_TG)
       .task = [this](daxa::TaskInterface const &ti)
       {
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = sim_config_host_buffer,
+            .src_buffer = sim_config_host_buffer[renderer_manager->get_frame_index()],
             .dst_buffer = ti.get(task_sim_config).ids[0],
             .size = sizeof(SimConfig),
         });
@@ -332,7 +349,8 @@ void RigidBodyManager::destroy()
     return;
   }
 
-  device.destroy_buffer(sim_config_host_buffer);
+  for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
+    device.destroy_buffer(sim_config_host_buffer[i]);
   for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
     device.destroy_buffer(sim_config[i]);
   for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
@@ -379,18 +397,19 @@ bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::Bu
 }
 
 // NOTE: this function reset simulation configuration
-bool RigidBodyManager::update_sim(daxa_u32 rigid_body_count)
+bool RigidBodyManager::update_sim()
 {
   if (!initialized)
   {
     return !initialized;
   }
 
-  *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer).value() = SimConfig{
-      .rigid_body_count = rigid_body_count,
+  *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[renderer_manager->get_frame_count()]).value() = SimConfig{
+      .rigid_body_count = renderer_manager->get_rigid_body_count(),
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
       .flags = sim_flags,
+      .frame_count = renderer_manager->get_frame_count(),
       .g_c_info = GlobalCollisionInfo{
           .collision_count = 0,
           .collision_point_count = 0,
@@ -414,8 +433,6 @@ bool RigidBodyManager::read_back_sim_config()
   update_buffers();
 
   readback_SC_TG.execute();
-  // TODO: change for wait queue
-  device.wait_idle();
 
   return initialized;
 }
@@ -425,6 +442,7 @@ void RigidBodyManager::update_buffers()
   daxa_u32 previous_frame = renderer_manager->get_previous_frame_index();
   daxa_u32 current_frame = renderer_manager->get_frame_index();
 
+  task_sim_config_host.set_buffers({.buffers = std::array{sim_config_host_buffer[current_frame]}});
   task_sim_config.set_buffers({.buffers = std::array{sim_config[current_frame]}});
   task_old_sim_config.set_buffers({.buffers = std::array{sim_config[previous_frame]}});
   task_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_rigid_body_buffer()}});

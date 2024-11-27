@@ -103,7 +103,7 @@ void RendererManager::render()
 
     if(rigid_body_manager->is_dirty()) {
       rigid_body_manager->clean_dirty();
-      rigid_body_manager->update_sim(scene_manager->get_rigid_body_count());
+      rigid_body_manager->update_sim();
     }
     
     // Simulate rigid bodies
@@ -117,6 +117,8 @@ void RendererManager::render()
     // Update the acceleration structures
     if(status_manager->is_simulating() || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
+      // TODO: change for wait compute queue
+      gpu->synchronize();
       if(status_manager->is_updating()) {
         if(!status_manager->reset_update_sim_buffer()) {
           accel_struct_mngr->update_AS_buffers();

@@ -341,7 +341,8 @@ struct Manifold {
   daxa_i32 key;
 
   daxa_i32 error;
-  // // DEBUG
+  // DEBUG
+  daxa_u64 frame_count;
   // daxa_f32 s_max;
   // Transform rtx;
   // daxa_f32vec3 e_r;
