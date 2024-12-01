@@ -790,6 +790,7 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
 {
  daxa::InlineTaskInfo task0({
       .attachments = {
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_sim_config_host),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_sim_config),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_old_sim_config),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_previous_points_aabb_buffer),
@@ -803,7 +804,7 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
-        auto sim_config = device.buffer_host_address_as<SimConfig>(rigid_body_manager->get_sim_config_host_buffer()).value();
+        auto sim_config = device.buffer_host_address_as<SimConfig>(ti.get(rigid_body_manager->task_sim_config_host).ids[0]).value();
         auto current_frame_index = renderer_manager->get_frame_index();
         auto previous_frame_index = renderer_manager->get_previous_frame_index();
 
@@ -853,20 +854,21 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
   });
 
   std::array<daxa::InlineTaskInfo, 1> tasks = {
-      task0,
+    task0,
   };
 
-  std::array<daxa::TaskBuffer, 10> buffers = {
-      task_points_aabb_buffer,
-      task_previous_points_aabb_buffer,
-      gui_manager->task_previous_vertex_buffer,
-      gui_manager->task_vertex_buffer,
-      rigid_body_manager->task_old_sim_config,
-      rigid_body_manager->task_sim_config,
-      gui_manager->task_previous_line_vertex_buffer,
-      gui_manager->task_line_vertex_buffer,
-      gui_manager->task_previous_axes_vertex_buffer,
-      gui_manager->task_axes_vertex_buffer,
+  std::array<daxa::TaskBuffer, 11> buffers = {
+    rigid_body_manager->task_sim_config_host,
+    task_points_aabb_buffer,
+    task_previous_points_aabb_buffer,
+    gui_manager->task_previous_vertex_buffer,
+    gui_manager->task_vertex_buffer,
+    rigid_body_manager->task_old_sim_config,
+    rigid_body_manager->task_sim_config,
+    gui_manager->task_previous_line_vertex_buffer,
+    gui_manager->task_line_vertex_buffer,
+    gui_manager->task_previous_axes_vertex_buffer,
+    gui_manager->task_axes_vertex_buffer,
   };
 
   AS_buffers_TG = task_manager->create_task_graph("Update Acceleration Structure Buffers", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});

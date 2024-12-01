@@ -365,7 +365,6 @@ struct OBBvsOBBCollision {
         cv.f = b.f;
         cv.v = a.v + (b.v - a.v) * (da / (da - db));
         cv.f.out_reference = clip_edge;
-        cv.f.out_incident = 0;
         out[out_count++] = cv;
       } 
       else if(behind(da) && in_front(db)) 
@@ -373,7 +372,6 @@ struct OBBvsOBBCollision {
         cv.f = a.f;
         cv.v = a.v + (b.v - a.v) * (da / (da - db));
         cv.f.in_reference = clip_edge;
-        cv.f.in_incident = 0;
         out[out_count++] = cv;
         out[out_count++] = b;
       }
@@ -874,9 +872,12 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
         daxa_u32 old_index = 0;
         if(find_old_collision(rigid_body_index, i, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
         {
-          // printf("Found index %d old index %d collision %d %d new cc: %d old cc: %d\n", index, old_index, rigid_body_index, i, manifold.contact_count, old_manifold.contact_count);
+          // printf("Found index %d old index %d collision %d %d new cpc: %d old cpc: %d old cc %d\n", index, old_index, rigid_body_index, i, manifold.contact_count, old_manifold.contact_count, previous_sim_config.g_c_info.collision_count);
           manifold.update(old_manifold);
-        }
+        } 
+        // else {
+        //   printf("Not found index %d collision %d %d new cpc: %d\n", index, old_index, rigid_body_index, i, manifold.contact_count);
+        // }
       }
 
       collisions[index] = manifold;

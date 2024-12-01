@@ -17,8 +17,9 @@
 {
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(BP.task_head.sim_config);
-
-  if (pixel_i.x >= sim_config->rigid_body_count)
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->rigid_body_count)
   {
     return;
   }
@@ -32,8 +33,7 @@
   Ptr<Manifold> old_collisions =
       Ptr<Manifold>(BP.task_head.old_collisions);
 
-
-  broad_phase(pixel_i.x, BP.task_head.rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions);
+  broad_phase(index, BP.task_head.rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions);
 
 #if defined(BB_DEBUG)
   // printf("Broad phase frame %lu\n", sim_config->frame_count);

@@ -154,10 +154,18 @@ extension Manifold {
     tangent_vectors[1] = cross(tangent_vectors[0], normal);
   }
 
+static const daxa_f32 POSITION_TOLERANCE = 0.01f;
 
-  bool is_same_contact(FeaturePair a, FeaturePair b) {
-    return a.in_reference == b.in_reference && a.out_reference == b.out_reference && a.in_incident == b.in_incident && a.out_incident == b.out_incident;
-  }
+  bool is_same_contact(Contact c1, Contact c2)
+{
+    bool features_match = (c1.fp.in_incident == c2.fp.in_incident) &&
+                          (c1.fp.out_incident == c2.fp.out_incident);
+    // bool positions_close = length(c1.position - c2.position) < POSITION_TOLERANCE;
+
+    return features_match 
+    // && positions_close
+    ;
+}
 
   bool is_valid_contact(FeaturePair a) {
     return a.in_reference != -1 && a.out_reference != -1 && a.in_incident != -1 && a.out_incident != -1;
@@ -175,12 +183,15 @@ extension Manifold {
     daxa_f32vec3 otv0  = old_manifold.tangent_vectors[0];
     daxa_f32vec3 otv1  = old_manifold.tangent_vectors[1];
 
+    // bool _found[4] = {false, false, false, false};
     for(daxa_u32 i = 0u; i < contact_count; i++) {
+      // bool found = false;
       for(daxa_u32 j = 0u; j < old_manifold.contact_count; j++) {
-        if(is_same_contact(old_manifold.contacts[j].fp, contacts[i].fp) 
-        && is_valid_contact(contacts[i].fp)
-        ) {
+        if(is_same_contact(old_manifold.contacts[j], contacts[i])) {
         // TODO: Check why -1 make system unstable
+          // found = true;
+          // _found[j] = true;
+          // printf("update - old fp %d %d %d %d fp %d %d %d %d ws: %d\n", old_manifold.contacts[j].fp.in_reference, old_manifold.contacts[j].fp.out_reference, old_manifold.contacts[j].fp.in_incident, old_manifold.contacts[j].fp.out_incident, contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, old_manifold.contacts[j].warm_start);
 
             contacts[i].normal_impulse = old_manifold.contacts[j].normal_impulse;
 
@@ -194,11 +205,23 @@ extension Manifold {
 
             contacts[i].warm_start = min(255, old_manifold.contacts[j].warm_start + 1u);
 
-            printf("update - contact pos %f %f %f old pos %f %f %f contacts[%d].warm_start: %d\n", contacts[i].position.x, contacts[i].position.y, contacts[i].position.z, old_manifold.contacts[j].position.x, old_manifold.contacts[j].position.y, old_manifold.contacts[j].position.z, i,contacts[i].warm_start);
+            // printf("update - contact pos %f %f %f old pos %f %f %f contacts[%d].warm_start: %d\n", contacts[i].position.x, contacts[i].position.y, contacts[i].position.z, old_manifold.contacts[j].position.x, old_manifold.contacts[j].position.y, old_manifold.contacts[j].position.z, i,contacts[i].warm_start);
           break;
-        }
+        } 
       }
+
+      // if(!found) {
+      //   printf("Not updated - fp %d %d %d %d ws: %d\n",  contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, contacts[i].warm_start);
+      // }
     }
+    
+    // // print old manifold
+    // for( daxa_u32 i = 0u; i < old_manifold.contact_count; i++) {
+    //   if(!_found[i]) {
+    //     printf(" failed old manifold - fp %d %d %d %d ws: %d\n",
+    //     old_manifold.contacts[i].fp.in_reference, old_manifold.contacts[i].fp.out_reference, old_manifold.contacts[i].fp.in_incident, old_manifold.contacts[i].fp.out_incident, old_manifold.contacts[i].warm_start);
+    //   }
+    // }
   }
 
   [mutating] void pre_step(daxa_f32 inv_dt, inout RigidBody body_a,  inout RigidBody body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_f32 k_allowed_penetration = PENETRATION_FACTOR, daxa_f32 k_bias_factor = BIAS_FACTOR) {
@@ -231,7 +254,7 @@ extension Manifold {
       if(accumulate_impulses) {
         // Apply normal + friction impulse
         daxa_f32vec3 P = normal * contacts[i].normal_impulse;
-        printf("presolver - contact normal_impulse: %f, tangent_impulse[0]: %f, tangent_impulse[1]: %f, contacts[%d].warm_start: %d\n", contacts[i].normal_impulse, contacts[i].tangent_impulse[0], contacts[i].tangent_impulse[1], i, contacts[i].warm_start);
+        // printf("presolver - contact normal_impulse: %f, tangent_impulse[0]: %f, tangent_impulse[1]: %f, contacts[%d].warm_start: %d\n", contacts[i].normal_impulse, contacts[i].tangent_impulse[0], contacts[i].tangent_impulse[1], i, contacts[i].warm_start);
 
         if(enable_friction) {
           for(daxa_u32 j = 0u; j < 2; j++) {

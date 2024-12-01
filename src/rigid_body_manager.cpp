@@ -62,7 +62,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     sim_config_host_buffer[i] = device.create_buffer({
         .size = sizeof(SimConfig),
         .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
-        .name = "sim_config_host",
+        .name = "sim_config_host_" + std::to_string(i),
     });
 
   for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
@@ -290,21 +290,23 @@ void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &readback_SC_
 {
   daxa::InlineTaskInfo task_readback_SC({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE, task_sim_config),
+        daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_old_sim_config),
+        daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_sim_config_host),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = sim_config[renderer_manager->get_previous_frame_index()],
-            .dst_buffer = sim_config_host_buffer[renderer_manager->get_frame_index()],
+            .src_buffer = ti.get(task_old_sim_config).ids[0],
+            .dst_buffer = ti.get(task_sim_config_host).ids[0],
             .size = sizeof(SimConfig),
         });
       },
       .name = "read back sim config",
   });
 
-  std::array<daxa::TaskBuffer, 1> buffers = {
-      task_sim_config,
+  std::array<daxa::TaskBuffer, 2> buffers = {
+    task_old_sim_config,
+    task_sim_config_host,
   };
 
   std::array<daxa::InlineTaskInfo, 1> tasks = {
@@ -318,12 +320,13 @@ void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &update_SC_TG)
 {
   daxa::InlineTaskInfo task_update_SC({
       .attachments = {
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_sim_config_host),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_sim_config),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = sim_config_host_buffer[renderer_manager->get_frame_index()],
+            .src_buffer = ti.get(task_sim_config_host).ids[0],
             .dst_buffer = ti.get(task_sim_config).ids[0],
             .size = sizeof(SimConfig),
         });
@@ -331,8 +334,9 @@ void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &update_SC_TG)
       .name = "update sim config",
   });
 
-  std::array<daxa::TaskBuffer, 1> buffers = {
+  std::array<daxa::TaskBuffer, 2> buffers = {
       task_sim_config,
+      task_sim_config_host,
   };
 
   std::array<daxa::InlineTaskInfo, 1> tasks = {
