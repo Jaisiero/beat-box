@@ -110,7 +110,7 @@
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
-    manifold.pre_step(inv_dt, r1, r2, accum_impulse, friction);
+    PGS.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction);
 
     CPS.task_head.collisions[m] = manifold;
     CPS.task_head.rigid_bodies[manifold.obb1_index] = r1;
@@ -152,7 +152,7 @@
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
 
     // Solve the collision
-    manifold.solve(r1, r2, accum_impulse, friction);
+    PGS.solve(manifold, r1, r2, accum_impulse, friction);
     
     CS.task_head.collisions[m] = manifold;
     CS.task_head.rigid_bodies[manifold.obb1_index] = r1;
