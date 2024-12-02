@@ -37,12 +37,14 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
                   daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies,
                                         rigid_body_manager->task_rigid_bodies),
                   daxa::attachment_view(RayTracingTaskHead::AT.aabbs, accel_struct_mngr->task_aabb_buffer),
+                  daxa::attachment_view(RayTracingTaskHead::AT.materials, scene_manager->task_material_buffer),
               },
               user_callback);
   
 
-  std::array<daxa::TaskBuffer, 6> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer,  gui_manager->task_vertex_buffer,
-  gui_manager->task_line_vertex_buffer, gui_manager->task_axes_vertex_buffer};
+  std::array<daxa::TaskBuffer, 7> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer,  gui_manager->task_vertex_buffer,
+  gui_manager->task_line_vertex_buffer, gui_manager->task_axes_vertex_buffer,
+  scene_manager->task_material_buffer};
 
   std::array<daxa::TaskImage, 1> images = {task_swapchain_image};
 

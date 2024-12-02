@@ -36,7 +36,7 @@ int main(int argc, char const *argv[])
   // Status manager
   auto status_manager = std::make_shared<StatusManager>(gpu, accel_struct_mngr, rigid_body_manager);
   // Scene manager
-  auto scene_manager = std::make_shared<SceneManager>("Scene Manager", gpu->device, accel_struct_mngr, rigid_body_manager, status_manager);
+  auto scene_manager = std::make_shared<SceneManager>("Scene Manager", gpu->device, accel_struct_mngr, rigid_body_manager, status_manager, task_manager);
   auto gui_manager = std::make_shared<GUIManager>(gpu, window, task_manager, rigid_body_manager);
 
   // Primary tracing pipeline
@@ -70,6 +70,7 @@ int main(int argc, char const *argv[])
   renderer->render();
 
   // Cleanup
+  scene_manager->destroy();
   status_manager->destroy();
   rigid_body_manager->destroy();
   gui_manager->destroy();

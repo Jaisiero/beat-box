@@ -132,11 +132,16 @@ inline void operator&=(SimFlag &a, SimFlag b)
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 
 
+struct Material {
+  daxa_f32vec3 albedo;
+};
 
-// RigidBody struct is 156 bytes
+
+
 struct RigidBody
 {
   RigidBodyFlag flags;
+  daxa_u32 material_index;
 #if defined(BB_DEBUG)
   daxa_u32 face_collided;
   daxa_u64 frame_count;
@@ -266,6 +271,7 @@ DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_WRITE_ONLY, REGULAR_2D, swapchain)
 DAXA_TH_TLAS_ID(RAY_TRACING_SHADER_READ, tlas)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Material), materials)
 DAXA_DECL_TASK_HEAD_END
 
 struct RTPushConstants

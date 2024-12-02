@@ -5,27 +5,17 @@
 #include "rigid_body_manager.hpp"
 #include "acceleration_structure_manager.hpp"
 #include "status_manager.hpp"
+#include <random>
 
 BB_NAMESPACE_BEGIN
 
 struct SceneManager
 {
-  // Device
-  daxa::Device &device;
-  // Acceleration structure manager reference
-  std::shared_ptr<AccelerationStructureManager> accel_struct_mngr;
-  // Rigid body manager reference
-  std::shared_ptr<RigidBodyManager> rigid_body_manager;
-  // Status manager reference
-  std::shared_ptr<StatusManager> status_manager;
-  // Initialization flag
-  bool initialized = false;
+public:
+  daxa::TaskBuffer task_material_buffer{{.name = "task_material_buffer"}};
 
-  // TODO: Fill in scene data from file?
-  std::vector<RigidBody> rigid_bodies;
-  std::vector<Aabb> aabb;
 
-  explicit SceneManager(char const *name, daxa::Device &device, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<StatusManager> status_manager) : device(device), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), status_manager(status_manager)
+  explicit SceneManager(char const *name, daxa::Device &device, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<TaskManager> task_manager) : device(device), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), status_manager(status_manager), task_manager(task_manager)
   {
   }
   ~SceneManager()
@@ -39,7 +29,50 @@ struct SceneManager
       return false;
     }
 
+    material_buffer = device.create_buffer({
+        .size = sizeof(Material) * MAX_MATERIAL_COUNT,
+        .name = "material_buffer",
+    });
+    task_material_buffer.set_buffers({.buffers = std::array{material_buffer}});
+
+    record_material_upload_tasks(material_TG);
+    material_TG.submit();
+    material_TG.complete();
+
     return initialized = true;
+  }
+
+  void destroy()
+  {
+    if (!initialized)
+    {
+      return;
+    }
+
+    device.destroy_buffer(material_buffer);
+
+    initialized = false;
+  }
+
+  void record_material_upload_tasks(TaskGraph &M_TG)
+  {
+    daxa::InlineTaskInfo task_materials({
+        .attachments = {
+            daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_material_buffer),
+        },
+        .task = [this](daxa::TaskInterface const &ti)
+        {
+          allocate_fill_copy(ti, materials, ti.get(task_material_buffer), 0);
+        },
+        .name = "upload materials",
+    });
+    std::array<daxa::TaskBuffer, 1> buffers = {
+      task_material_buffer
+    };
+    std::array<daxa::InlineTaskInfo, 1> tasks = {
+      task_materials
+    };
+    M_TG = task_manager->create_task_graph("Material Upload", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
   }
 
   bool load_scene()
@@ -50,6 +83,27 @@ struct SceneManager
     }
 
     // TODO: temporary scene
+    materials = {
+      {
+        .albedo = daxa_f32vec3(1.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0, 1.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0, 0.0, 1.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 1.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.0, 1.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0, 1.0, 1.0),
+      },
+    };
+
     rigid_bodies = {
       {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, -50.0, 0.0), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-50.0, -50.0, -50.0), .maximum = daxa_f32vec3(50.0, 50.0, 50.0), .mass = 0.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5}, 
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5, 2.0, -0.5), .rotation = Quaternion(0.4572f, 0.0000f, -0.4572f, -0.7629f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7, .friction = 0.3}, 
@@ -71,6 +125,11 @@ struct SceneManager
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(6.9, 2.5, 4.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.2, .friction = 0.3}, 
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(5.8, 3.5, 4.5), .rotation = Quaternion(0.0000f, 1.0000f, 0.0000f, -0.5000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.1, .friction = 0.3}
     };
+  
+
+    std::random_device rd; // obtain a random number from hardware
+    std::mt19937 gen(rd()); // seed the generator
+    std::uniform_int_distribution<> distr(0, materials.size()-1); // define the range
 
     aabb.clear();
     aabb.reserve(rigid_bodies.size());
@@ -80,6 +139,7 @@ struct SceneManager
       1.0f / rigid_body.mass;
       rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);
       aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
+      rigid_body.material_index = distr(gen);
     }
 
     status_manager->update_dispatch_buffer(get_rigid_body_count());
@@ -90,6 +150,8 @@ struct SceneManager
     status_manager->next_frame();
     rigid_body_manager->update_sim();
     status_manager->next_frame();
+
+    material_TG.execute();
 
     // TODO: Handle error
     if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb))
@@ -103,6 +165,30 @@ struct SceneManager
   {
     return rigid_bodies.size();
   }
+
+private:
+  // Device
+  daxa::Device &device;
+  // Acceleration structure manager reference
+  std::shared_ptr<AccelerationStructureManager> accel_struct_mngr;
+  // Rigid body manager reference
+  std::shared_ptr<RigidBodyManager> rigid_body_manager;
+  // Status manager reference
+  std::shared_ptr<StatusManager> status_manager;
+  // Task manager reference
+  std::shared_ptr<TaskManager> task_manager;
+  // Initialization flag
+  bool initialized = false;
+  // Material buffer
+  daxa::BufferId material_buffer;
+
+  // TODO: Fill in scene data from file?
+  std::vector<RigidBody> rigid_bodies;
+  std::vector<Aabb> aabb;
+  std::vector<Material> materials;
+
+  // TaskGraph for material upload
+  TaskGraph material_TG;
 };
 
 BB_NAMESPACE_END

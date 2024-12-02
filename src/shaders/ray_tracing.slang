@@ -112,22 +112,23 @@ daxa_f32vec3 get_face_color(BoxFace face)
                  (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) : daxa_f32vec3(0, 0, sign(normal.z));
   }
 
+  Material m = p.task_head.materials[r->material_index];
   // get face by normal
-  BoxFace face = get_face_by_normal(normal);
 #if defined(BB_RT_DEBUG)
+  BoxFace face = get_face_by_normal(normal);
   if(r->has_flag(RigidBodyFlag::COLLIDING))
   {
     if(r->is_face_colliding(face))
     {
       color = collision_material_color;
     } else {
-      color = get_face_color(face);
+      color = m.albedo;
     }
   } else {
-    color = get_face_color(face);
+    color = m.albedo;
   }
 #else
-    color = get_face_color(face);
+    color = m.albedo;
 #endif
 
   normal = r->rotate_vector(normal);
