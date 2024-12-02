@@ -27,7 +27,7 @@ struct RigidBodyManager{
   SimConfig& get_sim_config_reference();
 
   bool update();
-  bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId aabbs, daxa::BufferId points_buffer);
+  bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId aabbs);
   // NOTE: this function reset simulation configuration
   bool update_sim();
 

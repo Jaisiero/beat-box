@@ -182,24 +182,21 @@ const static daxa_f32 LINE_SIZE = 0.5f;
   daxa_u32 index = 0;
   InterlockedAdd(sim_config->g_c_info.collision_point_count, m.contact_count, index);
 
-  var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
-  var line_vertex_buffer = Ptr<GUIVertexLine>(CP.task_head.line_vertex_buffer);
-
-  for(int i = 0; i < m.contact_count; i++)
+  if(sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
-    daxa_u32 current_index = index + i;
-    Ptr<Aabb> aabb = Ptr<Aabb>(&CP.task_head.point_aabbs[current_index]);
-    aabb->minimum = m.contacts[i].position + daxa_f32vec3(-POINT_SIZE, -POINT_SIZE, -POINT_SIZE);
-    aabb->maximum = m.contacts[i].position + daxa_f32vec3(POINT_SIZE, POINT_SIZE, POINT_SIZE);
-    if(sim_config->has_flag(SimFlag::DEBUG_INFO))
-    {
-      vertex_buffer[current_index].position = m.contacts[i].position;
-      daxa_f32 blue = (daxa_f32)(255 - m.contacts[i].warm_start) / 255.0f;
-      daxa_f32 red = 1.0f - blue;
-      vertex_buffer[current_index].color = daxa_f32vec3(red, 0.0f, blue);
+    var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
+    var line_vertex_buffer = Ptr<GUIVertexLine>(CP.task_head.line_vertex_buffer);
 
-      line_vertex_buffer[current_index*LINE_POINT_COUNT].position = m.contacts[i].position;
-      line_vertex_buffer[current_index*LINE_POINT_COUNT+1].position = m.contacts[i].position + m.normal * LINE_SIZE;
+    for(int i = 0; i < m.contact_count; i++)
+    {
+      daxa_u32 current_index = index + i;
+        vertex_buffer[current_index].position = m.contacts[i].position;
+        daxa_f32 blue = (daxa_f32)(255 - m.contacts[i].warm_start) / 255.0f;
+        daxa_f32 red = 1.0f - blue;
+        vertex_buffer[current_index].color = daxa_f32vec3(red, 0.0f, blue);
+
+        line_vertex_buffer[current_index*LINE_POINT_COUNT].position = m.contacts[i].position;
+        line_vertex_buffer[current_index*LINE_POINT_COUNT+1].position = m.contacts[i].position + m.normal * LINE_SIZE;
     }
   }
 }

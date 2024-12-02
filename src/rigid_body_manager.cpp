@@ -220,7 +220,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                       daxa::attachment_view(CreatePointsTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
                       daxa::attachment_view(CreatePointsTaskHead::AT.sim_config, task_sim_config),
                       daxa::attachment_view(CreatePointsTaskHead::AT.collisions, task_collisions),
-                      daxa::attachment_view(CreatePointsTaskHead::AT.point_aabbs, task_points),
                       daxa::attachment_view(CreatePointsTaskHead::AT.vertex_buffer, gui->task_vertex_buffer),
                       daxa::attachment_view(CreatePointsTaskHead::AT.line_vertex_buffer, gui->task_line_vertex_buffer),
                   },
@@ -385,7 +384,7 @@ bool RigidBodyManager::simulate()
   return initialized;
 }
 
-bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId aabbs, daxa::BufferId points_buffer)
+bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId aabbs)
 {
   if (!initialized)
   {
@@ -395,7 +394,6 @@ bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::Bu
   task_dispatch_buffer.set_buffers({.buffers = std::array{dispatch_buffer}});
   task_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_rigid_body_buffer()}});
   task_aabbs.set_buffers({.buffers = std::array{aabbs}});
-  task_points.set_buffers({.buffers = std::array{points_buffer}});
 
   return initialized;
 }
@@ -453,7 +451,6 @@ void RigidBodyManager::update_buffers()
   task_next_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_next_rigid_body_buffer()}});
   task_collisions.set_buffers({.buffers = std::array{collisions[current_frame]}});
   task_old_collisions.set_buffers({.buffers = std::array{collisions[previous_frame]}});
-  task_points.set_buffers({.buffers = std::array{accel_struct_mngr->get_points_buffer()}});
 }
 
 BB_NAMESPACE_END

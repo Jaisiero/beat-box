@@ -36,7 +36,7 @@ struct StatusManager
     // Link resources
     accel_struct_mngr->update_TLAS_resources(dispatch_buffer);
 
-    rigid_body_manager->update_resources(dispatch_buffer, accel_struct_mngr->primitive_buffer, accel_struct_mngr->get_points_buffer());
+    rigid_body_manager->update_resources(dispatch_buffer, accel_struct_mngr->primitive_buffer);
 
     return initialized = true;
   }
