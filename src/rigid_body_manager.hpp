@@ -27,7 +27,7 @@ struct RigidBodyManager{
   SimConfig& get_sim_config_reference();
 
   bool update();
-  bool update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId aabbs);
+  bool update_resources(daxa::BufferId aabbs);
   // NOTE: this function reset simulation configuration
   bool update_sim();
 
@@ -57,16 +57,13 @@ struct RigidBodyManager{
   void clean_dirty();
 
   // Task graph information for rigid body simulation
-  daxa::TaskBuffer task_dispatch_buffer{{.initial_buffers = {}, .name = "RB_dispatch"}};
   daxa::TaskBuffer task_sim_config_host{{.initial_buffers = {}, .name = "RB_sim_config_host"}};
   daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config"}};
   daxa::TaskBuffer task_old_sim_config{{.initial_buffers = {}, .name = "RB_old_sim_config"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
   daxa::TaskBuffer task_next_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
-  daxa::TaskBuffer task_aabbs{{.initial_buffers = {}, .name = "RB_aabb_task"}};
   daxa::TaskBuffer task_collisions{{.initial_buffers = {}, .name = "RB_collisions"}};
   daxa::TaskBuffer task_old_collisions{{.initial_buffers = {}, .name = "RB_old_collisions"}};
-  daxa::TaskBuffer task_points{{.initial_buffers = {}, .name = "RB_points"}};
 
 private: 
   void record_read_back_sim_config_tasks(TaskGraph &readback_SC_TG);

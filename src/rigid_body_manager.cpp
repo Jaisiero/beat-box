@@ -125,11 +125,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // Instantiate the task using the template class
   TTask_BP task_BP(std::array{
-                 daxa::attachment_view(BroadPhaseTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                 daxa::attachment_view(BroadPhaseTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.sim_config, task_sim_config),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.previous_sim_config, task_old_sim_config),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
-                 daxa::attachment_view(BroadPhaseTaskHead::AT.aabbs, task_aabbs),
+                 daxa::attachment_view(BroadPhaseTaskHead::AT.aabbs, accel_struct_mngr->task_aabb_buffer),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.collisions, task_collisions),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.old_collisions, task_old_collisions),
              },
@@ -146,7 +146,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // Instantiate the task using the template class
   TTask_CS_dispatcher task_CS_dispatcher(std::array{
-                                             daxa::attachment_view(CollisionSolverDispatcherTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                                             daxa::attachment_view(CollisionSolverDispatcherTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                                              daxa::attachment_view(CollisionSolverDispatcherTaskHead::AT.sim_config, task_sim_config),
                                          },
                                          user_callback_CS_dispatcher);
@@ -162,7 +162,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // Instantiate the task using the template class
   TTask_CPS task_CPS(std::array{
-                       daxa::attachment_view(CollisionPreSolverTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                       daxa::attachment_view(CollisionPreSolverTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(CollisionPreSolverTaskHead::AT.sim_config, task_sim_config),
                        daxa::attachment_view(CollisionPreSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
                        daxa::attachment_view(CollisionPreSolverTaskHead::AT.collisions, task_collisions),
@@ -180,7 +180,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // Instantiate the task using the template class
   TTask_CS task_CS(std::array{
-                       daxa::attachment_view(CollisionSolverTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                       daxa::attachment_view(CollisionSolverTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.sim_config, task_sim_config),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.collisions, task_collisions),
@@ -198,10 +198,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // Instantiate the task using the template class
   TTaskAdvect task_advect(std::array{
-                   daxa::attachment_view(RigidBodySimTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                   daxa::attachment_view(RigidBodySimTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                    daxa::attachment_view(RigidBodySimTaskHead::AT.sim_config, task_sim_config),
                    daxa::attachment_view(RigidBodySimTaskHead::AT.rigid_bodies, task_rigid_bodies),
-                   daxa::attachment_view(RigidBodySimTaskHead::AT.aabbs, task_aabbs),
+                   daxa::attachment_view(RigidBodySimTaskHead::AT.aabbs, accel_struct_mngr->task_aabb_buffer),
                },
                user_callback_advect);
 
@@ -217,7 +217,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // Instantiate the task using the template class
   TTaskCP task_CP(std::array{
-                      daxa::attachment_view(CreatePointsTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                      daxa::attachment_view(CreatePointsTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                       daxa::attachment_view(CreatePointsTaskHead::AT.sim_config, task_sim_config),
                       daxa::attachment_view(CreatePointsTaskHead::AT.collisions, task_collisions),
                       daxa::attachment_view(CreatePointsTaskHead::AT.vertex_buffer, gui->task_vertex_buffer),
@@ -236,7 +236,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // Instantiate the task using the template class
   TTaskUpdate task_update(std::array{
-                              daxa::attachment_view(RigidBodyUpdateTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
+                              daxa::attachment_view(RigidBodyUpdateTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                               daxa::attachment_view(RigidBodyUpdateTaskHead::AT.sim_config, task_sim_config),
                               daxa::attachment_view(RigidBodyUpdateTaskHead::AT.rigid_bodies, task_rigid_bodies),
                               daxa::attachment_view(RigidBodyUpdateTaskHead::AT.rigid_bodies_update, task_next_rigid_bodies),
@@ -244,16 +244,15 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 12> buffers = {
-      task_dispatch_buffer,
+  std::array<daxa::TaskBuffer, 11> buffers = {
+      accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
       task_rigid_bodies,
       task_next_rigid_bodies,
-      task_aabbs,
+      accel_struct_mngr->task_aabb_buffer,
       task_collisions,
       task_old_collisions,
-      task_points,
       gui->task_vertex_buffer,
       gui->task_line_vertex_buffer,
       gui->task_axes_vertex_buffer,
@@ -384,16 +383,14 @@ bool RigidBodyManager::simulate()
   return initialized;
 }
 
-bool RigidBodyManager::update_resources(daxa::BufferId dispatch_buffer, daxa::BufferId aabbs)
+bool RigidBodyManager::update_resources(daxa::BufferId aabbs)
 {
   if (!initialized)
   {
     return !initialized;
   }
 
-  task_dispatch_buffer.set_buffers({.buffers = std::array{dispatch_buffer}});
   task_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_rigid_body_buffer()}});
-  task_aabbs.set_buffers({.buffers = std::array{aabbs}});
 
   return initialized;
 }
