@@ -1,5 +1,6 @@
 // #include "extensions.slang"
 #include "collision_detection.slang"
+#include "solvers.slang"
 
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
