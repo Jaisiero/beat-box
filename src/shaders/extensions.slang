@@ -194,18 +194,10 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
           // printf("update - old fp %d %d %d %d fp %d %d %d %d ws: %d\n", old_manifold.contacts[j].fp.in_reference, old_manifold.contacts[j].fp.out_reference, old_manifold.contacts[j].fp.in_incident, old_manifold.contacts[j].fp.out_incident, contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, old_manifold.contacts[j].warm_start);
 
             contacts[i].normal_impulse = old_manifold.contacts[j].normal_impulse;
-
-            // // Attempt to re-project old friction solutions
-            // daxa_f32vec3 friction = otv0 * old_manifold.contacts[j].tangent_impulse[0] + otv1 * old_manifold.contacts[j].tangent_impulse[1];
-
-            // contacts[i].tangent_impulse[0] = dot(friction, tangent_vectors[0]);
-            // contacts[i].tangent_impulse[1] = dot(friction, tangent_vectors[1]);
             contacts[i].tangent_impulse[0] = old_manifold.contacts[j].tangent_impulse[0];
             contacts[i].tangent_impulse[1] = old_manifold.contacts[j].tangent_impulse[1];
 
             contacts[i].warm_start = min(255, old_manifold.contacts[j].warm_start + 1u);
-
-            // printf("update - contact pos %f %f %f old pos %f %f %f contacts[%d].warm_start: %d\n", contacts[i].position.x, contacts[i].position.y, contacts[i].position.z, old_manifold.contacts[j].position.x, old_manifold.contacts[j].position.y, old_manifold.contacts[j].position.z, i,contacts[i].warm_start);
           break;
         } 
       }

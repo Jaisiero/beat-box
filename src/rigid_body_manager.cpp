@@ -408,7 +408,7 @@ bool RigidBodyManager::update_sim()
     return !initialized;
   }
 
-  *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[renderer_manager->get_frame_count()]).value() = SimConfig{
+  *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[renderer_manager->get_frame_index()]).value() = SimConfig{
       .rigid_body_count = renderer_manager->get_rigid_body_count(),
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
