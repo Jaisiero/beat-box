@@ -188,7 +188,6 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
       // bool found = false;
       for(daxa_u32 j = 0u; j < old_manifold.contact_count; j++) {
         if(is_same_contact(old_manifold.contacts[j], contacts[i])) {
-        // TODO: Check why -1 make system unstable
           // found = true;
           // _found[j] = true;
           // printf("update - old fp %d %d %d %d fp %d %d %d %d ws: %d\n", old_manifold.contacts[j].fp.in_reference, old_manifold.contacts[j].fp.out_reference, old_manifold.contacts[j].fp.in_incident, old_manifold.contacts[j].fp.out_incident, contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, old_manifold.contacts[j].warm_start);

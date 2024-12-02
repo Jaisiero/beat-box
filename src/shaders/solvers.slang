@@ -46,13 +46,14 @@ struct PGS {
         body_b.omega += mul(body_b.get_transformed_inertia(), cross(r2, P));
       }
 
-      // Apply restitution
-      daxa_f32 relative_velocity = dot(body_b.velocity + cross(body_b.omega, r2) - body_a.velocity - cross(body_a.omega, r1), manifold.normal);
+      // TODO: Revisit this
+      // // Apply restitution
+      // daxa_f32 relative_velocity = dot(body_b.velocity + cross(body_b.omega, r2) - body_a.velocity - cross(body_a.omega, r1), manifold.normal);
 
-      if(relative_velocity < -1.0f) {
-        daxa_f32 restitution = max(body_a.restitution, body_b.restitution);
-        manifold.contacts[i].bias += -restitution * relative_velocity;
-      }
+      // if(relative_velocity < -1.0f) {
+      //   daxa_f32 restitution = max(body_a.restitution, body_b.restitution);
+      //   manifold.contacts[i].bias += -restitution * relative_velocity;
+      // }
     }
 
 #if defined(BB_DEBUG)

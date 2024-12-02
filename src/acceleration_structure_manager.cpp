@@ -390,7 +390,6 @@ bool AccelerationStructureManager::update()
     return false;
   }
 
-  // TODO: should frame_index be passed as a parameter?
   daxa_u32 frame_index = renderer_manager->get_frame_index();
 
   // BUILDING BLAS
