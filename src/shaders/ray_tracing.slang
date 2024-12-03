@@ -2,37 +2,400 @@
 
 [[vk::push_constant]] RTPushConstants p;
 
+// Wang Hash Function
+daxa_u32 wang_hash(daxa_u32 seed)
+{
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed *= 9u;
+    seed = seed ^ (seed >> 4u);
+    seed *= 0x27d4eb2du;
+    seed = seed ^ (seed >> 15u);
+    return seed;
+}
+
+// Function to initialize the random seed
+daxa_u32 init_random_seed(daxa_u32vec2 pixel_coords, daxa_u32 frame_number)
+{
+    daxa_u32 seed = pixel_coords.x + pixel_coords.y * 12345u + frame_number * 6789u;
+    return wang_hash(seed);
+}
+
+// XorShift RNG
+daxa_u32 xorshift32(inout daxa_u32 state)
+{
+    if (state == 0) state = 1;
+    state ^= state << 13u;
+    state ^= state >> 17u;
+    state ^= state << 5u;
+    return state;
+}
+
+// Function to generate a random float between 0 and 1
+daxa_f32 random_float(inout daxa_u32 state)
+{
+    daxa_u32 rnd = xorshift32(state);
+    return rnd * 2.3283064365386963e-10f; // 1/2^32
+}
+
+// Function to sample a Lambertian diffuse reflection
+void sample_lambertian(daxa_f32vec3 normal, daxa_f32vec3 albedo, out daxa_f32vec3 direction, out daxa_f32 pdf, out daxa_f32vec3 brdf, inout daxa_u32 seed)
+{
+    // Generate a random direction in the hemisphere
+    direction = random_in_hemisphere(normal, seed);
+    daxa_f32 cos_theta = max(0.0f, dot(normal, direction));
+    pdf = cos_theta / PI; // Cosine-weighted PDF
+    brdf = albedo / PI;   // Lambertian BRDF
+}
+
+// Function to sample a cosine-weighted direction on the sphere
+daxa_f32vec3 random_in_hemisphere(daxa_f32vec3 normal, inout daxa_u32 seed)
+{
+    daxa_f32 u1 = random_float(seed);
+    daxa_f32 u2 = random_float(seed);
+
+    daxa_f32 r = sqrt(u1);
+    daxa_f32 theta = 2.0f * PI * u2;
+
+    daxa_f32 x = r * cos(theta);
+    daxa_f32 y = r * sin(theta);
+    daxa_f32 z = sqrt(1.0f - u1);
+
+    // Create an orthonormal basis (Tangent Space)
+    daxa_f32vec3 up = abs(normal.z) < 0.999f ? daxa_f32vec3(0.0f, 0.0f, 1.0f) : daxa_f32vec3(1.0f, 0.0f, 0.0f);
+    daxa_f32vec3 tangent = normalize(cross(up, normal));
+    daxa_f32vec3 bitangent = cross(normal, tangent);
+
+    // Transform sample to world space
+    return normalize(tangent * x + bitangent * y + normal * z);
+}
+
+// Function to sample a random point on a unit sphere
+daxa_f32vec3 random_point_on_sphere(inout daxa_u32 seed)
+{
+    daxa_f32 u = random_float(seed);
+    daxa_f32 v = random_float(seed);
+
+    daxa_f32 theta = 2.0f * PI * u;
+    daxa_f32 phi = acos(2.0f * v - 1.0f);
+
+    daxa_f32 x = sin(phi) * cos(theta);
+    daxa_f32 y = sin(phi) * sin(theta);
+    daxa_f32 z = cos(phi);
+
+    return daxa_f32vec3(x, y, z);
+}
+
+// Function to compute the normal at the hit point
+daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, Ptr<RigidBody> r, daxa_u32 prim_index)
+{
+    Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
+    Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);
+
+    daxa_f32vec3 center = aabb.center();
+    center = r->object_to_world(center);
+
+    daxa_f32vec3 normal = normalize(hit_location - center);
+    normal = r->rotate_vector_inverse(normal);
+
+    // Cube normal calculation
+    daxa_f32vec3 abs_normal = abs(normal);
+    daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
+    normal = (max_component == abs_normal.x) ? daxa_f32vec3(sign(normal.x), 0, 0) :
+             (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) :
+                                               daxa_f32vec3(0, 0, sign(normal.z));
+
+    normal = r->rotate_vector(normal);
+    return normal;
+}
+
+// Define the AreaLight struct and initialize it
+struct AreaLight
+{
+    daxa_f32vec3 position;
+    daxa_f32 radius;
+    daxa_f32vec3 intensity; // Emission intensity
+};
+
+static AreaLight area_light = { daxa_f32vec3(0.0f, 10.0f, 0.0f), 1.0f, daxa_f32vec3(100.0f) };
+
+// Function to compute direct lighting with MIS for Area Light
+daxa_f32vec3 compute_direct_lighting_area(
+    daxa_f32vec3 position,
+    daxa_f32vec3 normal,
+    daxa_f32vec3 albedo,
+    inout daxa_u32 seed,
+    out daxa_f32 pdf_light,
+    out daxa_f32vec3 light_dir)
+{
+    daxa_f32vec3 light_radiance = daxa_f32vec3(0.0);
+
+    // Sample a point on the area light (sphere for simplicity)
+    daxa_f32vec3 light_sample_position = area_light.position + area_light.radius * random_point_on_sphere(seed);
+
+    // Compute the direction to the light sample
+    light_dir = light_sample_position - position;
+    daxa_f32 distance_squared = dot(light_dir, light_dir);
+    daxa_f32 distance = sqrt(distance_squared);
+    light_dir /= distance; // Normalize
+
+    // Compute the light's normal at the sampled point
+    daxa_f32vec3 light_normal = normalize(light_sample_position - area_light.position);
+
+    // Compute the geometric terms
+    daxa_f32 N_dot_L = max(0.0f, dot(normal, light_dir));
+    daxa_f32 cos_theta_light = max(0.0f, dot(-light_dir, light_normal));
+
+    if (N_dot_L > 0.0f && cos_theta_light > 0.0f)
+    {
+        // Compute the PDF for area light sampling
+        daxa_f32 area = 4.0f * PI * area_light.radius * area_light.radius; // Surface area of the sphere
+        pdf_light = distance_squared / (area * cos_theta_light);
+
+        // Check if the light is visible (shadow ray)
+        RayDesc shadow_ray;
+        shadow_ray.Origin = position + normal * 0.001f;
+        shadow_ray.Direction = light_dir;
+        shadow_ray.TMin = 0.001f;
+        shadow_ray.TMax = distance - 0.002f;
+
+        ShadowPayload shadow_payload = {};
+        TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), RAY_FLAG_NONE, ~0, 1, 0, 0, shadow_ray, shadow_payload);
+
+        if (!shadow_payload.hit)
+        {
+            // Compute the BRDF
+            daxa_f32vec3 brdf = albedo / PI; // Lambertian BRDF
+
+            // Light emission
+            daxa_f32vec3 emission = area_light.intensity;
+
+            // Compute the final radiance contribution
+            light_radiance = emission * brdf * N_dot_L * cos_theta_light / (distance_squared);
+        }
+        else
+        {
+            // Light is occluded
+            light_radiance = daxa_f32vec3(0.0);
+            pdf_light = 0.0f;
+        }
+    }
+    else
+    {
+        // Light or surface normal facing away
+        light_radiance = daxa_f32vec3(0.0);
+        pdf_light = 0.0f;
+    }
+
+    return light_radiance;
+}
+
+// Function to compute direct lighting with a single point light
+daxa_f32vec3 compute_direct_lighting_point(
+    daxa_f32vec3 position,
+    daxa_f32vec3 normal,
+    daxa_f32vec3 albedo,
+    inout daxa_u32 seed,
+    out daxa_f32 pdf_light,
+    out daxa_f32vec3 light_dir)
+{
+    daxa_f32vec3 light_radiance = daxa_f32vec3(0.0);
+
+    // Define the point light position and intensity
+    daxa_f32vec3 point_light_position = daxa_f32vec3(0.0f, 5.0f, 0.0f);
+    daxa_f32vec3 point_light_intensity = daxa_f32vec3(100.0f); // Radiance
+
+    // Compute the direction to the point light
+    light_dir = point_light_position - position;
+    daxa_f32 distance_squared = dot(light_dir, light_dir);
+    daxa_f32 distance = sqrt(distance_squared);
+    light_dir /= distance; // Normalize
+
+    // PDF for point light (delta function)
+    pdf_light = 1.0f; // Not used in MIS for delta lights, but kept for consistency
+
+    // Check if the light is visible (shadow ray)
+    RayDesc shadow_ray;
+    shadow_ray.Origin = position + normal * 0.001f;
+    shadow_ray.Direction = light_dir;
+    shadow_ray.TMin = 0.001f;
+    shadow_ray.TMax = distance - 0.002f;
+
+    ShadowPayload shadow_payload = {};
+    TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), RAY_FLAG_NONE, ~0, 1, 0, 0, shadow_ray, shadow_payload);
+
+    if (!shadow_payload.hit)
+    {
+        // Compute the contribution
+        daxa_f32 N_dot_L = max(0.0f, dot(normal, light_dir));
+        daxa_f32vec3 brdf = albedo / PI; // Lambertian BRDF
+
+        // Point light emission
+        daxa_f32vec3 emission = point_light_intensity;
+
+        // Direct lighting contribution
+        light_radiance = emission * brdf * N_dot_L / pdf_light;
+    }
+    else
+    {
+        light_radiance = daxa_f32vec3(0.0);
+        pdf_light = 0.0f;
+    }
+
+    return light_radiance;
+}
+
 [shader("raygeneration")] void ray_generation()
 {
-  const daxa_u32vec2 thread_idx = DispatchRaysIndex().xy;
-  const daxa_u32vec2 rt_size = DispatchRaysDimensions().xy;
+    const daxa_u32vec2 thread_idx = DispatchRaysIndex().xy;
+    const daxa_u32vec2 rt_size = DispatchRaysDimensions().xy;
 
-  HitPayload payload = {daxa_f32vec3(1.0, 1.0, 1.0), daxa_f32vec3(0.0, 0.0, 0.0), daxa_f32vec3(0.0, 0.0, 0.0)};
+    // Initialize variables
+    daxa_f32vec3 radiance = daxa_f32vec3(0.0, 0.0, 0.0);
+    daxa_f32vec3 throughput = daxa_f32vec3(1.0, 1.0, 1.0);
+    daxa_u32 depth = 0;
 
-  // Camera setup
-  daxa_f32mat4x4 inv_view = Ptr<CameraView>(p.task_head.camera).inv_view;
-  daxa_f32mat4x4 inv_proj = Ptr<CameraView>(p.task_head.camera).inv_proj;
-  daxa_f32 tMin = 0.0001;
-  daxa_f32 tMax = 10000.0;
+    var max_bounces = p.task_head.ray_tracing_config.max_bounces;
+    var frame_count = p.task_head.ray_tracing_config.frame_count;
+    var current_frame_index = p.task_head.ray_tracing_config.current_frame_index;
+    var accumulate_flag = (p.task_head.ray_tracing_config.flags & 0x1u) != 0u;
 
-  RayDesc ray = create_ray(inv_view, inv_proj, thread_idx, rt_size, tMin, tMax);
+    // Initialize the random seed for the pixel
+    daxa_u32 seed = init_random_seed(thread_idx, daxa_u32(current_frame_index));
 
-  TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), RAY_FLAG_NONE, ~0, 0, 0, 0, ray, payload);
+    // Camera setup
+    daxa_f32mat4x4 inv_view = Ptr<CameraView>(p.task_head.camera).inv_view;
+    daxa_f32mat4x4 inv_proj = Ptr<CameraView>(p.task_head.camera).inv_proj;
+    daxa_f32 tMin = 0.0001f;
+    daxa_f32 tMax = 10000.0f;
 
-  RWTexture2D<daxa_f32vec4>::get(p.task_head.swapchain)[thread_idx.xy] = daxa_f32vec4(payload.hit_value, 1.0);
+    // Generate the primary ray
+    RayDesc ray = create_ray(inv_view, inv_proj, thread_idx, rt_size, tMin, tMax);
+
+    // **Path Tracing Loop**
+    while (depth < max_bounces)
+    {
+        HitPayload payload = {};
+        payload.seed = seed; // Pass the seed to the payload
+
+        TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), RAY_FLAG_NONE, ~0, 0, 0, 0, ray, payload);
+
+        seed = payload.seed; // Update the seed after tracing
+
+        if (!payload.hit)
+        {
+            // If no hit, accumulate background color and terminate
+            radiance += throughput * daxa_f32vec3(0.0, 0.0, 0.05); // Background color
+            break;
+        }
+
+        // Update throughput
+        daxa_f32vec3 position = payload.position;
+        daxa_f32vec3 normal = payload.normal;
+        daxa_f32vec3 albedo = payload.albedo;
+        
+        // **Accumulate Emission**
+        if (length(payload.emission) > 0.0f)
+        {
+            radiance += throughput * payload.emission;
+        }
+
+        // **Next Event Estimation with MIS**
+        daxa_f32 pdf_light;
+        daxa_f32vec3 light_dir;
+
+        daxa_f32vec3 direct_lighting = compute_direct_lighting_area(position, normal, albedo, seed, pdf_light, light_dir);
+
+        if (pdf_light > 0.0f)
+        {
+            // Compute the BRDF PDF at the light direction
+            daxa_f32 cos_theta = max(0.0f, dot(normal, light_dir));
+            daxa_f32 pdf_brdf_light = cos_theta / PI;
+
+            // Compute MIS weight using the power heuristic
+            daxa_f32 mis_weight = (pdf_light) / (pdf_light + pdf_brdf_light);
+
+            // Accumulate radiance with MIS weight
+            radiance += throughput * direct_lighting * mis_weight;
+        }
+
+        // Sample a new direction (BRDF sampling)
+        daxa_f32vec3 new_direction;
+        daxa_f32 pdf_brdf;
+        daxa_f32vec3 brdf;
+
+        sample_lambertian(normal, albedo, new_direction, pdf_brdf, brdf, seed);
+
+        // Update throughput for indirect lighting
+        daxa_f32 cos_theta = max(0.0f, dot(normal, new_direction));
+        throughput *= (brdf * cos_theta) / pdf_brdf;
+
+        // Prepare the next ray
+        ray.Origin = position + normal * 0.001f; // Offset to avoid self-intersection
+        ray.Direction = normalize(new_direction);
+        ray.TMin = 0.0001f;
+        ray.TMax = 10000.0f;
+
+        // Increment depth
+        depth++;
+
+        // Russian roulette termination after a certain depth
+        if (depth > 2)
+        {
+            daxa_f32 max_throughput = max(throughput.r, max(throughput.g, throughput.b));
+            daxa_f32 continue_probability = clamp(max_throughput, 0.1f, 1.0f);
+
+            if (random_float(seed) > continue_probability)
+            {
+                break; // Terminate the path
+            }
+
+            throughput /= continue_probability;
+        }
+    }
+
+    // Get the swapchain texture
+    let swapchain = RWTexture2D<daxa_f32vec4>::get(p.task_head.swapchain);
+
+    if (accumulate_flag)
+    {
+      // Get the accumulation buffer
+      let accumulation_buffer = RWTexture2D<daxa_f32vec4>::get(p.task_head.accumulation_buffer);
+
+      // Get the accumulated color
+      daxa_f32vec4 accumulated_color = accumulation_buffer[thread_idx.xy];
+
+      // Update the accumulated color by frame_count and add the new radiance
+      daxa_f32vec3 average_radiance = (accumulated_color.rgb * daxa_f32(frame_count) + radiance) / daxa_f32(frame_count + 1);
+
+      // Write the averaged color to the accumulation buffer
+      accumulation_buffer[thread_idx.xy] = daxa_f32vec4(average_radiance, 1.0);
+
+      // Apply gamma correction to the average radiance
+      daxa_f32vec3 gamma_corrected_average = pow(average_radiance, daxa_f32vec3(1.0 / 2.2));
+
+      // Write the averaged color to the output texture (swapchain)
+      swapchain[thread_idx.xy] = daxa_f32vec4(gamma_corrected_average, 1.0);
+    }
+    else
+    {
+      // Apply gamma correction
+      daxa_f32vec3 gamma_corrected_radiance = pow(radiance, daxa_f32vec3(1.0 / 2.2));
+
+      // For real-time rendering without accumulation
+      swapchain[thread_idx.xy] = daxa_f32vec4(gamma_corrected_radiance, 1.0);
+    }
 }
 
 [shader("miss")] void miss(inout HitPayload payload)
 {
-  payload.hit_value = daxa_f32vec3(0.0, 0.0, 0.05); // Background color
-}
-[shader("miss")] void miss_shadows(inout ShadowRayPayload payload)
-{
-  payload.shadow = 1.0f;
+    payload.hit = false;
 }
 
-static const daxa_u32 LIGHT_NUMBER = 4;
-static const daxa_f32vec3 light_position[LIGHT_NUMBER] = {daxa_f32vec3(2, 1, 2), daxa_f32vec3(-2, 1, 2), daxa_f32vec3(2, 1, -2) , daxa_f32vec3(-2, 1, -2)};
+[shader("miss")] void miss_shadows(inout ShadowPayload payload)
+{
+  payload.hit = false;
+}
+
 static const daxa_f32vec3 light_intensity = daxa_f32vec3(2.5);
 static const daxa_f32vec3 face_X = daxa_f32vec3(1.0, 0.0, 0.0); // red
 static const daxa_f32vec3 face_neg_X = daxa_f32vec3(1.0, 1.0, 0.0); // yellow
@@ -42,9 +405,6 @@ static const daxa_f32vec3 face_Z = daxa_f32vec3(0.0, 0.0, 1.0); // blue
 static const daxa_f32vec3 face_neg_Z = daxa_f32vec3(1.0, 0.0, 1.0); // purple
 static const daxa_f32vec3 material_color = daxa_f32vec3(0.0, 0.0, 0.0); // black
 static const daxa_f32vec3 collision_material_color = daxa_f32vec3(1.0, 1.0, 1.0); // white
-static const daxa_f32vec3 point_color = daxa_f32vec3(0.5, 0.5, 0.5); // grey
-static const daxa_f32vec3 material_specular = daxa_f32vec3(0.0, 0.5, 1.0);
-static const daxa_f32 shininess = 10.0;
 
 BoxFace get_face_by_normal(daxa_f32vec3 normal)
 {
@@ -77,95 +437,28 @@ daxa_f32vec3 get_face_color(BoxFace face)
   }
 }
 
-[shader("closesthit")] void closest_hit(inout HitPayload payload,
-                                            in MyAttributes attr)
+[shader("closesthit")] void closest_hit(inout HitPayload payload, in MyAttributes attr)
 {
-  daxa_f32vec3 hit_location = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    // Get the hit information
+    daxa_f32vec3 hit_location = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    daxa_u32 instance_index = InstanceID();
+    daxa_u32 prim_index = PrimitiveIndex();
 
-  payload.position = hit_location;
+    Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
+    Material m = p.task_head.materials[r->material_index];
 
-  daxa_u32 instance_index = InstanceID();
-  daxa_u32 prim_index = PrimitiveIndex();
-  
-  Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
-  
-  Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
-  Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);
+    // Compute the normal at the hit position
+    daxa_f32vec3 normal = compute_normal(hit_location, r, prim_index);
 
-  daxa_f32vec3 center = aabb.center();
-  center = r->object_to_world(center);
+    // Set the payload
+    payload.position = hit_location;
+    payload.normal = normalize(normal);
+    payload.albedo = m.albedo;
+    payload.emission = m.emission; // Add emission to the payload
 
-  daxa_f32vec3 color = material_color;
+    // No need to update the seed here
 
-
-  // Computing the normal at hit position
-  daxa_f32vec3 normal = normalize(hit_location - center);
-
-  normal = r->rotate_vector_inverse(normal);
-
-  // cube normal
-  {
-    daxa_f32vec3  abs_normal = abs(normal);
-    daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
-    normal     = (max_component == abs_normal.x) ?
-                 daxa_f32vec3(sign(normal.x), 0, 0) :
-                 (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) : daxa_f32vec3(0, 0, sign(normal.z));
-  }
-
-  Material m = p.task_head.materials[r->material_index];
-  // get face by normal
-#if defined(BB_RT_DEBUG)
-  BoxFace face = get_face_by_normal(normal);
-  if(r->has_flag(RigidBodyFlag::COLLIDING))
-  {
-    if(r->is_face_colliding(face))
-    {
-      color = collision_material_color;
-    } else {
-      color = m.albedo;
-    }
-  } else {
-    color = m.albedo;
-  }
-#else
-    color = m.albedo;
-#endif
-
-  normal = r->rotate_vector(normal);
-
-  payload.normal = normal;
-
-  daxa_f32vec3 hit_value = daxa_f32vec3(0.0);
-
-  for(daxa_u32 i = 0; i < LIGHT_NUMBER; i++) {
-    // Vector toward the light
-    daxa_f32vec3 L = normalize(light_position[i] - daxa_f32vec3(0));
-
-    // Diffuse
-    daxa_f32vec3 diffuse = compute_diffuse(color, normal, L);
-    daxa_f32vec3 specular = daxa_f32vec3(0);
-    daxa_f32 attenuation = 0.0f;
-
-    // Tracing shadow ray only if the light is visible from the surface
-    if (dot(normal, L) > 0)
-    {
-      daxa_f32vec3 ray_dir = L;
-      RayDesc ray = {hit_location, T_MIN, ray_dir, T_MAX};
-      daxa_u32 flags = RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE  | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER;
-      ShadowRayPayload shadowPayload = { 0.0f };
-
-      TraceRay(RaytracingAccelerationStructure::get(p.task_head.tlas), flags, ~0, 1, 0, 0, ray, shadowPayload);
-
-      let shadow_result = (shadowPayload.shadow);
-
-      attenuation =  1.0 - shadow_result;
-      specular = compute_specular(shininess, material_specular, WorldRayDirection(), normal, L);
-    }
-
-    hit_value += daxa_f32vec3(light_intensity * attenuation * (diffuse + specular)) / daxa_f32(LIGHT_NUMBER);
-  }
-
-  payload.hit_value = hit_value;
+    payload.hit = true;
 }
 
 [shader("intersection")] void intersection() {

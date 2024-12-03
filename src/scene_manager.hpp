@@ -85,22 +85,32 @@ public:
     // TODO: temporary scene
     materials = {
       {
+        .albedo = daxa_f32vec3(0.1, 0.1, 0.1),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
         .albedo = daxa_f32vec3(1.0, 0.0, 0.0),
+        .emission = daxa_f32vec3(10.0, 10.0, 10.0),
       },
       {
         .albedo = daxa_f32vec3(0.0, 1.0, 0.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
       },
       {
         .albedo = daxa_f32vec3(0.0, 0.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
       },
       {
         .albedo = daxa_f32vec3(1.0, 1.0, 0.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
       },
       {
         .albedo = daxa_f32vec3(1.0, 0.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
       },
       {
         .albedo = daxa_f32vec3(0.0, 1.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
       },
     };
 
@@ -129,7 +139,7 @@ public:
 
     std::random_device rd; // obtain a random number from hardware
     std::mt19937 gen(rd()); // seed the generator
-    std::uniform_int_distribution<> distr(0, materials.size()-1); // define the range
+    std::uniform_int_distribution<> distr(1, materials.size()-1); // define the range
 
     aabb.clear();
     aabb.reserve(rigid_bodies.size());
@@ -139,7 +149,7 @@ public:
       1.0f / rigid_body.mass;
       rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);
       aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
-      rigid_body.material_index = distr(gen);
+      rigid_body.material_index = rigid_body.inv_mass == 0 ? 0 : distr(gen);
     }
 
     status_manager->update_dispatch_buffer(get_rigid_body_count());

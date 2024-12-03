@@ -75,6 +75,10 @@ struct StatusManager
 
     frame_index = (frame_index + 1) % DOUBLE_BUFFERING;
     ++frame_count;
+    if(accumulation)
+    {
+      ++frame_accumulation_count;
+    }
 
     return true;
   }
@@ -165,6 +169,33 @@ struct StatusManager
     }
   }
 
+  bool is_accumulating()
+  {
+    return accumulation;
+  }
+
+  void switch_accumulating()
+  {
+    accumulation = !accumulation;
+    if(!accumulation)
+    {
+      frame_accumulation_count = 0;
+      std::cout << "Accumulation disabled" << std::endl;
+    } else {
+      std::cout << "Accumulation enabled" << std::endl;
+    }
+  }
+
+  daxa_u64 get_accumulation_count()
+  {
+    return frame_accumulation_count;
+  }
+
+  void reset_accumulation_count()
+  {
+    frame_accumulation_count = 0;
+  }
+
 private:
   // Gpu context reference
   std::shared_ptr<GPUcontext> gpu;
@@ -184,12 +215,16 @@ private:
   bool advection = true;
   // flag for warm starting
   bool warm_starting = true;
+  // flag for accumulation
+  bool accumulation = false;
   // double buffering counter
   daxa_u32 double_buffering_counter = 0;
   // frame index
   daxa_u32 frame_index = 0;
   // frame counter
-  daxa_u32 frame_count = 0;
+  daxa_u64 frame_count = 0;
+  // frame accumulation
+  daxa_u64 frame_accumulation_count = 0;
   // Dispatch buffer
   daxa::BufferId dispatch_buffer;
 };

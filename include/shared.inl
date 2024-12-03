@@ -9,7 +9,7 @@
 static const daxa_f32 LINEAR_DAMPING = 0.1f;
 static const daxa_f32 ANGULAR_DAMPING = 0.1f;
 static const daxa_f32 POINT_SIZE = 0.01f;
-static const daxa_f32 PENETRATION_FACTOR = 0.01f;
+static const daxa_f32 PENETRATION_FACTOR = 0.001f;
 static const daxa_f32 BIAS_FACTOR = 0.2f;
 
 #define BB_DEBUG 1
@@ -134,8 +134,72 @@ inline void operator&=(SimFlag &a, SimFlag b)
 
 struct Material {
   daxa_f32vec3 albedo;
+  daxa_f32vec3 emission;
 };
 
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+[Flags]
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+enum RayTracingFlag : daxa_u32
+{
+  RT_NONE = 0,
+  RT_ACCUMULATE = 1 << 0,
+  RT_DEBUG = 1 << 1,
+};
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+RayTracingFlag  operator|(RayTracingFlag a, RayTracingFlag b)
+{
+    return RayTracingFlag((daxa_u32)a | (daxa_u32)b);
+}
+// Define bitwise OR assignment operator
+void operator|=(inout RayTracingFlag a, RayTracingFlag b)
+{
+    a = a | b;
+}
+// Define bitwise AND operator
+RayTracingFlag operator&(RayTracingFlag a, RayTracingFlag b)
+{
+    return RayTracingFlag((daxa_u32)a & (daxa_u32)b);
+}
+// Define bitwise AND assignment operator
+void operator&=(inout RayTracingFlag a, RayTracingFlag b)
+{
+    a = a & b;
+}
+#elif defined(__cplusplus)
+inline RayTracingFlag operator~(RayTracingFlag a)
+{
+    return RayTracingFlag(~(daxa_u32)a);
+}
+
+inline RayTracingFlag operator|(RayTracingFlag a, RayTracingFlag b)
+{
+    return RayTracingFlag((daxa_u32)a | (daxa_u32)b);
+}
+
+inline void operator|=(RayTracingFlag &a, RayTracingFlag b)
+{
+    a = a | b;
+}
+
+inline RayTracingFlag operator&(RayTracingFlag a, RayTracingFlag b)
+{
+    return RayTracingFlag((daxa_u32)a & (daxa_u32)b);
+}
+
+inline void operator&=(RayTracingFlag &a, RayTracingFlag b)
+{
+    a = a & b;
+}
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+
+struct RayTracingConfig {
+  RayTracingFlag flags;
+  daxa_u32 max_bounces;
+  daxa_u64 current_frame_index;
+  daxa_u64 frame_count;
+};
+DAXA_DECL_BUFFER_PTR(RayTracingConfig)
 
 
 struct RigidBody
@@ -267,7 +331,9 @@ DAXA_DECL_BUFFER_PTR(Aabb)
 
 DAXA_DECL_TASK_HEAD_BEGIN(RayTracingTaskHead)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(CameraView), camera)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(RayTracingConfig), ray_tracing_config)
 DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_WRITE_ONLY, REGULAR_2D, swapchain)
+DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_READ_ONLY, REGULAR_2D, accumulation_buffer)
 DAXA_TH_TLAS_ID(RAY_TRACING_SHADER_READ, tlas)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
@@ -497,17 +563,22 @@ struct CreatePointsPushConstants
   DAXA_TH_BLOB(CreatePointsTaskHead, task_head)
 };
 
-// RT STRUCTS
-struct HitPayload
-{
-  daxa_f32vec3 hit_value;
-  daxa_f32vec3 position;
-  daxa_f32vec3 normal;
+// Define maximum number of bounces
+static const daxa_u32 MAX_BOUNCES = 3;
+
+// Update the HitPayload structure
+struct HitPayload {
+    daxa_f32vec3 position;    // Hit position
+    daxa_f32vec3 normal;      // Surface normal at hit point
+    daxa_f32vec3 albedo;      // Surface albedo (color)
+    daxa_f32vec3 emission;    // Surface emission (light)
+    daxa_b32 hit;             // Flag to indicate a hit
+    daxa_u32 seed;            // Random seed for NEE
 };
 
-struct ShadowRayPayload
+struct ShadowPayload
 {
-  daxa_f32 shadow;
+  daxa_b32 hit;             // Flag to indicate a hit
 };
 
 struct MyAttributes

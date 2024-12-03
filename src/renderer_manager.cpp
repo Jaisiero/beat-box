@@ -12,7 +12,53 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
     return false;
   }
 
+  for(auto f = 0u; f < DOUBLE_BUFFERING; f++) {
+    ray_tracing_config_buffer[f] = gpu->device.create_buffer({
+        .size = sizeof(RayTracingConfig),
+        .name = "ray_tracing_config" + std::to_string(f),
+    });
+
+    ray_tracing_config_host_buffer[f] = gpu->device.create_buffer({
+        .size = sizeof(RayTracingConfig),
+        .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+        .name = "ray_tracing_config_host" + std::to_string(f),
+    });
+  }
+  
   RT_pipeline = pipeline;
+
+  accumulation_buffer = gpu->device.create_image({
+      .format = gpu->swapchain.get_format(),
+      .size = daxa::Extent3D(gpu->swapchain_get_extent().x, gpu->swapchain_get_extent().y, 1),
+      .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
+      .name = "accumulation_buffer",
+  });
+  
+  daxa::InlineTaskInfo task_update_RT_config({
+      .attachments = {
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, 
+          task_ray_tracing_config_host),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, 
+          task_ray_tracing_config),
+      },
+      .task = [this](daxa::TaskInterface const &ti)
+      {
+        auto const accumulating = status_manager->is_accumulating();
+        ti.device.buffer_host_address_as<RayTracingConfig>(ti.get(task_ray_tracing_config_host).ids[0]).value()[0] = RayTracingConfig{
+            .flags = accumulating ? RayTracingFlag::RT_ACCUMULATE : RayTracingFlag::RT_NONE,
+            .max_bounces = MAX_BOUNCES,
+            .current_frame_index = status_manager->get_frame_count(),
+            .frame_count = accumulating ? status_manager->get_accumulation_count() : 0,
+        };
+
+        ti.recorder.copy_buffer_to_buffer({
+            .src_buffer = ti.get(task_ray_tracing_config_host).ids[0],
+            .dst_buffer = ti.get(task_ray_tracing_config).ids[0],
+            .size = sizeof(RayTracingConfig),
+        });
+      },
+      .name = "copy rigid bodies and primitives",
+  });
 
   auto user_callback = [this, SBT](daxa::TaskInterface ti, auto &self)
   {
@@ -32,7 +78,9 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   // Instantiate the task using the template class
   TTask task_RT(std::array{
                   daxa::attachment_view(RayTracingTaskHead::AT.camera, task_camera_buffer),
+                  daxa::attachment_view(RayTracingTaskHead::AT.ray_tracing_config, task_ray_tracing_config),
                   daxa::attachment_view(RayTracingTaskHead::AT.swapchain, task_swapchain_image),
+                  daxa::attachment_view(RayTracingTaskHead::AT.accumulation_buffer, task_accumulation_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.tlas, accel_struct_mngr->task_tlas),
                   daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies,
                                         rigid_body_manager->task_rigid_bodies),
@@ -40,19 +88,46 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
                   daxa::attachment_view(RayTracingTaskHead::AT.materials, scene_manager->task_material_buffer),
               },
               user_callback);
+
+  daxa::InlineTaskInfo task_cpy_to_accum_buffer({
+      .attachments = {
+          daxa::inl_attachment(daxa::TaskImageAccess::TRANSFER_READ, 
+          task_swapchain_image),
+          daxa::inl_attachment(daxa::TaskImageAccess::TRANSFER_WRITE, 
+          task_accumulation_buffer),
+      },
+      .task = [this](daxa::TaskInterface const &ti)
+      {
+        auto const accumulating = status_manager->is_accumulating();
+        auto const frame_count = status_manager->get_accumulation_count();
+        if (accumulating && frame_count == 0)
+        {
+          auto const image_info = ti.device.info_image(ti.get(task_swapchain_image).ids[0]).value();
+          // zero out the accumulation buffer
+          ti.recorder.clear_image({
+              .dst_image_layout = daxa::ImageLayout::GENERAL,
+              .clear_value = {std::array<f32, 4>{0, 0, 0, 0}},
+              .dst_image = ti.get(task_accumulation_buffer).ids[0],
+          });
+        }
+      },
+      .name = "copy to accumulation buffer",
+  });
   
 
-  std::array<daxa::TaskBuffer, 7> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer,  gui_manager->task_vertex_buffer,
+  std::array<daxa::TaskBuffer, 9> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer,  gui_manager->task_vertex_buffer,
   gui_manager->task_line_vertex_buffer, gui_manager->task_axes_vertex_buffer,
-  scene_manager->task_material_buffer};
+  scene_manager->task_material_buffer, task_ray_tracing_config, task_ray_tracing_config_host};
 
-  std::array<daxa::TaskImage, 1> images = {task_swapchain_image};
+  std::array<daxa::TaskImage, 2> images = {task_swapchain_image, task_accumulation_buffer};
 
   std::array<daxa::TaskTlas, 1> tlases = {accel_struct_mngr->task_tlas};
 
   RT_TG = task_manager->create_task_graph(RT_TG_name, buffers, images, {}, tlases, true);
 
+  RT_TG.add_task(task_update_RT_config);
   RT_TG.add_task(task_RT);
+  RT_TG.add_task(task_cpy_to_accum_buffer);
   RT_TG.add_task(gui_manager->gui_axes_task_info);
   RT_TG.add_task(gui_manager->gui_line_task_info);
   RT_TG.add_task(gui_manager->gui_task_info);
@@ -66,10 +141,17 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
 
 void RendererManager::destroy()
 {
-  if (initialized)
+  if (!initialized)
   {
-    initialized = false;
+    return;
   }
+
+  for(auto f = 0u; f < DOUBLE_BUFFERING; f++) {
+    gpu->device.destroy_buffer(ray_tracing_config_buffer[f]);
+    gpu->device.destroy_buffer(ray_tracing_config_host_buffer[f]);
+  }
+
+  initialized = false;
 }
 
 bool RendererManager::execute()
@@ -91,6 +173,9 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
 
   task_swapchain_image.set_images({.images = std::array{swapchain_image}});
   task_camera_buffer.set_buffers({.buffers = std::array{cam_mngr.camera_buffer}});
+  task_ray_tracing_config.set_buffers({.buffers = std::array{ray_tracing_config_buffer[get_frame_index()]}});
+  task_ray_tracing_config_host.set_buffers({.buffers = std::array{ray_tracing_config_host_buffer[get_frame_index()]}});
+  task_accumulation_buffer.set_images({.images = std::array{accumulation_buffer}});
 
   return true;
 }
@@ -133,6 +218,15 @@ void RendererManager::render()
     {
       gpu->swapchain_resize();
       window.swapchain_out_of_date = false;
+      gpu->device.destroy_image(accumulation_buffer);
+      // TODO: refactor this
+      accumulation_buffer = gpu->device.create_image({
+          .format = gpu->swapchain.get_format(),
+          .size = daxa::Extent3D(gpu->swapchain_get_extent().x, gpu->swapchain_get_extent().y, 1),
+          .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
+          .name = "accumulation_buffer",
+      });
+      status_manager->reset_accumulation_count();
     }
 
     auto handle_reload_result = [&](daxa::PipelineReloadResult reload_error, std::shared_ptr<RayTracingPipeline> RT_pipeline, RendererManager *TG) -> void
