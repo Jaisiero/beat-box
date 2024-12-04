@@ -71,6 +71,9 @@ struct RendererManager
   daxa_u32 get_rigid_body_count() {
     return scene_manager->get_rigid_body_count();
   }
+  SimSolverType get_solver() {
+    return status_manager->get_solver();
+  }
 
 private:
   bool execute();

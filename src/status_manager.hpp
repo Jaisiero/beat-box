@@ -196,6 +196,18 @@ struct StatusManager
     frame_accumulation_count = 0;
   }
 
+  SimSolverType get_solver()
+  {
+    return rigid_body_manager->get_sim_type();
+  }
+
+  void set_solver(SimSolverType s)
+  {
+    rigid_body_manager->set_sim_type(s);
+  };
+
+
+
 private:
   // Gpu context reference
   std::shared_ptr<GPUcontext> gpu;

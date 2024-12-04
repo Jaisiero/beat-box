@@ -51,6 +51,17 @@ struct RigidBodyManager{
     return sim_flags;
   }
 
+  void set_sim_type(SimSolverType type) {
+    solver_type = type;
+    for(auto i = 0u; i < DOUBLE_BUFFERING; ++i) {
+      sim_flag_dirty[i] = true;
+    }
+  }
+
+  SimSolverType get_sim_type() const {
+    return solver_type;
+  }
+
   daxa::BufferId get_sim_config_host_buffer();
 
   bool is_dirty();
@@ -118,6 +129,9 @@ private:
   daxa::BufferId sim_config_host_buffer[DOUBLE_BUFFERING] = {};
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
+
+  // Simulation configuration
+  SimSolverType solver_type = SimSolverType::PGS_SOFT;
 };
 
 BB_NAMESPACE_END

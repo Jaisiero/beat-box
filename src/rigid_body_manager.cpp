@@ -81,6 +81,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   for (auto i = 0u; i < DOUBLE_BUFFERING; ++i){
     *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[i]).value() = SimConfig{
+        .solver_type = renderer_manager->get_solver(),
         .rigid_body_count = 0,
         .dt = TIME_STEP,
         .gravity = -GRAVITY,
@@ -209,9 +210,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   auto user_callback_CSR = [this](daxa::TaskInterface ti, auto &self)
   {
-    ti.recorder.set_pipeline(*pipeline_CSR);
-    ti.recorder.push_constant(CollisionSolverRelaxationPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3)});
+    if(solver_type == SimSolverType::PGS_SOFT) {
+      ti.recorder.set_pipeline(*pipeline_CSR);
+      ti.recorder.push_constant(CollisionSolverRelaxationPushConstants{.task_head = ti.attachment_shader_blob});
+      ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3)});
+    }
   };
 
   using TTask_CSR = TaskTemplate<CollisionSolverRelaxationTaskHead::Task, decltype(user_callback_CSR)>;
@@ -445,6 +448,7 @@ bool RigidBodyManager::update_sim()
   }
 
   *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[renderer_manager->get_frame_index()]).value() = SimConfig{
+      .solver_type = solver_type,
       .rigid_body_count = renderer_manager->get_rigid_body_count(),
       .dt = TIME_STEP,
       .gravity = -GRAVITY,

@@ -57,7 +57,7 @@
         if (!payload.hit)
         {
             // If no hit, accumulate background color and terminate
-            radiance += throughput * daxa_f32vec3(0.45, 0.95, 1.0); // Background color
+            radiance += throughput * daxa_f32vec3(0.95, 0.28, 0.059); // Background color
             break;
         }
 

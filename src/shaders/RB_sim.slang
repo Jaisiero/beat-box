@@ -115,7 +115,11 @@
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
     daxa_f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
 
-    PGS_Soft.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
+    if(sim_config->solver_type == SimSolverType::PGS_SOFT) {
+      PGS_SOFT.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
+    } else if(sim_config->solver_type == SimSolverType::PGS) {
+      PGS.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction);
+    }
 
     CPS.task_head.collisions[m] = manifold;
     CPS.task_head.rigid_bodies[manifold.obb1_index] = r1;
@@ -157,7 +161,11 @@
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
 
     // Solve the collision
-    PGS_Soft.solve(manifold, r1, r2, accum_impulse, friction, true, inv_dt);
+    if(sim_config->solver_type == SimSolverType::PGS_SOFT) {
+      PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, inv_dt);
+    } else if(sim_config->solver_type == SimSolverType::PGS) {
+      PGS.solve(manifold, r1, r2, accum_impulse, friction);
+    }
     
     CS.task_head.collisions[m] = manifold;
     CS.task_head.rigid_bodies[manifold.obb1_index] = r1;
@@ -221,7 +229,9 @@
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
 
     // Solve the collision with relaxation
-    PGS_Soft.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
+    if(sim_config->solver_type == SimSolverType::PGS_SOFT) {
+      PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
+    }
     
     CSR.task_head.collisions[m] = manifold;
     CSR.task_head.rigid_bodies[manifold.obb1_index] = r1;

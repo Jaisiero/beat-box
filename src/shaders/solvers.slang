@@ -139,7 +139,7 @@ struct PGS {
 
 
 
-struct PGS_Soft {
+struct PGS_SOFT {
   static void pre_step(inout Manifold manifold, daxa_f32 inv_dt, inout RigidBody body_a, inout RigidBody body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_f32 h, daxa_f32 hertz) {
 
     for(daxa_u32 i = 0u; i < manifold.contact_count; i++) {

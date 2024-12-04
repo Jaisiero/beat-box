@@ -134,6 +134,18 @@ inline void operator&=(SimFlag &a, SimFlag b)
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 
 
+enum SimSolverType : daxa_u32
+{
+  PGS = 0,
+  PGS_SOFT = 1,
+  INVALID_SOLVER = 0xFFFFFFFF,
+};
+
+
+
+
+
+
 struct Material {
   daxa_f32vec3 albedo;
   daxa_f32vec3 emission;
@@ -424,6 +436,7 @@ struct GlobalCollisionInfo
 
 struct SimConfig
 {
+  SimSolverType solver_type;
   daxa_u32 rigid_body_count;
   daxa_f32 dt;
   daxa_f32 gravity;

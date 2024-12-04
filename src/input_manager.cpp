@@ -111,6 +111,18 @@ void InputManager::on_key(i32 key, i32 action)
   case GLFW_KEY_1:
     if (action == GLFW_PRESS)
     {
+      status_mngr->set_solver(SimSolverType::PGS);
+    }
+    break;
+  case GLFW_KEY_2:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->set_solver(SimSolverType::PGS_SOFT);
+    }
+    break;
+  case GLFW_KEY_P:
+    if (action == GLFW_PRESS)
+    {
       status_mngr->switch_warm_starting();
     }
     break;
