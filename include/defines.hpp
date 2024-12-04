@@ -30,7 +30,7 @@ static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
 static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
 static constexpr u32 MAX_LIGHT_COUNT = 1024;
 static constexpr u32 MAX_MATERIAL_COUNT = 1024;
-static constexpr u32 DEFAULT_ITERATION_COUNT = 6;
+static constexpr u32 DEFAULT_ITERATION_COUNT = 4;
 
 enum StageIndex : u32
 {

@@ -168,9 +168,9 @@ struct PGS_SOFT {
 
       // soft contact
 			// should use the substep not the full time step
-			const float zeta = 10.0f;
-			float omega = 2.0f * _PI * contact_hertz;
-			float c = h * omega * (2.0f * zeta + h * omega);
+			const daxa_f32 zeta = 10.0f;
+			const daxa_f32 omega = 2.0f * _PI * contact_hertz;
+			const daxa_f32 c = h * omega * (2.0f * zeta + h * omega);
 			manifold.contacts[i].bias_factor = omega / (2.0f * zeta + h * omega);
 			manifold.contacts[i].impulse_coefficient = 1.0f / (1.0f + c);
 			manifold.contacts[i].mass_coefficient = c * manifold.contacts[i].impulse_coefficient;
