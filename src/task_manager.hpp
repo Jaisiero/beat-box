@@ -72,6 +72,7 @@ FORCE_INLINE std::vector<std::filesystem::path> paths{
     DAXA_SHADER_INCLUDE_DIR,
     "include",
     "src/shaders",
+    "src/shaders/path_tracing",
 };
 
 struct TaskGraph
