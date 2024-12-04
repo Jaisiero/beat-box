@@ -9,15 +9,21 @@
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(UI.task_head.sim_config);
 
-  if (pixel_i.x >= sim_config->rigid_body_count)
+  daxa_u32 index = pixel_i.x;
+
+  if (index >= sim_config->rigid_body_count)
   {
     return;
   }
 
   RigidBody r =
-      UI.task_head.rigid_bodies[pixel_i.x];
+      UI.task_head.rigid_bodies[index];
 
-  Ptr<daxa_BlasInstanceData> instance = Ptr<daxa_BlasInstanceData>(&UI.task_head.blas_instance_data[pixel_i.x]);
+  Ptr<daxa_BlasInstanceData> instance = Ptr<daxa_BlasInstanceData>(&UI.task_head.blas_instance_data[index]);
 
+  instance->instance_custom_index = index;
+  instance->mask = 0xFF;
+  instance->instance_shader_binding_table_record_offset = 0;
+  instance->flags = 0;
   instance->transform = r.get_instance_transform();
 }

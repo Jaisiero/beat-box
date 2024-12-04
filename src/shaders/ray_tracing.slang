@@ -244,6 +244,274 @@ daxa_f32vec3 compute_direct_lighting_point(
     return light_radiance;
 }
 
+// Function to select a random light from the light buffer, try to get a light that is not the current instance
+daxa_u32 select_random_light(inout daxa_u32 seed, daxa_u32 light_count, daxa_u32 instance_index)
+{
+    daxa_f32 u = random_float(seed);
+    daxa_f32 index_f = u * daxa_f32(light_count-1);
+
+    // Try to get a light that is not the current instance
+    daxa_u32 index = daxa_u32(floor(index_f));
+    if (index == instance_index && light_count > 1)
+    {
+        bool approved = false;
+        daxa_u32 max_attempts = 10;
+        while(!approved && max_attempts > 0)
+        {
+            index = daxa_u32(floor(random_float(seed) * daxa_f32(light_count-1)));
+            if(index != instance_index)
+            {
+                approved = true;
+            }
+            max_attempts--;
+        }
+    }
+
+    if(index == instance_index) {
+        index = MAX_UINT32;
+    }
+
+    return index;
+}
+
+// Function to sample a point on the cube's surface with cosine-weighted distribution towards shading point
+daxa_f32vec3 uniform_sample_on_cube(
+    inout daxa_u32 seed,
+    Ptr<RigidBody> r,
+    daxa_f32vec3 shading_position,
+    out daxa_f32vec3 light_normal,
+    daxa_f32 half_size)
+{
+    const daxa_u32 max_attempts = 4; // Maximum number of sampling attempts
+    daxa_f32vec3 sample_point = daxa_f32vec3(0.0f);
+    light_normal = daxa_f32vec3(0.0f);
+    
+    // Compute the vector from the shading point to the light's center
+    daxa_f32vec3 light_center = r->position;
+    
+    for(daxa_u32 i = 0; i < max_attempts; i++)
+    {
+        // Step 1: Select a face uniformly
+        daxa_f32 u1 = random_float(seed);
+        daxa_f32 face_selection = u1 * 6.0f; // 6 faces
+        daxa_u32 face = daxa_u32(floor(face_selection));
+        
+        // Step 2: Get face normal based on the selected face
+        daxa_f32vec3 face_normal = daxa_f32vec3(0.0f);
+        daxa_f32vec3 center_face = daxa_f32vec3(0.0f);
+        
+        switch (face)
+        {
+            case 0: // +X
+                face_normal = daxa_f32vec3(1.0f, 0.0f, 0.0f);
+                center_face = daxa_f32vec3(half_size, 0.0f, 0.0f);
+                break;
+            case 1: // -X
+                face_normal = daxa_f32vec3(-1.0f, 0.0f, 0.0f);
+                center_face = daxa_f32vec3(-half_size, 0.0f, 0.0f);
+                break;
+            case 2: // +Y
+                face_normal = daxa_f32vec3(0.0f, 1.0f, 0.0f);
+                center_face = daxa_f32vec3(0.0f, half_size, 0.0f);
+                break;
+            case 3: // -Y
+                face_normal = daxa_f32vec3(0.0f, -1.0f, 0.0f);
+                center_face = daxa_f32vec3(0.0f, -half_size, 0.0f);
+                break;
+            case 4: // +Z
+                face_normal = daxa_f32vec3(0.0f, 0.0f, 1.0f);
+                center_face = daxa_f32vec3(0.0f, 0.0f, half_size);
+                break;
+            case 5: // -Z
+                face_normal = daxa_f32vec3(0.0f, 0.0f, -1.0f);
+                center_face = daxa_f32vec3(0.0f, 0.0f, -half_size);
+                break;
+            default:
+                face_normal = daxa_f32vec3(0.0f, 0.0f, 0.0f);
+                center_face = daxa_f32vec3(0.0f);
+                break;
+        }
+        // Step 3: Transform face_normal to world space
+        daxa_f32vec3 face_normal_world = normalize(r->rotate_vector(face_normal));
+
+        daxa_f32vec3 world_position = r->object_to_world(center_face);
+        
+        // Compute the vector from the shading point to the light's center
+        daxa_f32vec3 V = normalize(shading_position - world_position);
+        
+        // Recompute dot_product in world space
+        daxa_f32 dot_product = dot(face_normal_world, V);
+
+        if(dot_product > 0.0f)
+        {
+            // Step 4: Sample a point on the selected face uniformly
+            daxa_f32 u2 = random_float(seed);
+            daxa_f32 u3 = random_float(seed);
+            
+            switch (face)
+            {
+                case 0: // +X
+                    sample_point = daxa_f32vec3(half_size, (u2 - 0.5f) * 2.0f * half_size, (u3 - 0.5f) * 2.0f * half_size);
+                    break;
+                case 1: // -X
+                    sample_point = daxa_f32vec3(-half_size, (u2 - 0.5f) * 2.0f * half_size, (u3 - 0.5f) * 2.0f * half_size);
+                    break;
+                case 2: // +Y
+                    sample_point = daxa_f32vec3((u2 - 0.5f) * 2.0f * half_size, half_size, (u3 - 0.5f) * 2.0f * half_size);
+                    break;
+                case 3: // -Y
+                    sample_point = daxa_f32vec3((u2 - 0.5f) * 2.0f * half_size, -half_size, (u3 - 0.5f) * 2.0f * half_size);
+                    break;
+                case 4: // +Z
+                    sample_point = daxa_f32vec3((u2 - 0.5f) * 2.0f * half_size, (u3 - 0.5f) * 2.0f * half_size, half_size);
+                    break;
+                case 5: // -Z
+                    sample_point = daxa_f32vec3((u2 - 0.5f) * 2.0f * half_size, (u3 - 0.5f) * 2.0f * half_size, -half_size);
+                    break;
+                default:
+                    sample_point = daxa_f32vec3(0.0f);
+                    break;
+            }
+            
+            // Step 5: Transform the sample point to world space
+            sample_point = r->object_to_world(sample_point);
+            
+            // Step 6: Assign the rotated normal based on the face
+            light_normal = face_normal_world;
+            
+            return sample_point;
+        }
+    }
+    
+    // After the loop: If no valid face is found, return a zero vector
+    light_normal = daxa_f32vec3(0.0f);
+    return daxa_f32vec3(0.0f);
+}
+
+// Function to compute direct lighting with MIS for multiple Cube Lights using cosine-weighted sampling
+daxa_f32vec3 compute_direct_lighting_cubes(
+    daxa_u32 instance_index,
+    daxa_f32vec3 position, // world space position
+    daxa_f32vec3 normal,
+    daxa_f32vec3 albedo,
+    inout daxa_u32 seed,
+    out daxa_f32 pdf_light,
+    out daxa_f32vec3 light_dir)
+{
+    daxa_f32vec3 light_radiance = daxa_f32vec3(0.0);
+    pdf_light = 0.0f; // Initialize PDF
+    
+    // Access the Light Buffer
+    Ptr<Light> lights = Ptr<Light>(p.task_head.lights);
+    
+    daxa_u32 light_count = p.task_head.ray_tracing_config.light_count;
+    if (light_count == 0)
+    {
+        pdf_light = 0.0f;
+        return light_radiance;
+    }
+    
+    // Step 1: Select a random light
+    daxa_u32 selected_light_index = select_random_light(seed, light_count, instance_index);
+    if(selected_light_index == MAX_UINT32)
+    {
+        printf("No valid light found. Instance Index: %u, Light Count: %u\n", instance_index, light_count);
+        pdf_light = 0.0f;
+        return light_radiance;
+    }
+
+    daxa_u32 rigid_body_index = lights[selected_light_index].rigid_body_index;
+    
+    // Step 2: Retrieve rigid body properties (position, rotation, material index)
+    Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[rigid_body_index]);
+    Material m = p.task_head.materials[r->material_index];
+
+    if(all(m.emission <= 0.0f))
+    {
+        printf("Light is non-emissive. Instance Index: %u, Light Count: %u, Rigid Body Index: %u emission: %f %f %f\n", instance_index, light_count, rigid_body_index, m.emission.x, m.emission.y, m.emission.z);
+        // Light is non-emissive; skip processing
+        pdf_light = 0.0f;
+        return daxa_f32vec3(0.0);
+    }
+    
+    daxa_f32 half_size = r->get_half_size(0);  // Assuming uniform scaling
+    
+    
+    // Step 3: Sample a point on the cube's surface with cosine-weighted distribution & compute the light's normal at the sampled point
+    daxa_f32vec3 light_normal = daxa_f32vec3(0.0f);
+    daxa_f32vec3 light_sample_position = uniform_sample_on_cube(seed, r, position, light_normal, half_size);
+
+    // If no valid face was found, skip radiance accumulation
+    if(all(light_normal == 0.0f))
+    {
+        pdf_light = 0.0f;
+        return light_radiance;
+    }
+    
+    // Step 4: Compute the direction to the light sample
+    light_dir = light_sample_position - position;
+    daxa_f32 distance_squared = dot(light_dir, light_dir);
+    daxa_f32 distance = sqrt(distance_squared);
+    light_dir /= distance; // Normalize
+    
+     // Step 5: Compute geometric terms
+    daxa_f32 N_dot_L = max(0.0f, dot(normal, light_dir));
+    daxa_f32 cos_theta_light = max(0.0f, dot(-light_dir, light_normal));
+    
+    if (N_dot_L > EPSILON && cos_theta_light > EPSILON)
+    {
+        daxa_f32 area = 6.0f * (2.0f * half_size) * (2.0f * half_size); // Surface area of the cube: 6 * side^2
+        pdf_light = (1.0f / daxa_f32(light_count)) * (distance_squared / (area * cos_theta_light));
+        
+        // Check if the light is visible (shadow ray)
+        RayDesc shadow_ray;
+        shadow_ray.Origin = position + normal * 0.001f;
+        shadow_ray.Direction = light_dir;
+        shadow_ray.TMin = 0.001f;
+        shadow_ray.TMax = distance - 0.002f;
+        
+        ShadowPayload shadow_payload = {true};
+        TraceRay(
+            RaytracingAccelerationStructure::get(p.task_head.tlas),
+            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+            ~0,
+            1,
+            0,
+            0,
+            shadow_ray,
+            shadow_payload
+        );
+        
+        if (shadow_payload.hit)
+        {
+            // Compute the BRDF
+            daxa_f32vec3 brdf = albedo / PI; // Lambertian BRDF
+            
+            // Light emission
+            daxa_f32vec3 emission = m.emission; // Assuming emission is stored in material
+            
+            // Compute the final radiance contribution
+            daxa_f32vec3 contribution = emission * brdf * N_dot_L * cos_theta_light / pdf_light;
+            
+            // Accumulate radiance
+            light_radiance += contribution;
+        } 
+        else
+        {
+            // Light is occluded
+            printf("Shadow Hit - Light occluded. N_dot_L: %f, Cos_theta_light: %f, Distance_Squared: %f\n", N_dot_L, cos_theta_light, distance_squared);
+        }
+    }
+    else
+    {
+        // Light or surface normal facing away
+        pdf_light = 0.0f;
+        printf("Invalid Geometry: N_dot_L: %f, Cos_theta_light: %f, Distance_Squared: %f, light_normal: %f %f %f, light_dir: %f %f %f\n", N_dot_L, cos_theta_light, distance_squared, light_normal.x, light_normal.y, light_normal.z, light_dir.x, light_dir.y, light_dir.z);
+    }
+    
+    return light_radiance;
+}
+
 [shader("raygeneration")] void ray_generation()
 {
     const daxa_u32vec2 thread_idx = DispatchRaysIndex().xy;
@@ -292,6 +560,7 @@ daxa_f32vec3 compute_direct_lighting_point(
         daxa_f32vec3 position = payload.position;
         daxa_f32vec3 normal = payload.normal;
         daxa_f32vec3 albedo = payload.albedo;
+        daxa_u32 instance_index = payload.instance_index;
         
         // **Accumulate Emission**
         if (length(payload.emission) > 0.0f)
@@ -303,7 +572,7 @@ daxa_f32vec3 compute_direct_lighting_point(
         daxa_f32 pdf_light;
         daxa_f32vec3 light_dir;
 
-        daxa_f32vec3 direct_lighting = compute_direct_lighting_area(position, normal, albedo, seed, pdf_light, light_dir);
+        daxa_f32vec3 direct_lighting = compute_direct_lighting_cubes(instance_index, position, normal, albedo, seed, pdf_light, light_dir);
 
         if (pdf_light > 0.0f)
         {
@@ -454,6 +723,8 @@ daxa_f32vec3 get_face_color(BoxFace face)
     payload.position = hit_location;
     payload.normal = normalize(normal);
     payload.albedo = m.albedo;
+    payload.instance_index = instance_index;
+    payload.primitive_index = prim_index;
     payload.emission = m.emission; // Add emission to the payload
 
     // No need to update the seed here

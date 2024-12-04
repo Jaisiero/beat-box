@@ -13,7 +13,7 @@ struct SceneManager
 {
 public:
   daxa::TaskBuffer task_material_buffer{{.name = "task_material_buffer"}};
-
+  daxa::TaskBuffer task_lights_buffer{{.name = "task_lights_buffer"}};
 
   explicit SceneManager(char const *name, daxa::Device &device, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<TaskManager> task_manager) : device(device), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), status_manager(status_manager), task_manager(task_manager)
   {
@@ -33,11 +33,22 @@ public:
         .size = sizeof(Material) * MAX_MATERIAL_COUNT,
         .name = "material_buffer",
     });
+
+    lights_buffer = device.create_buffer({
+        .size = sizeof(Light) * MAX_LIGHT_COUNT,
+        .name = "lights_buffer",
+    });
+
     task_material_buffer.set_buffers({.buffers = std::array{material_buffer}});
+    task_lights_buffer.set_buffers({.buffers = std::array{lights_buffer}});
 
     record_material_upload_tasks(material_TG);
     material_TG.submit();
     material_TG.complete();
+
+    record_light_upload_tasks(light_TG);
+    light_TG.submit();
+    light_TG.complete();
 
     return initialized = true;
   }
@@ -50,6 +61,7 @@ public:
     }
 
     device.destroy_buffer(material_buffer);
+    device.destroy_buffer(lights_buffer);
 
     initialized = false;
   }
@@ -73,6 +85,27 @@ public:
       task_materials
     };
     M_TG = task_manager->create_task_graph("Material Upload", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+  }
+
+  void record_light_upload_tasks(TaskGraph &L_TG)
+  {
+    daxa::InlineTaskInfo task_lights({
+        .attachments = {
+            daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_lights_buffer),
+        },
+        .task = [this](daxa::TaskInterface const &ti)
+        {
+          allocate_fill_copy(ti, lights, ti.get(task_lights_buffer), 0);
+        },
+        .name = "upload lights",
+    });
+    std::array<daxa::TaskBuffer, 1> buffers = {
+      task_lights_buffer
+    };
+    std::array<daxa::InlineTaskInfo, 1> tasks = {
+      task_lights
+    };
+    L_TG = task_manager->create_task_graph("Light Upload", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
   }
 
   bool load_scene()
@@ -143,6 +176,7 @@ public:
 
     aabb.clear();
     aabb.reserve(rigid_bodies.size());
+    daxa_u32 i = 0;
     for(auto &rigid_body : rigid_bodies)
     {
       rigid_body.inv_mass = rigid_body.mass == 0.0f ? 0.0f :
@@ -150,6 +184,11 @@ public:
       rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);
       aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
       rigid_body.material_index = rigid_body.inv_mass == 0 ? 0 : distr(gen);
+      if(materials.at(rigid_body.material_index).emission != daxa_f32vec3(0.0, 0.0, 0.0))
+      {
+        lights.push_back(Light(i));
+      }
+      ++i;
     }
 
     status_manager->update_dispatch_buffer(get_rigid_body_count());
@@ -162,6 +201,7 @@ public:
     status_manager->next_frame();
 
     material_TG.execute();
+    light_TG.execute();
 
     // TODO: Handle error
     if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb))
@@ -174,6 +214,11 @@ public:
   daxa_u32 get_rigid_body_count()
   {
     return rigid_bodies.size();
+  }
+
+  daxa_u32 get_light_count()
+  {
+    return lights.size();
   }
 
 private:
@@ -189,16 +234,25 @@ private:
   std::shared_ptr<TaskManager> task_manager;
   // Initialization flag
   bool initialized = false;
-  // Material buffer
-  daxa::BufferId material_buffer;
 
   // TODO: Fill in scene data from file?
   std::vector<RigidBody> rigid_bodies;
   std::vector<Aabb> aabb;
-  std::vector<Material> materials;
 
+  // Material vector
+  std::vector<Material> materials;
+  // Material buffer
+  daxa::BufferId material_buffer;
   // TaskGraph for material upload
   TaskGraph material_TG;
+
+  // Light vector
+  std::vector<Light> lights;
+  // Lights buffer
+  daxa::BufferId lights_buffer;
+  // TaskGraph for light upload
+  TaskGraph light_TG;
+
 };
 
 BB_NAMESPACE_END
