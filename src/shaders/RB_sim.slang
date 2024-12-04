@@ -1,13 +1,14 @@
 // #include "extensions.slang"
 #include "collision_detection.slang"
+#include "solvers.slang"
 
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
+[[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodyIntegratePositionsPushConstants RB_integrate;
 [[vk::push_constant]] CollisionSolverRelaxationPushConstants CSR;
-[[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] CreatePointsPushConstants CP;
 [[vk::push_constant]] RigidBodyUpdatePushConstants RB_update;
 
@@ -19,8 +20,9 @@
 {
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(BP.task_head.sim_config);
-
-  if (pixel_i.x >= sim_config->rigid_body_count)
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->rigid_body_count)
   {
     return;
   }
@@ -28,17 +30,17 @@
   let previous_sim_config =
       *BP.task_head.previous_sim_config;
 
-  Ptr<RigidBody> r =
-      Ptr<RigidBody>(&BP.task_head.rigid_bodies[pixel_i.x]);
-
   Ptr<Manifold> collisions =
       Ptr<Manifold>(BP.task_head.collisions);
 
   Ptr<Manifold> old_collisions =
       Ptr<Manifold>(BP.task_head.old_collisions);
 
+  broad_phase(index, BP.task_head.rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions);
 
-  broad_phase(pixel_i.x, r, sim_config, previous_sim_config, collisions, old_collisions);
+#if defined(BB_DEBUG)
+  // printf("Broad phase frame %lu\n", sim_config->frame_count);
+#endif // BB_DEBUG
 }
 
 
@@ -105,19 +107,19 @@
       continue;
     }
 
-    Ptr<RigidBody> r1 =
-        Ptr<RigidBody>(&CPS.task_head.rigid_bodies[manifold.obb1_index]);
-    Ptr<RigidBody> r2 =
-        Ptr<RigidBody>(&CPS.task_head.rigid_bodies[manifold.obb2_index]);
+    RigidBody r1 = CPS.task_head.rigid_bodies[manifold.obb1_index];
+    RigidBody r2 = CPS.task_head.rigid_bodies[manifold.obb2_index];
 
-    daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
+    daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
     daxa_f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
 
-    manifold.pre_step(inv_dt, r1, r2, warm_starting, friction, sim_config->dt, hertz);
+    PGS_Soft.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
 
     CPS.task_head.collisions[m] = manifold;
+    CPS.task_head.rigid_bodies[manifold.obb1_index] = r1;
+    CPS.task_head.rigid_bodies[manifold.obb2_index] = r2;
   }
 }
 
@@ -145,19 +147,21 @@
       continue;
     }
 
-    Ptr<RigidBody> r1 =
-        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb1_index]);
-    Ptr<RigidBody> r2 =
-        Ptr<RigidBody>(&CS.task_head.rigid_bodies[manifold.obb2_index]);
+    // printf("Solving collision %d, rigid_body_a %d, rigid_body_b %d cc: %d\n", m, manifold.obb1_index, manifold.obb2_index, manifold.contact_count);
+
+    RigidBody r1 = CS.task_head.rigid_bodies[manifold.obb1_index];
+    RigidBody r2 = CS.task_head.rigid_bodies[manifold.obb2_index];
 
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
 
     // Solve the collision
-    manifold.solve(r1, r2, accum_impulse, friction, true, inv_dt);
+    PGS_Soft.solve(manifold, r1, r2, accum_impulse, friction, true, inv_dt);
     
     CS.task_head.collisions[m] = manifold;
+    CS.task_head.rigid_bodies[manifold.obb1_index] = r1;
+    CS.task_head.rigid_bodies[manifold.obb2_index] = r2;
   }
 }
 
@@ -208,19 +212,20 @@
       continue;
     }
 
-    Ptr<RigidBody> r1 =
-        Ptr<RigidBody>(&CSR.task_head.rigid_bodies[manifold.obb1_index]);
-    Ptr<RigidBody> r2 =
-        Ptr<RigidBody>(&CSR.task_head.rigid_bodies[manifold.obb2_index]);
+    RigidBody r1 = CSR.task_head.rigid_bodies[manifold.obb1_index];
+    RigidBody r2 = CSR.task_head.rigid_bodies[manifold.obb2_index];
+
 
     daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
     daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
 
     // Solve the collision with relaxation
-    manifold.solve(r1, r2, accum_impulse, friction, false, inv_dt);
+    PGS_Soft.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
     
     CSR.task_head.collisions[m] = manifold;
+    CSR.task_head.rigid_bodies[manifold.obb1_index] = r1;
+    CSR.task_head.rigid_bodies[manifold.obb2_index] = r2;
   }
 }
 
@@ -245,21 +250,21 @@ const static daxa_f32 LINE_SIZE = 0.5f;
   daxa_u32 index = 0;
   InterlockedAdd(sim_config->g_c_info.collision_point_count, m.contact_count, index);
 
-  var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
-  var line_vertex_buffer = Ptr<GUIVertex>(CP.task_head.line_vertex_buffer);
-
-  for(int i = 0; i < m.contact_count; i++)
+  if(sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
-    daxa_u32 current_index = index + i;
-    Ptr<Aabb> aabb = Ptr<Aabb>(&CP.task_head.point_aabbs[current_index]);
-    aabb->minimum = m.contacts[i].position + daxa_f32vec3(-POINT_SIZE, -POINT_SIZE, -POINT_SIZE);
-    aabb->maximum = m.contacts[i].position + daxa_f32vec3(POINT_SIZE, POINT_SIZE, POINT_SIZE);
-    if(sim_config->has_flag(SimFlag::DEBUG_INFO))
-    {
-      vertex_buffer[current_index].position = m.contacts[i].position;
+    var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
+    var line_vertex_buffer = Ptr<GUIVertexLine>(CP.task_head.line_vertex_buffer);
 
-      line_vertex_buffer[current_index*LINE_POINT_COUNT].position = m.contacts[i].position;
-      line_vertex_buffer[current_index*LINE_POINT_COUNT+1].position = m.contacts[i].position + m.normal * LINE_SIZE;
+    for(int i = 0; i < m.contact_count; i++)
+    {
+      daxa_u32 current_index = index + i;
+        vertex_buffer[current_index].position = m.contacts[i].position;
+        daxa_f32 blue = (daxa_f32)(255 - m.contacts[i].warm_start) / 255.0f;
+        daxa_f32 red = 1.0f - blue;
+        vertex_buffer[current_index].color = daxa_f32vec3(red, 0.0f, blue);
+
+        line_vertex_buffer[current_index*LINE_POINT_COUNT].position = m.contacts[i].position;
+        line_vertex_buffer[current_index*LINE_POINT_COUNT+1].position = m.contacts[i].position + m.normal * LINE_SIZE;
     }
   }
 }
@@ -280,34 +285,32 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
 
   daxa_u32 index = pixel_i.x;
 
-  Ptr<RigidBody> r =
-      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies[index]);
-  Ptr<RigidBody> r_copy =
-      Ptr<RigidBody>(&RB_update.task_head.rigid_bodies_update[index]);
+  RigidBody r = RB_update.task_head.rigid_bodies[index];
+  RigidBody r_copy = RB_update.task_head.rigid_bodies_update[index];
+  
+  // printf("Updating pos rigid body %d, pos: %f %f %f, rot: %f %f %f %f\n", index, r.position.x, r.position.y, r.position.z, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w);
+  // printf("Updating rigid body %d, frame: %lu, vel: %f %f %f, omega: %f %f %f\n", index, r.frame_count, r.velocity.x, r.velocity.y, r.velocity.z, r.omega.x, r.omega.y, r.omega.z);
 
-  // printf("Updating pos rigid body %d, pos: %f %f %f, rot: %f %f %f %f\n", index, r->position.x, r->position.y, r->position.z, r->rotation.v.x, r->rotation.v.y, r->rotation.v.z, r->rotation.w);
-  // printf("Updating vel rigid body %d, vel: %f %f %f, omega: %f %f %f\n", index, r->velocity.x, r->velocity.y, r->velocity.z, r->omega.x, r->omega.y, r->omega.z);
-
-  r_copy->position = r->position;
-  r_copy->rotation = r->rotation;
-  r_copy->velocity = r->velocity;
-  r_copy->omega = r->omega;
-  r_copy->flags = r->flags;
+  r_copy.position = r.position;
+  r_copy.rotation = r.rotation;
+  r_copy.velocity = r.velocity;
+  r_copy.omega = r.omega;
+  r_copy.flags = r.flags;
 #if defined(BB_DEBUG)
-  r_copy->face_collided = r->face_collided;
+  r_copy.face_collided = r.face_collided;
 #endif // BB_DEBUG
 
   if(sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
-    daxa_f32vec3 _min = r->minimum;
-    daxa_f32vec3 _max = r->maximum;
+    daxa_f32vec3 _min = r.minimum;
+    daxa_f32vec3 _max = r.maximum;
     daxa_f32vec3 center = (_min + _max) * 0.5f;
-    var axes_vertex_buffer = Ptr<GUIVertex>(RB_update.task_head.axes_vertex_buffer);
-    let x_axis = r->rotate_vector(daxa_f32vec3(1.0f, 0.0f, 0.0f));
-    let y_axis = r->rotate_vector(daxa_f32vec3(0.0f, 1.0f, 0.0f));
-    let z_axis = r->rotate_vector(daxa_f32vec3(0.0f, 0.0f, 1.0f));
+    var axes_vertex_buffer = Ptr<GUIVertexLine>(RB_update.task_head.axes_vertex_buffer);
+    let x_axis = r.rotate_vector(daxa_f32vec3(1.0f, 0.0f, 0.0f));
+    let y_axis = r.rotate_vector(daxa_f32vec3(0.0f, 1.0f, 0.0f));
+    let z_axis = r.rotate_vector(daxa_f32vec3(0.0f, 0.0f, 1.0f));
 
-    center = r->object_to_world(center);
+    center = r.object_to_world(center);
 
     axes_vertex_buffer[index*AXES_POINT_COUNT].position = center;
     axes_vertex_buffer[index*AXES_POINT_COUNT+1].position = center + x_axis;
@@ -316,4 +319,12 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     axes_vertex_buffer[index*AXES_POINT_COUNT+4].position = center;
     axes_vertex_buffer[index*AXES_POINT_COUNT+5].position = center + z_axis;
   }
+
+  RB_update.task_head.rigid_bodies[index] = r;
+  RB_update.task_head.rigid_bodies_update[index] = r_copy;
+
+
+#if defined(BB_DEBUG)
+  // printf("Updating rigid body %d sim frame: %lu c frame: %lu p frame: %lu\n", index, sim_config->frame_count, r.frame_count, r_copy.frame_count);
+#endif // BB_DEBUG
 }

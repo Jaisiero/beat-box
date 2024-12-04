@@ -53,10 +53,26 @@ inline void allocate_fill_copy(daxa::TaskInterface ti, T value, daxa::TaskBuffer
     });
 }
 
+template<typename T>
+inline void allocate_fill_copy(daxa::TaskInterface ti, std::vector<T> value, daxa::TaskBufferAttachmentInfo dst, u32 dst_offset = 0)
+{
+  auto size = value.size() * sizeof(T);
+  auto alloc = ti.allocator->allocate(size).value();
+  memcpy(alloc.host_address, value.data(),size);
+  ti.recorder.copy_buffer_to_buffer({
+      .src_buffer = ti.allocator->buffer(),
+      .dst_buffer = dst.ids[0],
+      .src_offset = alloc.buffer_offset,
+      .dst_offset = dst_offset,
+      .size = size,
+  });
+}
+
 FORCE_INLINE std::vector<std::filesystem::path> paths{
     DAXA_SHADER_INCLUDE_DIR,
     "include",
     "src/shaders",
+    "src/shaders/path_tracing",
 };
 
 struct TaskGraph

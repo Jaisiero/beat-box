@@ -11,6 +11,8 @@ static const daxa_f32 ANGULAR_DAMPING = 0.1f;
 static const daxa_f32 POINT_SIZE = 0.01f;
 static const daxa_f32 MIN_CONTACT_HERTZ = 30.0f;
 static const daxa_f32 _PI = 3.14159265359f;
+static const daxa_f32 PENETRATION_FACTOR = 0.01f;
+static const daxa_f32 BIAS_FACTOR = 0.2f;
 
 #define BB_DEBUG 1
 #if defined(BB_DEBUG) 
@@ -132,13 +134,91 @@ inline void operator&=(SimFlag &a, SimFlag b)
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 
 
+struct Material {
+  daxa_f32vec3 albedo;
+  daxa_f32vec3 emission;
+};
+DAXA_DECL_BUFFER_PTR(Material)
 
-// RigidBody struct is 156 bytes
+struct Light {
+  daxa_u32 rigid_body_index;
+};
+DAXA_DECL_BUFFER_PTR(Light)
+
+
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+[Flags]
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+enum RayTracingFlag : daxa_u32
+{
+  RT_NONE = 0,
+  RT_ACCUMULATE = 1 << 0,
+  RT_DEBUG = 1 << 1,
+};
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+RayTracingFlag  operator|(RayTracingFlag a, RayTracingFlag b)
+{
+    return RayTracingFlag((daxa_u32)a | (daxa_u32)b);
+}
+// Define bitwise OR assignment operator
+void operator|=(inout RayTracingFlag a, RayTracingFlag b)
+{
+    a = a | b;
+}
+// Define bitwise AND operator
+RayTracingFlag operator&(RayTracingFlag a, RayTracingFlag b)
+{
+    return RayTracingFlag((daxa_u32)a & (daxa_u32)b);
+}
+// Define bitwise AND assignment operator
+void operator&=(inout RayTracingFlag a, RayTracingFlag b)
+{
+    a = a & b;
+}
+#elif defined(__cplusplus)
+inline RayTracingFlag operator~(RayTracingFlag a)
+{
+    return RayTracingFlag(~(daxa_u32)a);
+}
+
+inline RayTracingFlag operator|(RayTracingFlag a, RayTracingFlag b)
+{
+    return RayTracingFlag((daxa_u32)a | (daxa_u32)b);
+}
+
+inline void operator|=(RayTracingFlag &a, RayTracingFlag b)
+{
+    a = a | b;
+}
+
+inline RayTracingFlag operator&(RayTracingFlag a, RayTracingFlag b)
+{
+    return RayTracingFlag((daxa_u32)a & (daxa_u32)b);
+}
+
+inline void operator&=(RayTracingFlag &a, RayTracingFlag b)
+{
+    a = a & b;
+}
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+
+struct RayTracingConfig {
+  RayTracingFlag flags;
+  daxa_u32 max_bounces;
+  daxa_u64 current_frame_index;
+  daxa_u64 frame_count;
+  daxa_u32 light_count;
+};
+DAXA_DECL_BUFFER_PTR(RayTracingConfig)
+
+
 struct RigidBody
 {
   RigidBodyFlag flags;
+  daxa_u32 material_index;
 #if defined(BB_DEBUG)
   daxa_u32 face_collided;
+  daxa_u64 frame_count;
 #endif // BB_DEBUG
   daxa_u32 primitive_count;
   daxa_u32 primitive_offset;
@@ -186,6 +266,12 @@ struct RigidBody
                           daxa_f32vec4(0.0f, 0.0f, 0.0f, 1.0f));
 
 #endif // defined(__cplusplus)
+  }
+
+  daxa_f32 get_half_size(daxa_u32 index)
+  {
+    daxa_f32vec3 size = (maximum - minimum) * 0.5f;
+    return index == 0 ? size.x : (index == 1 ? size.y : size.z);
   }
 
 
@@ -261,11 +347,14 @@ DAXA_DECL_BUFFER_PTR(Aabb)
 
 DAXA_DECL_TASK_HEAD_BEGIN(RayTracingTaskHead)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(CameraView), camera)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(RayTracingConfig), ray_tracing_config)
 DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_WRITE_ONLY, REGULAR_2D, swapchain)
+DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_READ_ONLY, REGULAR_2D, accumulation_buffer)
 DAXA_TH_TLAS_ID(RAY_TRACING_SHADER_READ, tlas)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
-DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), point_aabbs)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Light), lights)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Material), materials)
 DAXA_DECL_TASK_HEAD_END
 
 struct RTPushConstants
@@ -276,9 +365,17 @@ struct RTPushConstants
 struct GUIVertex
 {
   daxa_f32vec3 position;
+  daxa_f32vec3 color;
 };
 
 DAXA_DECL_BUFFER_PTR(GUIVertex)
+
+struct GUIVertexLine
+{
+  daxa_f32vec3 position;
+};
+
+DAXA_DECL_BUFFER_PTR(GUIVertexLine)
 
 DAXA_DECL_TASK_HEAD_BEGIN(GUITaskHead)
 DAXA_TH_IMAGE(COLOR_ATTACHMENT, REGULAR_2D, render_target)
@@ -294,7 +391,7 @@ struct GUIPushConstants
 DAXA_DECL_TASK_HEAD_BEGIN(GUILineTaskHead)
 DAXA_TH_IMAGE(COLOR_ATTACHMENT, REGULAR_2D, render_target)
 DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(CameraView), camera)
-DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertex), vertex_buffer)
+DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertexLine), vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 struct GUILinePushConstants
@@ -305,7 +402,7 @@ struct GUILinePushConstants
 DAXA_DECL_TASK_HEAD_BEGIN(GUIAxesTaskHead)
 DAXA_TH_IMAGE(COLOR_ATTACHMENT, REGULAR_2D, render_target)
 DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(CameraView), camera)
-DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertex), vertex_buffer)
+DAXA_TH_BUFFER_PTR(VERTEX_SHADER_READ, daxa_BufferPtr(GUIVertexLine), vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 struct GUIAxesPushConstants
@@ -331,6 +428,7 @@ struct SimConfig
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
+  daxa_u64 frame_count;
   GlobalCollisionInfo g_c_info;
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
   [mutating] bool has_flag(SimFlag flag)
@@ -378,6 +476,19 @@ DAXA_DECL_TASK_HEAD_END
 struct BroadPhasePushConstants
 {
   DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
+};
+
+DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
+DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
+DAXA_DECL_TASK_HEAD_END
+
+
+struct RigidBodySimPushConstants
+{
+  DAXA_TH_BLOB(RigidBodySimTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverDispatcherTaskHead)
@@ -437,25 +548,12 @@ struct CollisionSolverRelaxationPushConstants
   DAXA_TH_BLOB(CollisionSolverRelaxationTaskHead, task_head)
 };
 
-DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
-DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
-DAXA_DECL_TASK_HEAD_END
-
-
-struct RigidBodySimPushConstants
-{
-  DAXA_TH_BLOB(RigidBodySimTaskHead, task_head)
-};
-
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyUpdateTaskHead)
 DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies_update)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertex), axes_vertex_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertexLine), axes_vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 
@@ -496,9 +594,8 @@ DAXA_DECL_TASK_HEAD_BEGIN(CreatePointsTaskHead)
 DAXA_TH_BUFFER_PTR(TRANSFER_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), collisions)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), point_aabbs)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertex), vertex_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertex), line_vertex_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertexLine), line_vertex_buffer)
 DAXA_DECL_TASK_HEAD_END
 
 struct CreatePointsPushConstants
@@ -506,17 +603,24 @@ struct CreatePointsPushConstants
   DAXA_TH_BLOB(CreatePointsTaskHead, task_head)
 };
 
-// RT STRUCTS
-struct HitPayload
-{
-  daxa_f32vec3 hit_value;
-  daxa_f32vec3 position;
-  daxa_f32vec3 normal;
+// Define maximum number of bounces
+static const daxa_u32 MAX_BOUNCES = 3;
+
+// Update the HitPayload structure
+struct HitPayload {
+    daxa_f32vec3 position;    // Hit position
+    daxa_f32vec3 normal;      // Surface normal at hit point
+    daxa_f32vec3 albedo;      // Surface albedo (color)
+    daxa_f32vec3 emission;    // Surface emission (light)
+    daxa_u32 instance_index;  // Instance index
+    daxa_u32 primitive_index; // Primitive index
+    daxa_b32 hit;             // Flag to indicate a hit
+    daxa_u32 seed;            // Random seed for NEE
 };
 
-struct ShadowRayPayload
+struct ShadowPayload
 {
-  daxa_f32 shadow;
+  daxa_b32 hit;             // Flag to indicate a hit
 };
 
 struct MyAttributes

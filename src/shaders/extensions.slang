@@ -154,10 +154,18 @@ extension Manifold {
     tangent_vectors[1] = cross(tangent_vectors[0], normal);
   }
 
+static const daxa_f32 POSITION_TOLERANCE = 0.01f;
 
-  bool is_same_contact(FeaturePair a, FeaturePair b) {
-    return a.in_reference == b.in_reference && a.out_reference == b.out_reference && a.in_incident == b.in_incident && a.out_incident == b.out_incident;
-  }
+  bool is_same_contact(Contact c1, Contact c2)
+{
+    bool features_match = (c1.fp.in_incident == c2.fp.in_incident) &&
+                          (c1.fp.out_incident == c2.fp.out_incident);
+    // bool positions_close = length(c1.position - c2.position) < POSITION_TOLERANCE;
+
+    return features_match 
+    // && positions_close
+    ;
+}
 
   bool is_valid_contact(FeaturePair a) {
     return a.in_reference != -1 && a.out_reference != -1 && a.in_incident != -1 && a.out_incident != -1;
@@ -175,174 +183,37 @@ extension Manifold {
     daxa_f32vec3 otv0  = old_manifold.tangent_vectors[0];
     daxa_f32vec3 otv1  = old_manifold.tangent_vectors[1];
 
+    // bool _found[4] = {false, false, false, false};
     for(daxa_u32 i = 0u; i < contact_count; i++) {
+      // bool found = false;
       for(daxa_u32 j = 0u; j < old_manifold.contact_count; j++) {
-        if(is_same_contact(old_manifold.contacts[j].fp, contacts[i].fp) 
-        && is_valid_contact(contacts[i].fp)
-        ) {
-          // printf("Found same contact\n");
-        // TODO: Check why -1 make system unstable
+        if(is_same_contact(old_manifold.contacts[j], contacts[i])) {
+          // found = true;
+          // _found[j] = true;
+          // printf("update - old fp %d %d %d %d fp %d %d %d %d ws: %d\n", old_manifold.contacts[j].fp.in_reference, old_manifold.contacts[j].fp.out_reference, old_manifold.contacts[j].fp.in_incident, old_manifold.contacts[j].fp.out_incident, contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, old_manifold.contacts[j].warm_start);
 
             contacts[i].normal_impulse = old_manifold.contacts[j].normal_impulse;
-
-            // // Attempt to re-project old friction solutions
-            // daxa_f32vec3 friction = otv0 * old_manifold.contacts[j].tangent_impulse[0] + otv1 * old_manifold.contacts[j].tangent_impulse[1];
-
-            // contacts[i].tangent_impulse[0] = dot(friction, tangent_vectors[0]);
-            // contacts[i].tangent_impulse[1] = dot(friction, tangent_vectors[1]);
             contacts[i].tangent_impulse[0] = old_manifold.contacts[j].tangent_impulse[0];
             contacts[i].tangent_impulse[1] = old_manifold.contacts[j].tangent_impulse[1];
 
-            contacts[i].warm_start = max(old_manifold.contacts[j].warm_start, old_manifold.contacts[j].warm_start + 1u);
+            contacts[i].warm_start = min(255, old_manifold.contacts[j].warm_start + 1u);
           break;
-        }
-      }
-    }
-  }
-
-  [mutating] void pre_step(daxa_f32 inv_dt, Ptr<RigidBody> body_a,  Ptr<RigidBody> body_b, daxa_b32 warm_starting, daxa_b32 enable_friction, daxa_f32 h, daxa_f32 hertz) {
-
-    for(daxa_u32 i = 0u; i < contact_count; i++) {
-
-      daxa_f32vec3 r1 = contacts[i].position - anchor_a;
-      daxa_f32vec3 r2 = contacts[i].position - anchor_b;
-
-      // Precompute normal mass, tangent mass, and bias
-      daxa_f32vec3 rn1 = cross(r1, normal);
-      daxa_f32vec3 rn2 = cross(r2, normal);
-      daxa_f32 k_normal = body_a->inv_mass + body_b->inv_mass;
-      k_normal += dot(rn1, mul(body_a->get_transformed_inertia(), rn1));
-      k_normal += dot(rn2, mul(body_b->get_transformed_inertia(), rn2));
-      contacts[i].normal_mass = k_normal == 0.0 ? 0.0f : 1.0f / k_normal;
-
-      for(daxa_u32 j = 0u; j < 2; j++) {
-        daxa_f32vec3 rt1 = cross(r1, tangent_vectors[j]);
-        daxa_f32vec3 rt2 = cross(r2, tangent_vectors[j]);
-        daxa_f32 k_tangent = body_a->inv_mass + body_b->inv_mass;
-        k_tangent += dot(rt1, mul(body_a->get_transformed_inertia(), rt1));
-        k_tangent += dot(rt2, mul(body_b->get_transformed_inertia(), rt2));
-        contacts[i].tangent_mass[j] = k_tangent == 0.0 ? 0.0 : 1.0f / k_tangent;
+        } 
       }
 
-      daxa_f32 contact_hertz = (body_a->inv_mass == 0.0f || body_b->inv_mass == 0.0f) ? 2.0f * hertz : hertz;
-
-      // soft contact
-			// should use the substep not the full time step
-			const float zeta = 10.0f;
-			float omega = 2.0f * _PI * contact_hertz;
-			float c = h * omega * (2.0f * zeta + h * omega);
-			contacts[i].bias_factor = omega / (2.0f * zeta + h * omega);
-			contacts[i].impulse_coefficient = 1.0f / (1.0f + c);
-			contacts[i].mass_coefficient = c * contacts[i].impulse_coefficient;
-
-      // accumlate impulse
-      if(warm_starting) {
-        // Apply normal + friction impulse
-        daxa_f32vec3 P = normal * contacts[i].normal_impulse;
-
-        if(enable_friction) {
-          for(daxa_u32 j = 0u; j < 2; j++) {
-            P += tangent_vectors[j] * contacts[i].tangent_impulse[j];
-          }
-        }
-
-        body_a->velocity -= P * body_a->inv_mass;
-        body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
-
-        body_b->velocity += P * body_b->inv_mass;
-        body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
-      }
-    }
-  }
-
-  [mutating]
-  void solve(Ptr<RigidBody> body_a, Ptr<RigidBody> body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_b32 use_bias, daxa_f32 inv_h) {
-
-    daxa_f32 friction = sqrt(body_a->friction * body_b->friction);
-    for(daxa_u32 c = 0u; c < contact_count; ++c)
-    {
-      daxa_f32vec3 collision_point = contacts[c].position;
-
-      // Calculate relative velocity
-      daxa_f32vec3 r1_to_point = collision_point - anchor_a;
-      daxa_f32vec3 r2_to_point = collision_point - anchor_b;
-
-      daxa_f32vec3 relative_velocity = body_b->velocity + cross(body_b->omega, r2_to_point) - body_a->velocity - cross(body_a->omega, r1_to_point);
-
-      // Friction
-      if(enable_friction) {
-          for(daxa_u32 j = 0u; j < 2u; ++j)
-          {
-            daxa_f32 tangent_velocity = dot(relative_velocity, tangent_vectors[j]);
-            daxa_f32 tangent_impulse = contacts[c].tangent_mass[j] * -tangent_velocity;
-
-            daxa_f32 max_friction_impulse = friction * contacts[c].normal_impulse;
-
-            // Clamp the accumulated impulse
-            if(accumulate_impulses) {
-              daxa_f32 old_impulse = contacts[c].tangent_impulse[j];
-              contacts[c].tangent_impulse[j] = clamp(old_impulse + tangent_impulse, -max_friction_impulse, max_friction_impulse);
-              tangent_impulse = contacts[c].tangent_impulse[j] - old_impulse;
-            } else {
-              tangent_impulse = clamp(tangent_impulse, -max_friction_impulse, max_friction_impulse);
-            }
-
-            // Apply contact impulse
-            daxa_f32vec3 tangent_impulse_vector = tangent_vectors[j] * tangent_impulse;
-
-            body_a->velocity -= tangent_impulse_vector * body_a->inv_mass;
-            body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1_to_point, tangent_impulse_vector));
-
-            body_b->velocity += tangent_impulse_vector * body_b->inv_mass;
-            body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2_to_point, tangent_impulse_vector));
-          }
-      }
-
-      relative_velocity = body_b->velocity + cross(body_b->omega, r2_to_point) - body_a->velocity - cross(body_a->omega, r1_to_point);
-
-      // Calculate normal impulse
-      daxa_f32 normal_velocity = dot(relative_velocity, normal);
-      daxa_f32 bias = 0.0f;
-      daxa_f32 mass_scale = 1.0f;
-      daxa_f32 impulse_scale = 0.0f;
-
-      if(contacts[c].penetration > 0.0f) {
-        bias = contacts[c].penetration * inv_h;
-      } else if(use_bias) {
-        bias = max(contacts[c].bias_factor * contacts[c].penetration, -4.0f);
-        mass_scale = contacts[c].mass_coefficient;
-        impulse_scale = contacts[c].impulse_coefficient;
-      }
-
-      daxa_f32 impulse = -contacts[c].normal_mass * mass_scale * (normal_velocity + bias) - impulse_scale * contacts[c].normal_impulse;
-
-      // Clamp the accumulated impulse
-      if(accumulate_impulses) {
-        daxa_f32 old_normal_impulse = contacts[c].normal_impulse;
-        contacts[c].normal_impulse = max(old_normal_impulse + impulse, 0.0f);
-        impulse = contacts[c].normal_impulse - old_normal_impulse;
-      } else {
-        impulse = max(impulse, 0.0f);
-      }
-
-      // Apply contact impulse
-      daxa_f32vec3 normal_impulse_vector = normal * impulse;
-
-      body_a->velocity -= normal_impulse_vector * body_a->inv_mass;
-      body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1_to_point, normal_impulse_vector));
-
-      body_b->velocity += normal_impulse_vector * body_b->inv_mass;
-      body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2_to_point, normal_impulse_vector));
-
+      // if(!found) {
+      //   printf("Not updated - fp %d %d %d %d ws: %d\n",  contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, contacts[i].warm_start);
+      // }
     }
   }
 };
 
 
-func find_old_collision(daxa_u32 body_a_index, daxa_u32 body_b_index, daxa_u32 old_collision_count, Ptr<Manifold> old_collisions, out Manifold old_manifold) -> daxa_b32 {
+func find_old_collision(daxa_u32 body_a_index, daxa_u32 body_b_index, daxa_u32 old_collision_count, Ptr<Manifold> old_collisions, out Manifold old_manifold, out daxa_u32 old_index) -> daxa_b32 {
   for(daxa_u32 i = 0u; i < old_collision_count; ++i) {
     if(old_collisions[i].obb1_index == body_a_index && old_collisions[i].obb2_index == body_b_index) {
       old_manifold = old_collisions[i];
+      old_index = i;
       return true;
     }
   }

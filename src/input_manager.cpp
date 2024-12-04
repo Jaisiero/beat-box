@@ -3,11 +3,17 @@
 
 BB_NAMESPACE_BEGIN
 
-void InputManager::on_mouse_move(f32 x, f32 y) {
-    camera_set_mouse_delta(camera_mngr->camera, glm::vec2{x, y});
+void InputManager::on_mouse_move(f32 x, f32 y)
+{
+  camera_set_mouse_delta(camera_mngr->camera, glm::vec2{x, y});
+  if(camera_mngr->camera.mouse_left_press)
+  {
+    status_mngr->reset_accumulation_count();
+  }
 }
 
-void InputManager::on_mouse_button(i32 button, i32 action, f32 x, f32 y) {
+void InputManager::on_mouse_button(i32 button, i32 action, f32 x, f32 y)
+{
   if (button == GLFW_MOUSE_BUTTON_1)
   {
     camera_set_last_mouse_pos(camera_mngr->camera, glm::vec2(x, y));
@@ -34,7 +40,8 @@ void InputManager::on_mouse_button(i32 button, i32 action, f32 x, f32 y) {
   }
 }
 
-void InputManager::on_key(i32 key, i32 action) {
+void InputManager::on_key(i32 key, i32 action)
+{
   switch (key)
   {
   case GLFW_KEY_W:
@@ -42,6 +49,7 @@ void InputManager::on_key(i32 key, i32 action) {
     if (action == GLFW_PRESS || action == GLFW_REPEAT)
     {
       move_camera_forward(camera_mngr->camera);
+      status_mngr->reset_accumulation_count();
     }
     break;
   case GLFW_KEY_S:
@@ -49,6 +57,7 @@ void InputManager::on_key(i32 key, i32 action) {
     if (action == GLFW_PRESS || action == GLFW_REPEAT)
     {
       move_camera_backward(camera_mngr->camera);
+      status_mngr->reset_accumulation_count();
     }
     break;
   case GLFW_KEY_A:
@@ -56,6 +65,7 @@ void InputManager::on_key(i32 key, i32 action) {
     if (action == GLFW_PRESS || action == GLFW_REPEAT)
     {
       move_camera_left(camera_mngr->camera);
+      status_mngr->reset_accumulation_count();
     }
     break;
   case GLFW_KEY_D:
@@ -63,21 +73,24 @@ void InputManager::on_key(i32 key, i32 action) {
     if (action == GLFW_PRESS || action == GLFW_REPEAT)
     {
       move_camera_right(camera_mngr->camera);
+      status_mngr->reset_accumulation_count();
     }
     break;
   case GLFW_KEY_X:
     if (action == GLFW_PRESS || action == GLFW_REPEAT)
     {
       move_camera_up(camera_mngr->camera);
+      status_mngr->reset_accumulation_count();
     }
     break;
   case GLFW_KEY_Z:
     if (action == GLFW_PRESS || action == GLFW_REPEAT)
     {
       move_camera_down(camera_mngr->camera);
+      status_mngr->reset_accumulation_count();
     }
     break;
-  case GLFW_KEY_SPACE :
+  case GLFW_KEY_SPACE:
     if (action == GLFW_PRESS)
     {
       status_mngr->switch_simulating();
@@ -89,6 +102,18 @@ void InputManager::on_key(i32 key, i32 action) {
       status_mngr->switch_gui_enabled();
     }
     break;
+  case GLFW_KEY_0:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->switch_accumulating();
+    }
+    break;
+  case GLFW_KEY_1:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->switch_warm_starting();
+    }
+    break;
   case GLFW_KEY_LEFT_CONTROL:
     if (action == GLFW_PRESS)
     {
@@ -96,21 +121,22 @@ void InputManager::on_key(i32 key, i32 action) {
     }
     break;
   case GLFW_KEY_LEFT_SHIFT:
-      if (action == GLFW_PRESS)
-      {
-        camera_shift_pressed(camera_mngr->camera);
-      }
-      else if (action == GLFW_RELEASE)
-      {
-        camera_shift_released(camera_mngr->camera);
-      }
-      break;
+    if (action == GLFW_PRESS)
+    {
+      camera_shift_pressed(camera_mngr->camera);
+    }
+    else if (action == GLFW_RELEASE)
+    {
+      camera_shift_released(camera_mngr->camera);
+    }
+    break;
   default:
     break;
   }
 }
 
-void InputManager::on_scroll(f32 x, f32 y) {
+void InputManager::on_scroll(f32 x, f32 y)
+{
 }
 
-BB_NAMESPACE_END  
+BB_NAMESPACE_END

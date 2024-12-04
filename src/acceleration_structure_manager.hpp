@@ -56,8 +56,6 @@ struct AccelerationStructureManager
   u32 previous_primitive_count = 0;
   // Buffer for the primitives
   daxa::BufferId primitive_buffer = {};
-  // Buffer for the points
-  daxa::BufferId points_buffer[DOUBLE_BUFFERING] = {};
 
   // Offset for the BLAS scratch buffer
   u32 proc_blas_scratch_offset = 0;
@@ -69,13 +67,6 @@ struct AccelerationStructureManager
   daxa::BufferId proc_blas_buffer = {};
   // Sub-allocated buffer for the BLAS
   std::vector<daxa::BlasId> proc_blas = {};
-
-  // Offset for point BLAS buffer
-  u32 point_blas_buffer_offset = 0;
-  // Buffer for point BLAS
-  daxa::BufferId point_blas_buffer = {};
-  // Sub-allocated buffer for point BLAS
-  std::vector<daxa::BlasId> point_blas = {};
 
   // Buffer for the TLAS
   daxa::BufferId proc_tlas_buffer = {};
@@ -102,14 +93,9 @@ struct AccelerationStructureManager
   // TLAS
   daxa::TlasId tlas[DOUBLE_BUFFERING] = {};
 
-  // task for the RigidBodies
-  daxa::TaskBuffer task_rigid_body_buffer{{.name = "rigid_body_buffer_task"}};
   // task for the AABB buffer
   daxa::TaskBuffer task_aabb_buffer{{.name = "aabb_buffer_task"}};
   // task for points AABB buffer
-  daxa::TaskBuffer task_points_aabb_buffer{{.name = "points_aabb_buffer_task"}};
-  // task for previous points AABB buffer
-  daxa::TaskBuffer task_previous_points_aabb_buffer{{.name = "previous_points_aabb_buffer_task"}};
   // task for the BLAS
   daxa::TaskBlas task_blas{{.name = "blas_task"}};
   // task for the TLAS
@@ -123,9 +109,7 @@ struct AccelerationStructureManager
   TaskGraph AS_update_buffers_TG;
 
   daxa::TaskBuffer task_dispatch_buffer{{.name = "dispatch_buffer"}};
-  daxa::TaskBuffer task_sim_config{{.name = "sim_config"}};
   daxa::TaskBuffer task_blas_instance_data{{.name = "blas_instance_data"}};
-  daxa::TaskBuffer task_collisions{{.name = "RB_collisions"}};
 
   explicit AccelerationStructureManager(daxa::Device &device, std::shared_ptr<TaskManager> task_manager);
   ~AccelerationStructureManager();
@@ -137,7 +121,6 @@ struct AccelerationStructureManager
   daxa::TlasId get_tlas();
   daxa::BufferId get_rigid_body_buffer();
   daxa::BufferId get_next_rigid_body_buffer();
-  daxa::BufferId get_points_buffer();
 
 
   // NOTE: queue sync assures double buffering is filled

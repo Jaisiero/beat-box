@@ -50,7 +50,7 @@ struct GPUcontext{
           }
       },
       .present_mode = daxa::PresentMode::FIFO,
-      .image_usage = daxa::ImageUsageFlagBits::SHADER_STORAGE,
+      .image_usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_SRC,
       .name = swapchain_name,
     });
   }

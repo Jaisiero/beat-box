@@ -36,7 +36,7 @@ struct StatusManager
     // Link resources
     accel_struct_mngr->update_TLAS_resources(dispatch_buffer);
 
-    rigid_body_manager->update_resources(dispatch_buffer, accel_struct_mngr->get_rigid_body_buffer(), accel_struct_mngr->primitive_buffer, accel_struct_mngr->get_points_buffer());
+    rigid_body_manager->update_resources(accel_struct_mngr->primitive_buffer);
 
     return initialized = true;
   }
@@ -74,6 +74,11 @@ struct StatusManager
     }
 
     frame_index = (frame_index + 1) % DOUBLE_BUFFERING;
+    ++frame_count;
+    if(accumulation)
+    {
+      ++frame_accumulation_count;
+    }
 
     return true;
   }
@@ -81,6 +86,11 @@ struct StatusManager
   daxa_u32 get_frame_index()
   {
     return frame_index;
+  }
+
+  daxa_u64 get_frame_count()
+  {
+    return frame_count;
   }
 
   bool is_simulating()
@@ -128,6 +138,19 @@ struct StatusManager
     }
   }
 
+  void switch_warm_starting()
+  {
+    warm_starting = !warm_starting;
+    if(warm_starting)
+    {
+      rigid_body_manager->set_sim_flags(SimFlag::WARM_STARTING);
+    }
+    else
+    {
+      rigid_body_manager->clear_sim_flags(SimFlag::WARM_STARTING);
+    }
+  }
+
   bool is_advection()
   {
     return advection;
@@ -144,6 +167,33 @@ struct StatusManager
     {
       rigid_body_manager->clear_sim_flags(SimFlag::ADVECTION);
     }
+  }
+
+  bool is_accumulating()
+  {
+    return accumulation;
+  }
+
+  void switch_accumulating()
+  {
+    accumulation = !accumulation;
+    if(!accumulation)
+    {
+      frame_accumulation_count = 0;
+      std::cout << "Accumulation disabled" << std::endl;
+    } else {
+      std::cout << "Accumulation enabled" << std::endl;
+    }
+  }
+
+  daxa_u64 get_accumulation_count()
+  {
+    return frame_accumulation_count;
+  }
+
+  void reset_accumulation_count()
+  {
+    frame_accumulation_count = 0;
   }
 
 private:
@@ -163,10 +213,18 @@ private:
   bool gui_enabled = true;
   // flag for advection
   bool advection = true;
+  // flag for warm starting
+  bool warm_starting = true;
+  // flag for accumulation
+  bool accumulation = false;
   // double buffering counter
   daxa_u32 double_buffering_counter = 0;
   // frame index
   daxa_u32 frame_index = 0;
+  // frame counter
+  daxa_u64 frame_count = 0;
+  // frame accumulation
+  daxa_u64 frame_accumulation_count = 0;
   // Dispatch buffer
   daxa::BufferId dispatch_buffer;
 };

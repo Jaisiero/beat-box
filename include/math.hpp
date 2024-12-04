@@ -69,6 +69,11 @@ FORCE_INLINE daxa_f32vec3 operator/(const daxa_f32vec3& a, const daxa_f32& b)
     return {a.x / b, a.y / b, a.z / b};
 }
 
+FORCE_INLINE daxa_b32 operator!=(const daxa_f32vec3& a, const daxa_f32vec3& b)
+{
+    return a.x != b.x || a.y != b.y || a.z != b.z;
+}
+
 FORCE_INLINE daxa_f32mat4x4 daxa_mat4_from_glm_mat4(glm::mat4 const& m)
 {
     return {
@@ -121,6 +126,8 @@ FORCE_INLINE auto cuboid_get_inverse_intertia(daxa_f32 mass, daxa_f32vec3 min, d
 static const daxa_f32 FLT_MAX = 3.402823466e+38F;
 static const daxa_f32 FLT_MIN = 1.175494351e-38F;
 static const daxa_f32 EPSILON = 1.192092896e-07F;
+static const daxa_u32 MAX_UINT32 = 0xFFFFFFFF;
+static const daxa_f32 GOLDEN_RATIO = 1.61803398875F;
 #endif // __cplusplus
 
 struct Aabb
@@ -345,7 +352,8 @@ struct Manifold {
   daxa_i32 key;
 
   daxa_i32 error;
-  // // DEBUG
+  // DEBUG
+  daxa_u64 frame_count;
   // daxa_f32 s_max;
   // Transform rtx;
   // daxa_f32vec3 e_r;
@@ -356,8 +364,8 @@ struct Manifold {
 
   daxa_f32vec3 normal;
   daxa_f32vec3 tangent_vectors[2];
-  Contact contacts[MAX_CONTACT_POINT_COUNT];
   daxa_i32 contact_count;
+  Contact contacts[MAX_CONTACT_POINT_COUNT];
 };
 DAXA_DECL_BUFFER_PTR(Manifold)
 
