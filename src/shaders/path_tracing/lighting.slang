@@ -415,7 +415,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     daxa_u32 selected_light_index = select_random_light(seed, light_count, instance_index);
     if(selected_light_index == MAX_UINT32)
     {
-        printf("No valid light found. Instance Index: %u, Light Count: %u\n", instance_index, light_count);
+        // printf("No valid light found. Instance Index: %u, Light Count: %u\n", instance_index, light_count);
         pdf_light = 0.0f;
         return light_radiance;
     }
@@ -506,7 +506,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     {
         // Light or surface normal facing away
         pdf_light = 0.0f;
-        printf("Invalid Geometry: N_dot_L: %f, Cos_theta_light: %f, Distance_Squared: %f, light_normal: %f %f %f, light_dir: %f %f %f\n", N_dot_L, cos_theta_light, distance_squared, light_normal.x, light_normal.y, light_normal.z, light_dir.x, light_dir.y, light_dir.z);
+        // printf("Invalid Geometry: N_dot_L: %f, Cos_theta_light: %f, Distance_Squared: %f, light_normal: %f %f %f, light_dir: %f %f %f\n", N_dot_L, cos_theta_light, distance_squared, light_normal.x, light_normal.y, light_normal.z, light_dir.x, light_dir.y, light_dir.z);
     }
     
     return light_radiance;

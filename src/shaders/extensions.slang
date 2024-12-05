@@ -129,11 +129,15 @@ extension Transform {
     }
 
     daxa_f32vec3 get_axis(daxa_u32 i) {
-      return daxa_f32vec3(rotation[0][i], rotation[1][i], rotation[2][i]);
+      // Return the i-th row of the rotation matrix
+      return daxa_f32vec3(rotation[i][0], rotation[i][1], rotation[i][2]);
     }
 
     daxa_f32vec3 get_inverse_axis(daxa_u32 i) {
-      return daxa_f32vec3(rotation[i][0], rotation[i][1], rotation[i][2]);
+        // For rotation matrices, the inverse is the transpose
+        // So the inverse axes are the columns of the transpose
+        daxa_f32mat3x3 inv_rotation = transpose(rotation);
+        return daxa_f32vec3(inv_rotation[i][0], inv_rotation[i][1], inv_rotation[i][2]);
     }
 
     daxa_f32 get_rotation_element(daxa_u32 i, daxa_u32 j) {

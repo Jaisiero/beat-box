@@ -230,7 +230,27 @@ daxa_f32vec3 get_face_color(BoxFace face)
     // Set the payload
     payload.position = hit_location;
     payload.normal = normalize(normal);
+#if BB_RT_DEBUG
+    // get face by normal
+    BoxFace face = get_face_by_normal(normal);
+    if (r->has_flag(RigidBodyFlag::COLLIDING))
+    {
+      if (r->is_face_colliding(face))
+      {
+        payload.albedo = collision_material_color;
+      }
+      else
+      {
+        payload.albedo = m.albedo;
+      }
+    }
+    else
+    {
+      payload.albedo = m.albedo;
+    }
+#else
     payload.albedo = m.albedo;
+#endif
     payload.instance_index = instance_index;
     payload.primitive_index = prim_index;
     payload.emission = m.emission; // Add emission to the payload

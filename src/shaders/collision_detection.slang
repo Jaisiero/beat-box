@@ -119,6 +119,8 @@ struct OBBvsOBBCollision {
     // Abs the normal used to determine which axis the normal is most aligned with
     daxa_f32vec3 abs_n = abs(n);
 
+    printf("n: %f %f %f, abs: %f %f %f\n", n.x, n.y, n.z, abs_n.x, abs_n.y, abs_n.z);
+
     // Identify the dominant axis of the normal
     if(abs_n.x > abs_n.y && abs_n.x > abs_n.z) {
       // Positive x face
@@ -537,6 +539,7 @@ struct OBBvsOBBCollision {
   static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, out Manifold manifold, out daxa_u32 obb1_faces, out daxa_u32 obb2_faces) {
     manifold.contact_count = 0;
     manifold.key = -1;
+    manifold.error = 0;
     
     obb1_faces = 0;
     obb2_faces = 0;
@@ -617,6 +620,7 @@ struct OBBvsOBBCollision {
                            a_max, 
                            OBB1_Axes[i].normal, 
                            n_a)) {
+            manifold.key = a_axis;
             return false; // Separating axis found
         }
     }
@@ -635,6 +639,7 @@ struct OBBvsOBBCollision {
                            b_max, 
                            OBB2_Axes[i].normal, 
                            n_b)) {
+            manifold.key = b_axis;
             return false; // Separating axis found
         }
     }
@@ -673,6 +678,7 @@ struct OBBvsOBBCollision {
           // Track the axis
           if (track_edge_axis(e_axis, get_axis_enum(i * 3 + j), s, e_max, axis, n_e))
           {
+            manifold.key = get_axis_enum(i * 3 + j);
             return false; // Separating axis found
           }
         }
@@ -760,6 +766,17 @@ struct OBBvsOBBCollision {
       if(error != 0) {
         manifold.key = axis;
         manifold.contact_count = 0;
+        daxa_u32 mat_r = axis <= A_Z_AXIS ? A.material_index : B.material_index;
+        daxa_u32 mat_i = axis <= A_Z_AXIS ? B.material_index : A.material_index;
+        manifold.normal = flip ? -normal : normal;
+        if(flip) {
+          // flip the faces
+          obb1_faces = incident_face;
+          obb2_faces = reference_face;
+        } else {
+          obb1_faces = reference_face;
+          obb2_faces = incident_face;
+        }
         return true; // FAIL
       }
 
@@ -842,6 +859,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
   r->face_collided = 0u;
   r->frame_count = sim_config.frame_count;
 #endif // BB_DEBUG
+ 
   for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {
     Ptr<RigidBody> r2 = Ptr<RigidBody>(&rigid_bodies[i]);
@@ -864,6 +882,10 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
     // 
     if (collision)
     {
+#if defined(BB_DEBUG)
+      printf("Collision detected rigid body %u (mat: %d) and %u (mat: %d), axis: %d, error: %d normal: %f %f %f\n", rigid_body_index, r.material_index, i, r2.material_index,  manifold.key, manifold.error, manifold.normal.x, manifold.normal.y, manifold.normal.z);
+      printf("Collision detected rigid body %u (rotation: %f %f %f %f) and %u (rotation: %f %f %f %f)\n", rigid_body_index, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w, i, r2.rotation.v.x, r2.rotation.v.y, r2.rotation.v.z, r2.rotation.w);
+#endif // BB_DEBUG
       daxa_u32 index = 0;
       InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
       manifold.compute_basis();
@@ -895,6 +917,12 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
         r2->flags |= RigidBodyFlag::COLLIDING;
       }
 #endif // BB_DEBUG
+    } 
+#if defined(BB_DEBUG)
+    else {
+      printf("Collision detection failed rigid body %u (mat: %d) and %u (mat: %d), axis: %d, error: %d\n", rigid_body_index, r.material_index, i, r2.material_index,  manifold.key, manifold.error);
+      printf("Collision detection failed rigid body %u (rotation: %f %f %f %f) and %u (rotation: %f %f %f %f)\n", rigid_body_index, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w, i, r2.rotation.v.x, r2.rotation.v.y, r2.rotation.v.z, r2.rotation.w);
     }
+#endif // BB_DEBUG
   }
 }

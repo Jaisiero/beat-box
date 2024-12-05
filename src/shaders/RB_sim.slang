@@ -95,6 +95,8 @@
   {
     return;
   }
+
+  // printf("Pre solver collision count %d, tmp_collision_count: %d\n", sim_config->g_c_info.collision_count, sim_config->g_c_info.tmp_collision_count);
   
   // TODO: Implement islands
   for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)

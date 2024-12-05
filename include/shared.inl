@@ -16,7 +16,7 @@ static const daxa_f32 BIAS_FACTOR = 0.2f;
 
 #define BB_DEBUG 1
 #if defined(BB_DEBUG) 
-#define BB_RT_DEBUG 1  
+// #define BB_RT_DEBUG 1  
 #endif // BB_DEBUG
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
