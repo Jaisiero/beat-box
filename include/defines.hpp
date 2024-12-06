@@ -74,6 +74,10 @@ const auto RT_shader_file_string = "ray_tracing.slang";
 const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
 
 const auto RB_sim_shader_file_string = "RB_sim.slang";
+// reset body links
+const auto entry_reset_body_links = "entry_reset_body_links";
+const auto reset_body_links_pipeline_name = "Reset Body Links";
+
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
@@ -222,6 +226,21 @@ struct MainRayTracingPipeline
         .name = RT_main_pipeline_name,
     };
   }
+};
+
+struct ResetBodyLinksInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_reset_body_links,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(ResetBodyLinkPushConstants),
+      .name = reset_body_links_pipeline_name,
+  };
 };
 
 struct BroadPhaseInfo {

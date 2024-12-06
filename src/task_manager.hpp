@@ -73,6 +73,7 @@ FORCE_INLINE std::vector<std::filesystem::path> paths{
     "include",
     "src/shaders",
     "src/shaders/path_tracing",
+    "src/shaders/simulation",
 };
 
 struct TaskGraph

@@ -267,7 +267,7 @@ daxa_u32 select_random_light(inout daxa_u32 seed, daxa_u32 light_count, daxa_u32
     }
 
     if(index == instance_index) {
-        index = MAX_UINT32;
+        index = MAX_U32;
     }
 
     return index;
@@ -413,7 +413,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     
     // Step 1: Select a random light
     daxa_u32 selected_light_index = select_random_light(seed, light_count, instance_index);
-    if(selected_light_index == MAX_UINT32)
+    if(selected_light_index == MAX_U32)
     {
         // printf("No valid light found. Instance Index: %u, Light Count: %u\n", instance_index, light_count);
         pdf_light = 0.0f;

@@ -15,10 +15,6 @@ struct RigidBodyManager{
   std::shared_ptr<TaskManager> task_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr);
   ~RigidBodyManager();
 
-  daxa::BufferId get_sim_config_buffer();
-  daxa::BufferId get_previous_sim_config_buffer();
-  daxa::BufferId get_collision_buffer();
-
   bool create(char const* name, std::shared_ptr<RendererManager> renderer, std::shared_ptr<GUIManager> gui, daxa_u32 iterations = DEFAULT_ITERATION_COUNT);
   void destroy();
 
@@ -27,9 +23,11 @@ struct RigidBodyManager{
   SimConfig& get_sim_config_reference();
 
   bool update();
-  bool update_resources(daxa::BufferId aabbs);
+  bool update_resources();
   // NOTE: this function reset simulation configuration
   bool update_sim();
+  
+  bool update_active_rigid_body_list();
 
   SimFlag get_sim_flags() const {
     return sim_flags;
@@ -75,10 +73,13 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_next_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
   daxa::TaskBuffer task_collisions{{.initial_buffers = {}, .name = "RB_collisions"}};
   daxa::TaskBuffer task_old_collisions{{.initial_buffers = {}, .name = "RB_old_collisions"}};
+  daxa::TaskBuffer task_active_rigid_bodies{{.initial_buffers = {}, .name = "RB_active_rigid_bodies"}};
+  daxa::TaskBuffer task_body_links{{.initial_buffers = {}, .name = "RB_body_links"}};
 
 private: 
   void record_read_back_sim_config_tasks(TaskGraph &readback_SC_TG);
   void record_update_sim_config_tasks(TaskGraph &update_SC_TG);
+  void record_active_rigid_body_list_upload_tasks(TaskGraph &ARB_TG);
   void update_buffers();
   
   // Device reference
@@ -106,7 +107,7 @@ private:
   bool sim_flag_dirty[DOUBLE_BUFFERING] = {};
 
   // Compute pipeline reference
-  std::shared_ptr<daxa::ComputePipeline> pipeline_RC;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_RBL;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CPS;
@@ -126,9 +127,14 @@ private:
   // TaskGraph to update simulation configuration
   TaskGraph update_SC_TG;
 
+  // Task graph for uploading active rigid body list
+  TaskGraph ARB_TG;
+
   daxa::BufferId sim_config_host_buffer[DOUBLE_BUFFERING] = {};
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
+  daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};
+  daxa::BufferId body_links[DOUBLE_BUFFERING] = {};
 
   // Simulation configuration
   SimSolverType solver_type = SimSolverType::PGS_SOFT;

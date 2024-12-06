@@ -71,8 +71,14 @@ struct RendererManager
   daxa_u32 get_rigid_body_count() {
     return scene_manager->get_rigid_body_count();
   }
+  daxa_u32 get_active_rigid_body_count() {
+    return scene_manager->get_active_rigid_body_count();
+  }
   SimSolverType get_solver() {
     return status_manager->get_solver();
+  }
+  std::vector<ActiveRigidBody> get_active_rigid_bodies() {
+    return scene_manager->get_active_rigid_bodies();
   }
 
 private:

@@ -2,6 +2,7 @@
 #include "collision_detection.slang"
 #include "solvers.slang"
 
+[[vk::push_constant]] ResetBodyLinkPushConstants RBL;
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
@@ -12,6 +13,26 @@
 [[vk::push_constant]] CreatePointsPushConstants CP;
 [[vk::push_constant]] RigidBodyUpdatePushConstants RB_update;
 
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_reset_body_links(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(RBL.task_head.sim_config);
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->active_rigid_body_count)
+  {
+    return;
+  }
+
+  ActiveRigidBody active_rigid_body = RBL.task_head.active_rigid_bodies[index];
+
+  printf("RBL index %d, rigid_body_index %d\n", index, active_rigid_body.rigid_body_index);
+
+  RBL.task_head.body_links[index] = BodyLink(active_rigid_body.rigid_body_index, MAX_U32);
+}
 
 
 [shader("compute")]
@@ -39,7 +60,10 @@
   broad_phase(index, BP.task_head.rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions);
 
 #if defined(BB_DEBUG)
-  // printf("Broad phase frame %lu\n", sim_config->frame_count);
+  // if(index == 0)
+  // {
+  //   printf("Broad phase frame %lu\n", sim_config->frame_count);
+  // }
 #endif // BB_DEBUG
 }
 

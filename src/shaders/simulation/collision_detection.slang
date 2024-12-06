@@ -119,8 +119,6 @@ struct OBBvsOBBCollision {
     // Abs the normal used to determine which axis the normal is most aligned with
     daxa_f32vec3 abs_n = abs(n);
 
-    printf("n: %f %f %f, abs: %f %f %f\n", n.x, n.y, n.z, abs_n.x, abs_n.y, abs_n.z);
-
     // Identify the dominant axis of the normal
     if(abs_n.x > abs_n.y && abs_n.x > abs_n.z) {
       // Positive x face
@@ -883,8 +881,8 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
     if (collision)
     {
 #if defined(BB_DEBUG)
-      printf("Collision detected rigid body %u (mat: %d) and %u (mat: %d), axis: %d, error: %d normal: %f %f %f\n", rigid_body_index, r.material_index, i, r2.material_index,  manifold.key, manifold.error, manifold.normal.x, manifold.normal.y, manifold.normal.z);
-      printf("Collision detected rigid body %u (rotation: %f %f %f %f) and %u (rotation: %f %f %f %f)\n", rigid_body_index, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w, i, r2.rotation.v.x, r2.rotation.v.y, r2.rotation.v.z, r2.rotation.w);
+      // printf("Collision detected rigid body %u (mat: %d) and %u (mat: %d), axis: %d, error: %d normal: %f %f %f\n", rigid_body_index, r.material_index, i, r2.material_index,  manifold.key, manifold.error, manifold.normal.x, manifold.normal.y, manifold.normal.z);
+      // printf("Collision detected rigid body %u (rotation: %f %f %f %f) and %u (rotation: %f %f %f %f)\n", rigid_body_index, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w, i, r2.rotation.v.x, r2.rotation.v.y, r2.rotation.v.z, r2.rotation.w);
 #endif // BB_DEBUG
       daxa_u32 index = 0;
       InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
@@ -920,8 +918,8 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
     } 
 #if defined(BB_DEBUG)
     else {
-      printf("Collision detection failed rigid body %u (mat: %d) and %u (mat: %d), axis: %d, error: %d\n", rigid_body_index, r.material_index, i, r2.material_index,  manifold.key, manifold.error);
-      printf("Collision detection failed rigid body %u (rotation: %f %f %f %f) and %u (rotation: %f %f %f %f)\n", rigid_body_index, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w, i, r2.rotation.v.x, r2.rotation.v.y, r2.rotation.v.z, r2.rotation.w);
+      // printf("Collision detection failed rigid body %u (mat: %d) and %u (mat: %d), axis: %d, error: %d\n", rigid_body_index, r.material_index, i, r2.material_index,  manifold.key, manifold.error);
+      // printf("Collision detection failed rigid body %u (rotation: %f %f %f %f) and %u (rotation: %f %f %f %f)\n", rigid_body_index, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w, i, r2.rotation.v.x, r2.rotation.v.y, r2.rotation.v.z, r2.rotation.w);
     }
 #endif // BB_DEBUG
   }

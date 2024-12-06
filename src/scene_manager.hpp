@@ -189,6 +189,12 @@ public:
         lights.push_back(Light(i));
       }
       ++i;
+
+      if(rigid_body.flags & RigidBodyFlag::DYNAMIC)
+      {
+        rigid_body_map[rigid_body_active_count++] = rigid_body_count;
+      }
+      ++rigid_body_count;
     }
 
     status_manager->update_dispatch_buffer(get_rigid_body_count());
@@ -196,8 +202,10 @@ public:
     // TODO: Compute queue here to push an update for all frames?
     // Update simulation info
     rigid_body_manager->update_sim();
+    rigid_body_manager->update_active_rigid_body_list();
     status_manager->next_frame();
     rigid_body_manager->update_sim();
+    rigid_body_manager->update_active_rigid_body_list();
     status_manager->next_frame();
 
     material_TG.execute();
@@ -213,12 +221,25 @@ public:
 
   daxa_u32 get_rigid_body_count()
   {
-    return rigid_bodies.size();
+    return rigid_body_count;
   }
-
+  daxa_u32 get_active_rigid_body_count()
+  {
+    return rigid_body_active_count;
+  }
   daxa_u32 get_light_count()
   {
     return lights.size();
+  }
+
+  std::vector<ActiveRigidBody> get_active_rigid_bodies() {
+    std::vector<ActiveRigidBody> active_rigid_bodies;
+    active_rigid_bodies.reserve(rigid_body_active_count);
+    for(auto &pair : rigid_body_map)
+    {
+      active_rigid_bodies.push_back(ActiveRigidBody{.rigid_body_index = pair.second});
+    }
+    return active_rigid_bodies;
   }
 
 private:
@@ -235,9 +256,18 @@ private:
   // Initialization flag
   bool initialized = false;
 
+  daxa_u32 rigid_body_count = 0;
+  daxa_u32 rigid_body_active_count = 0;
   // TODO: Fill in scene data from file?
   std::vector<RigidBody> rigid_bodies;
   std::vector<Aabb> aabb;
+
+  // Active rigid body buffer
+  daxa::BufferId active_rigid_body_buffer;
+  // store active rigid body indices for key and rigid body indices for value
+  std::unordered_map<daxa_u32, daxa_u32> rigid_body_map;
+  // TaskGraph for active rigid body list upload
+  TaskGraph ARB_TG;
 
   // Material vector
   std::vector<Material> materials;
