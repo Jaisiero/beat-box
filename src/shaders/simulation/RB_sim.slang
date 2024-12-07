@@ -6,6 +6,7 @@
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
+[[vk::push_constant]] IslandCounterPushConstants IC;
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodyIntegratePositionsPushConstants RB_integrate;
@@ -29,9 +30,16 @@
 
   ActiveRigidBody active_rigid_body = RBL.task_head.active_rigid_bodies[index];
 
-  printf("RBL index %d, rigid_body_index %d\n", index, active_rigid_body.rigid_body_index);
+  Ptr<RigidBody> rigid_bodies =
+      Ptr<RigidBody>(RBL.task_head.rigid_bodies);
 
-  RBL.task_head.body_links[index] = BodyLink(active_rigid_body.rigid_body_index, MAX_U32);
+  rigid_bodies[active_rigid_body.rigid_body_index].active_index = index;
+
+#if defined(BB_DEBUG)
+  // printf("RBL index %d, rigid_body_index %d\n", index, active_rigid_body.rigid_body_index);
+#endif // BB_DEBUG
+
+  RBL.task_head.body_links[index] = BodyLink(index, MAX_U32);
 }
 
 
@@ -51,13 +59,19 @@
   let previous_sim_config =
       *BP.task_head.previous_sim_config;
 
+  Ptr<RigidBody> rigid_bodies =
+      Ptr<RigidBody>(BP.task_head.rigid_bodies);
+
   Ptr<Manifold> collisions =
       Ptr<Manifold>(BP.task_head.collisions);
 
   Ptr<Manifold> old_collisions =
       Ptr<Manifold>(BP.task_head.old_collisions);
 
-  broad_phase(index, BP.task_head.rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions);
+  Ptr<BodyLink> body_links =
+      Ptr<BodyLink>(BP.task_head.body_links);
+
+  broad_phase(index, rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions, body_links);
 
 #if defined(BB_DEBUG)
   // if(index == 0)
@@ -110,6 +124,35 @@
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_island_counter(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(IC.task_head.sim_config);
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->active_rigid_body_count)
+  {
+    return;
+  }
+
+  Ptr<BodyLink> body_links =
+      Ptr<BodyLink>(IC.task_head.body_links);
+
+  let body_link_index = body_links[index].active_index;
+
+#if defined(BB_DEBUG)
+  // printf("IC index %d, body_link_index %d\n", index, body_link_index);
+#endif // BB_DEBUG
+
+  if(body_link_index == index) {
+    daxa_u32 island_index = 0;
+    InterlockedAdd(sim_config->island_count, 1, island_index);
+    body_links[index].island_index = island_index;
+  }
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_collision_pre_solver(uint3 pixel_i : SV_DispatchThreadID)
 {
   Ptr<SimConfig> sim_config =
@@ -119,6 +162,8 @@
   {
     return;
   }
+
+  printf("CPS island count %d\n", sim_config->island_count);
 
   // printf("Pre solver collision count %d, tmp_collision_count: %d\n", sim_config->g_c_info.collision_count, sim_config->g_c_info.tmp_collision_count);
   
@@ -332,6 +377,7 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   r_copy.velocity = r.velocity;
   r_copy.omega = r.omega;
   r_copy.flags = r.flags;
+  r_copy.active_index = MAX_U32;
 #if defined(BB_DEBUG)
   r_copy.face_collided = r.face_collided;
 #endif // BB_DEBUG
@@ -356,7 +402,6 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     axes_vertex_buffer[index*AXES_POINT_COUNT+5].position = center + z_axis;
   }
 
-  RB_update.task_head.rigid_bodies[index] = r;
   RB_update.task_head.rigid_bodies_update[index] = r_copy;
 
 

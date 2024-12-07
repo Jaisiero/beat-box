@@ -227,6 +227,7 @@ DAXA_DECL_BUFFER_PTR(RayTracingConfig)
 struct RigidBody
 {
   RigidBodyFlag flags;
+  daxa_u32 active_index;
   daxa_u32 material_index;
 #if defined(BB_DEBUG)
   daxa_u32 face_collided;
@@ -439,6 +440,7 @@ struct SimConfig
   SimSolverType solver_type;
   daxa_u32 rigid_body_count;
   daxa_u32 active_rigid_body_count;
+  daxa_u32 island_count; // atomic add
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
@@ -485,15 +487,21 @@ DAXA_DECL_BUFFER_PTR(ActiveRigidBody)
 
 struct BodyLink 
 {
-  daxa_u32 rigid_body_index; // atomic compare exchange
-  daxa_u32 island;
+  daxa_u32 active_index; // atomic compare exchange
+  daxa_u32 island_index;
 };
 DAXA_DECL_BUFFER_PTR(BodyLink)
 
-// TODO:Island config structure or merge to simconfig?
-// TODO: Island structure list (start index, count)
+// TODO: Island config struct by AABB tree (active bodies, island count, ...)
 
+struct Island 
+{
+  daxa_u32 start_index;
+  daxa_u32 count; // atomic add
+};
+DAXA_DECL_BUFFER_PTR(Island)
 
+// RESET BODY LINK
 DAXA_DECL_TASK_HEAD_BEGIN(ResetBodyLinkTaskHead)
 DAXA_TH_BUFFER_PTR(HOST_TRANSFER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
@@ -508,6 +516,7 @@ struct ResetBodyLinkPushConstants
 };
 
 
+// BROAD PHASE
 DAXA_DECL_TASK_HEAD_BEGIN(BroadPhaseTaskHead)
 DAXA_TH_BUFFER_PTR(HOST_TRANSFER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
@@ -515,13 +524,22 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), previous_sim_
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), old_collisions)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ActiveRigidBody), active_rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(BodyLink), body_links)
 DAXA_DECL_TASK_HEAD_END
 
 struct BroadPhasePushConstants
 {
   DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
+};
+
+DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverDispatcherTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_DECL_TASK_HEAD_END
+
+struct CollisionSolverDispatcherPushConstants
+{
+  DAXA_TH_BLOB(CollisionSolverDispatcherTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
@@ -537,16 +555,36 @@ struct RigidBodySimPushConstants
   DAXA_TH_BLOB(RigidBodySimTaskHead, task_head)
 };
 
-DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+
+
+
+// ISLANDS
+DAXA_DECL_TASK_HEAD_BEGIN(IslandCounterTaskHead)
+DAXA_TH_BUFFER_PTR(HOST_TRANSFER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(BodyLink), body_links)
 DAXA_DECL_TASK_HEAD_END
 
-struct CollisionSolverDispatcherPushConstants
+struct IslandCounterPushConstants
 {
-  DAXA_TH_BLOB(CollisionSolverDispatcherTaskHead, task_head)
+  DAXA_TH_BLOB(IslandCounterTaskHead, task_head)
 };
 
+// DAXA_DECL_TASK_HEAD_BEGIN(IslandBuilderTaskHead)
+// DAXA_TH_BUFFER_PTR(HOST_TRANSFER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+// DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
+// DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(BodyLink), body_links)
+// DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
+// DAXA_DECL_TASK_HEAD_END
+
+// struct IslandBuilderPushConstants
+// {
+//   DAXA_TH_BLOB(IslandBuilderTaskHead, task_head)
+// };
+
+
+
+// SOLVER
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionPreSolverTaskHead)
 DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)

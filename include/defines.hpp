@@ -81,35 +81,55 @@ const auto reset_body_links_pipeline_name = "Reset Body Links";
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
+
 // collision solver dispatcher
 const auto entry_collision_solver_dispatcher = "entry_collision_solver_dispatcher";
 const auto collision_solver_dispatcher_pipeline_name = "Collision Solver Dispatcher";
-// collision pre solver
-const auto entry_collision_pre_solver = "entry_collision_pre_solver";
-const auto collision_pre_solver_pipeline_name = "Collision Pre-Solver";
-// collision solver
-const auto entry_collision_solver = "entry_collision_solver";
-const auto collision_solver_pipeline_name = "Collision Solver";
-// integrate positions
-const auto entry_integrate_positions = "entry_integrate_positions_rigid_bodies";
-const auto integrate_positions_pipeline_name = "Integrate Positions Rigid Bodies";
-// collision solver
-const auto entry_collision_relaxation_solver = "entry_collision_solver_relaxation";
-const auto collision_solver_relaxation_pipeline_name = "Collision Solver Relaxation";
+
+// island counter
+const auto entry_island_counter = "entry_island_counter";
+const auto island_counter_pipeline_name = "Island Counter";
+
 // sim
 const auto entry_rigid_body_sim = "entry_rigid_body_sim";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
+
+// collision pre solver
+const auto entry_collision_pre_solver = "entry_collision_pre_solver";
+const auto collision_pre_solver_pipeline_name = "Collision Pre-Solver";
+
+// collision solver
+const auto entry_collision_solver = "entry_collision_solver";
+const auto collision_solver_pipeline_name = "Collision Solver";
+
+// integrate positions
+const auto entry_integrate_positions = "entry_integrate_positions_rigid_bodies";
+const auto integrate_positions_pipeline_name = "Integrate Positions Rigid Bodies";
+
+// collision solver
+const auto entry_collision_relaxation_solver = "entry_collision_solver_relaxation";
+const auto collision_solver_relaxation_pipeline_name = "Collision Solver Relaxation";
+
 // create contact points
 const auto entry_create_contact_points = "entry_create_contact_points";
 const auto create_contact_points_pipeline_name = "Create Contact Points";
+
 // update
 const auto entry_update_rigid_bodies = "entry_update_rigid_bodies";
 const auto update_rigid_bodies_pipeline_name = "Update Rigid Bodies";
 
+
+
+
+// update instances
 const auto AS_shader_file_string = "AS_mngr.slang";
 const auto entry_update_acceleration_structures = "entry_update_acceleration_structures";
 const auto AS_update_pipeline_name = "Update Acceleration Structures";
 
+
+
+
+// GUI
 const auto GUI_shader_file_string = "GUI.slang";
 // GUI points
 const auto GUI_vertex = "entry_vertex";
@@ -270,6 +290,21 @@ struct CollisionSolverDispatcherInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(CollisionSolverDispatcherPushConstants),
       .name = collision_solver_dispatcher_pipeline_name,
+  };
+};
+
+struct IslandCounterInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_island_counter,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(IslandCounterPushConstants),
+      .name = island_counter_pipeline_name,
   };
 };
 

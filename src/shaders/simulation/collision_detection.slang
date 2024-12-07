@@ -1,4 +1,5 @@
 #include "extensions.slang"
+#include "islands.slang"
 
 // credits: https://github.com/RandyGaul/qu3e
 struct OBBvsOBBCollision {
@@ -845,11 +846,10 @@ struct OBBvsOBBCollision {
   }
 };
 
-
-
 func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
-         Ptr<SimConfig> sim_config, SimConfig previous_sim_config, Ptr<Manifold> collisions,
-         Ptr<Manifold> old_collisions) -> void
+                 Ptr<SimConfig> sim_config, SimConfig previous_sim_config, Ptr<Manifold> collisions,
+                 Ptr<Manifold> old_collisions,
+                 Ptr<BodyLink> body_links) -> void
 {
    Ptr<RigidBody> r = Ptr<RigidBody>(&rigid_bodies[rigid_body_index]);
 #if defined(BB_DEBUG)
@@ -857,6 +857,8 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
   r->face_collided = 0u;
   r->frame_count = sim_config.frame_count;
 #endif // BB_DEBUG
+
+  IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count);
  
   for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {
@@ -902,7 +904,19 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
         // }
       }
 
+      // Add collision to buffer
       collisions[index] = manifold;
+
+      // ISLAND BUILDER
+      // Get active rigid body indices
+      daxa_u32 in_first = r->has_flag(RigidBodyFlag::DYNAMIC) ? r->active_index : MAX_U32;
+      daxa_u32 in_second = r2->has_flag(RigidBodyFlag::DYNAMIC) ? r2->active_index : MAX_U32;
+
+      // Link the bodies
+      island_builder.link_bodies(body_links, in_first, in_second);
+      // ISLAND BUILDER
+      
+
 #if defined(BB_DEBUG)
       var old_obb1_faces = 0u;
       var old_obb2_faces = 0u;

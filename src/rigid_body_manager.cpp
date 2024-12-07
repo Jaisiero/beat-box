@@ -12,7 +12,8 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_RBL = task_manager->create_compute(ResetBodyLinksInfo{}.info);
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
     pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
-    pipeline = task_manager->create_compute(RigidBodySim{}.info);
+    pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
+    pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
     pipeline_CPS = task_manager->create_compute(CollisionPreSolverInfo{}.info);
     pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
     pipeline_IP = task_manager->create_compute(IntegratePositionsInfo{}.info);
@@ -106,6 +107,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .solver_type = renderer_manager->get_solver(),
         .rigid_body_count = 0,
         .active_rigid_body_count = 0,
+        .island_count = 0,
         .dt = TIME_STEP,
         .gravity = -GRAVITY,
         .flags = sim_flags,
@@ -131,6 +133,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         auto active_rigid_body_count = renderer_manager->get_active_rigid_body_count();
         auto active_rigid_body_offset = sizeof(SimSolverType) + sizeof(daxa_u32);
         allocate_fill_copy(ti, active_rigid_body_count, ti.get(task_sim_config), active_rigid_body_offset);
+
+        auto island_count = 0;
+        auto island_count_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 2;
+        allocate_fill_copy(ti, island_count, ti.get(task_sim_config), island_count_offset);
 
         auto frame_count = renderer_manager->get_frame_count();
         auto frame_count_dst_offset = sizeof(SimConfig) - sizeof(GlobalCollisionInfo) - sizeof(daxa_u64);        
@@ -184,7 +190,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                  daxa::attachment_view(BroadPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.collisions, task_collisions),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.old_collisions, task_old_collisions),
-                 daxa::attachment_view(BroadPhaseTaskHead::AT.active_rigid_bodies, task_active_rigid_bodies),
                   daxa::attachment_view(BroadPhaseTaskHead::AT.body_links, task_body_links),
              },
              user_callback_BP);
@@ -204,6 +209,23 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                                              daxa::attachment_view(CollisionSolverDispatcherTaskHead::AT.sim_config, task_sim_config),
                                          },
                                          user_callback_CS_dispatcher);
+
+  auto user_callback_IC = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_IC);
+    ti.recorder.push_constant(IslandCounterPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+
+  using TTask_IC = TaskTemplate<IslandCounterTaskHead::Task, decltype(user_callback_IC)>;
+
+  // Instantiate the task using the template class
+  TTask_IC task_IC(std::array{
+                       daxa::attachment_view(IslandCounterTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(IslandCounterTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(IslandCounterTaskHead::AT.body_links, task_body_links),
+                   },
+                   user_callback_IC);
 
   auto user_callback_CPS = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -281,7 +303,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   auto user_callback_advect = [this](daxa::TaskInterface ti, auto &self)
   {
-    ti.recorder.set_pipeline(*pipeline);
+    ti.recorder.set_pipeline(*pipeline_advect);
     ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySimTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
@@ -358,6 +380,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_RBL);
   RB_TG.add_task(task_BP);
   RB_TG.add_task(task_CS_dispatcher);
+  RB_TG.add_task(task_IC);
   RB_TG.add_task(task_advect);
   RB_TG.add_task(task_CPS);
   for(auto i = 0u; i < iteration_count; ++i)
@@ -513,6 +536,7 @@ bool RigidBodyManager::update_sim()
       .solver_type = solver_type,
       .rigid_body_count = renderer_manager->get_rigid_body_count(),
       .active_rigid_body_count = renderer_manager->get_active_rigid_body_count(),
+      .island_count = 0,
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
       .flags = sim_flags,
