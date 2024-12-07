@@ -563,6 +563,7 @@ DAXA_DECL_TASK_HEAD_BEGIN(IslandCounterTaskHead)
 DAXA_TH_BUFFER_PTR(HOST_TRANSFER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(BodyLink), body_links)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
 DAXA_DECL_TASK_HEAD_END
 
 struct IslandCounterPushConstants
@@ -570,17 +571,17 @@ struct IslandCounterPushConstants
   DAXA_TH_BLOB(IslandCounterTaskHead, task_head)
 };
 
-// DAXA_DECL_TASK_HEAD_BEGIN(IslandBuilderTaskHead)
-// DAXA_TH_BUFFER_PTR(HOST_TRANSFER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
-// DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
-// DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(BodyLink), body_links)
-// DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
-// DAXA_DECL_TASK_HEAD_END
+DAXA_DECL_TASK_HEAD_BEGIN(IslandBuilderTaskHead)
+DAXA_TH_BUFFER_PTR(HOST_TRANSFER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(BodyLink), body_links)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
+DAXA_DECL_TASK_HEAD_END
 
-// struct IslandBuilderPushConstants
-// {
-//   DAXA_TH_BLOB(IslandBuilderTaskHead, task_head)
-// };
+struct IslandBuilderPushConstants
+{
+  DAXA_TH_BLOB(IslandBuilderTaskHead, task_head)
+};
 
 
 

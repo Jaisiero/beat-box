@@ -3,15 +3,28 @@
 struct IslandBuilder {
 
   daxa_u32 max_active_bodies;
-  // daxa_u32 max_contacts;
+  Ptr<BodyLink> body_links;
 
 
-  __init(daxa_u32 active_rigid_body_count) {
+  __init(daxa_u32 active_rigid_body_count, Ptr<BodyLink> links) {
     max_active_bodies = active_rigid_body_count;
-    // max_contacts = 0;
+    body_links = links;
   }
 
-  daxa_u32 get_lowest_body_index(Ptr<BodyLink> body_links, daxa_u32 in_activate_body_index)
+  daxa_u32 get_lowest_body_index(daxa_u32 in_activate_body_index)
+  {
+    daxa_u32 index = in_activate_body_index;
+    for (;;)
+    {
+      daxa_u32 link_to = body_links[index].active_index;
+      if (link_to == index)
+        break;
+      index = link_to;
+    }
+    return index;
+  }
+
+  internal daxa_u32 get_lowest_body_index_atomic(daxa_u32 in_activate_body_index)
   {
     daxa_u32 index = in_activate_body_index;
     for (;;)
@@ -24,12 +37,11 @@ struct IslandBuilder {
       if (link_to == index)
         break;
       index = link_to;
-      break;
     }
     return index;
   }
 
-  void link_bodies(Ptr<BodyLink> body_links, daxa_u32 in_first, daxa_u32 in_second)
+  void link_bodies(daxa_u32 in_first, daxa_u32 in_second)
   {
     // Both need to be active, we don't want to create an island with static objects
     if (in_first >= max_active_bodies || in_second >= max_active_bodies)
@@ -43,8 +55,8 @@ struct IslandBuilder {
     {
       // Follow the chain until we get to the body with lowest index
       // If the swap compare below fails, we'll keep searching from the lowest index for the new lowest index
-      first_link_to = get_lowest_body_index(body_links, first_link_to);
-      second_link_to = get_lowest_body_index(body_links, second_link_to);
+      first_link_to = get_lowest_body_index_atomic(first_link_to);
+      second_link_to = get_lowest_body_index_atomic(second_link_to);
 
       // If the targets are the same, the bodies are already connected
       if (first_link_to != second_link_to)

@@ -858,7 +858,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
   r->frame_count = sim_config.frame_count;
 #endif // BB_DEBUG
 
-  IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count);
+  IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count, body_links);
  
   for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {
@@ -913,9 +913,9 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
       daxa_u32 in_second = r2->has_flag(RigidBodyFlag::DYNAMIC) ? r2->active_index : MAX_U32;
 
       // Link the bodies
-      island_builder.link_bodies(body_links, in_first, in_second);
+      island_builder.link_bodies(in_first, in_second);
       // ISLAND BUILDER
-      
+
 
 #if defined(BB_DEBUG)
       var old_obb1_faces = 0u;

@@ -7,6 +7,7 @@
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] IslandCounterPushConstants IC;
+[[vk::push_constant]] IslandBuilderPushConstants IB;
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodyIntegratePositionsPushConstants RB_integrate;
@@ -140,6 +141,9 @@
 
   let body_link_index = body_links[index].active_index;
 
+  Ptr<Island> islands =
+      Ptr<Island>(IC.task_head.islands);
+
 #if defined(BB_DEBUG)
   // printf("IC index %d, body_link_index %d\n", index, body_link_index);
 #endif // BB_DEBUG
@@ -148,6 +152,48 @@
     daxa_u32 island_index = 0;
     InterlockedAdd(sim_config->island_count, 1, island_index);
     body_links[index].island_index = island_index;
+    // unknow start index yet, reset counter
+    islands[island_index] = Island(MAX_U32, 0); 
+  }
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_island_builder(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(IB.task_head.sim_config);
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->active_rigid_body_count)
+  {
+    return;
+  }
+
+  Ptr<BodyLink> body_links =
+      Ptr<BodyLink>(IB.task_head.body_links);
+
+  Ptr<Island> islands =
+      Ptr<Island>(IB.task_head.islands);
+
+  BodyLink b_link = body_links[index];
+
+  daxa_u32 island_index = MAX_U32;
+  if(b_link.island_index != index) {
+    IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links);
+    let _index = builder.get_lowest_body_index(index);
+    body_links[index].island_index = body_links[_index].island_index;
+    island_index = body_links[index].island_index;
+  } else {
+    island_index = b_link.island_index;
+  }
+
+  if(island_index < sim_config->island_count) {
+    daxa_u32 old_count = 0;
+    InterlockedAdd(islands[island_index].count, 1, old_count);
+#if defined(BB_DEBUG)
+    // printf("IC index %d, island_index %d\n", index, island_index);
+#endif // BB_DEBUG
   }
 }
 
@@ -162,8 +208,6 @@
   {
     return;
   }
-
-  printf("CPS island count %d\n", sim_config->island_count);
 
   // printf("Pre solver collision count %d, tmp_collision_count: %d\n", sim_config->g_c_info.collision_count, sim_config->g_c_info.tmp_collision_count);
   

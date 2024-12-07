@@ -90,6 +90,10 @@ const auto collision_solver_dispatcher_pipeline_name = "Collision Solver Dispatc
 const auto entry_island_counter = "entry_island_counter";
 const auto island_counter_pipeline_name = "Island Counter";
 
+// island builder
+const auto entry_island_builder = "entry_island_builder";
+const auto island_builder_pipeline_name = "Island Builder";
+
 // sim
 const auto entry_rigid_body_sim = "entry_rigid_body_sim";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
@@ -293,6 +297,7 @@ struct CollisionSolverDispatcherInfo {
   };
 };
 
+// ISLANDS
 struct IslandCounterInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
@@ -307,6 +312,22 @@ struct IslandCounterInfo {
       .name = island_counter_pipeline_name,
   };
 };
+
+struct IslandBuilderInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_island_builder,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(IslandBuilderPushConstants),
+      .name = island_builder_pipeline_name,
+  };
+};
+// ISLANDS
 
 struct CollisionPreSolverInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
