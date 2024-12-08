@@ -8,6 +8,9 @@
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] IslandCounterPushConstants IC;
 [[vk::push_constant]] IslandBuilderPushConstants IB;
+[[vk::push_constant]] IslandPrefixSumPushConstants IPS;
+[[vk::push_constant]] IslandBuilderBodyLink2IslandPushConstants BLI;
+[[vk::push_constant]] IslandBuilderSortBodyLinkInIslandPushConstants SBLI;
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodyIntegratePositionsPushConstants RB_integrate;
@@ -40,7 +43,7 @@
   // printf("RBL index %d, rigid_body_index %d\n", index, active_rigid_body.rigid_body_index);
 #endif // BB_DEBUG
 
-  RBL.task_head.body_links[index] = BodyLink(index, MAX_U32);
+  RBL.task_head.scratch_body_links[index] = BodyLink(index, MAX_U32);
 }
 
 
@@ -70,7 +73,7 @@
       Ptr<Manifold>(BP.task_head.old_collisions);
 
   Ptr<BodyLink> body_links =
-      Ptr<BodyLink>(BP.task_head.body_links);
+      Ptr<BodyLink>(BP.task_head.scratch_body_links);
 
   broad_phase(index, rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions, body_links);
 
@@ -82,25 +85,6 @@
 #endif // BB_DEBUG
 }
 
-
-[shader("compute")]
-    [numthreads(1, 1, 1)] void
-    entry_collision_solver_dispatcher(uint3 pixel_i : SV_DispatchThreadID)
-{
-
-  if (pixel_i.x >= 1u)
-  {
-    return;
-  }
-
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(CSD.task_head.sim_config);
-
-  Ptr<DispatchBuffer> dispatch_buffer =
-      Ptr<DispatchBuffer>(CSD.task_head.dispatch_buffer);
-
-  dispatch_buffer->solver_dispatch.x = (sim_config->g_c_info.collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
-}
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] 
@@ -123,6 +107,9 @@
   }
 }
 
+
+
+
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_island_counter(uint3 pixel_i : SV_DispatchThreadID)
@@ -137,7 +124,7 @@
   }
 
   Ptr<BodyLink> body_links =
-      Ptr<BodyLink>(IC.task_head.body_links);
+      Ptr<BodyLink>(IC.task_head.scratch_body_links);
 
   let body_link_index = body_links[index].active_index;
 
@@ -153,8 +140,27 @@
     InterlockedAdd(sim_config->island_count, 1, island_index);
     body_links[index].island_index = island_index;
     // unknow start index yet, reset counter
-    islands[island_index] = Island(MAX_U32, 0); 
+    islands[island_index] = Island(MAX_U32, 0, 0);
   }
+}
+
+[shader("compute")]
+    [numthreads(1, 1, 1)] void
+    entry_collision_solver_dispatcher(uint3 pixel_i : SV_DispatchThreadID)
+{
+
+  if (pixel_i.x >= 1u)
+  {
+    return;
+  }
+
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(CSD.task_head.sim_config);
+
+  Ptr<DispatchBuffer> dispatch_buffer =
+      Ptr<DispatchBuffer>(CSD.task_head.dispatch_buffer);
+
+  dispatch_buffer->solver_dispatch.x = (sim_config->island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
 }
 
 [shader("compute")]
@@ -171,7 +177,7 @@
   }
 
   Ptr<BodyLink> body_links =
-      Ptr<BodyLink>(IB.task_head.body_links);
+      Ptr<BodyLink>(IB.task_head.scratch_body_links);
 
   Ptr<Island> islands =
       Ptr<Island>(IB.task_head.islands);
@@ -190,12 +196,82 @@
 
   if(island_index < sim_config->island_count) {
     daxa_u32 old_count = 0;
-    InterlockedAdd(islands[island_index].count, 1, old_count);
+    InterlockedAdd(islands[island_index].max_count, 1, old_count);
 #if defined(BB_DEBUG)
     // printf("IC index %d, island_index %d\n", index, island_index);
 #endif // BB_DEBUG
   }
 }
+
+[shader("compute")]
+    [numthreads(1, 1, 1)] void
+    entry_island_prefix_sum(uint3 pixel_i : SV_DispatchThreadID)
+{
+
+  if (pixel_i.x >= 1u)
+  {
+    return;
+  }
+
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(IPS.task_head.sim_config);
+      
+
+  Ptr<Island> islands =
+      Ptr<Island>(IPS.task_head.islands);
+
+  IslandBuilder builder = IslandBuilder(sim_config->island_count, islands);
+
+  builder.prefix_sum_islands();
+}
+
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_body_link_to_island(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(BLI.task_head.sim_config);
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->active_rigid_body_count)
+  {
+    return;
+  }
+
+  Ptr<BodyLink> scratch_body_links =
+      Ptr<BodyLink>(BLI.task_head.scratch_body_links);
+
+  Ptr<BodyLinkIsland> body_link_island =
+      Ptr<BodyLinkIsland>(BLI.task_head.body_links);
+
+  Ptr<Island> islands =
+      Ptr<Island>(BLI.task_head.islands);
+
+  IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, scratch_body_links, sim_config->island_count, islands, body_link_island);
+
+  builder.body_link_to_island(index);
+}
+
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_sort_body_links_in_island(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(SBLI.task_head.sim_config);
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->island_count)
+  {
+    return;
+  }
+
+  // TODO: Implement islands
+
+}
+
+
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void

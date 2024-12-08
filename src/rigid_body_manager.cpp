@@ -11,10 +11,13 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
   {
     pipeline_RBL = task_manager->create_compute(ResetBodyLinksInfo{}.info);
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
-    pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
-    pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
-    pipeline_IB = task_manager->create_compute(IslandBuilderInfo{}.info);
     pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
+    pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
+    pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
+    pipeline_IB = task_manager->create_compute(IslandBuilderInfo{}.info);
+    pipeline_IPS = task_manager->create_compute(IslandPrefixSumInfo{}.info);
+    pipeline_IBL = task_manager->create_compute(BodyLink2IslandInfo{}.info);
+    pipeline_SBLI = task_manager->create_compute(SortBodyLinksInIslandInfo{}.info);
     pipeline_CPS = task_manager->create_compute(CollisionPreSolverInfo{}.info);
     pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
     pipeline_IP = task_manager->create_compute(IntegratePositionsInfo{}.info);
@@ -72,44 +75,36 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   gui_manager = gui;
   iteration_count = iterations;
 
-  for(auto i = 0u; i < DOUBLE_BUFFERING; ++i)
+  for(auto i = 0u; i < DOUBLE_BUFFERING; ++i) {
     sim_config_host_buffer[i] = device.create_buffer({
         .size = sizeof(SimConfig),
         .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
         .name = "sim_config_host_" + std::to_string(i),
     });
-
-  for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
     sim_config[i] = device.create_buffer({
         .size = sizeof(SimConfig),
         .name = "sim_config_" + std::to_string(i),
     });
-
-  for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
     collisions[i] = device.create_buffer({
         .size = sizeof(Manifold) * MAX_RIGID_BODY_COUNT * 6, // TODO: Change to a more reasonable size
         .name = "collisions" + std::to_string(i),
     });
-
-  for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
     active_rigid_bodies[i] = device.create_buffer({
         .size = sizeof(ActiveRigidBody) * MAX_RIGID_BODY_COUNT,
         .name = "active_rigid_bodies" + std::to_string(i),
     });
-
-  for(auto i = 0u; i < DOUBLE_BUFFERING; ++i)
-    body_links[i] = device.create_buffer({
+    scratch_body_links[i] = device.create_buffer({
         .size = sizeof(BodyLink) * MAX_RIGID_BODY_COUNT,
+        .name = "scratch_body_links" + std::to_string(i),
+    });
+    body_links[i] = device.create_buffer({
+        .size = sizeof(BodyLinkIsland) * MAX_RIGID_BODY_COUNT,
         .name = "body_links" + std::to_string(i),
     });
-
-  for(auto i = 0u; i < DOUBLE_BUFFERING; ++i)
     island_buffer[i] = device.create_buffer({
         .size = sizeof(Island) * MAX_RIGID_BODY_COUNT,
         .name = "islands" + std::to_string(i),
     });
-
-  for (auto i = 0u; i < DOUBLE_BUFFERING; ++i){
     *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[i]).value() = SimConfig{
         .solver_type = renderer_manager->get_solver(),
         .rigid_body_count = 0,
@@ -176,7 +171,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                          daxa::attachment_view(ResetBodyLinkTaskHead::AT.sim_config, task_sim_config),
                          daxa::attachment_view(ResetBodyLinkTaskHead::AT.rigid_bodies, task_rigid_bodies),
                          daxa::attachment_view(ResetBodyLinkTaskHead::AT.active_rigid_bodies, task_active_rigid_bodies),
-                         daxa::attachment_view(ResetBodyLinkTaskHead::AT.body_links, task_body_links),
+                         daxa::attachment_view(ResetBodyLinkTaskHead::AT.scratch_body_links, task_scratch_body_links),
                      },
                      user_callback_RBL);
 
@@ -197,9 +192,27 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                  daxa::attachment_view(BroadPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.collisions, task_collisions),
                  daxa::attachment_view(BroadPhaseTaskHead::AT.old_collisions, task_old_collisions),
-                  daxa::attachment_view(BroadPhaseTaskHead::AT.body_links, task_body_links),
+                  daxa::attachment_view(BroadPhaseTaskHead::AT.scratch_body_links, task_scratch_body_links),
              },
              user_callback_BP);
+
+  auto user_callback_IC = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_IC);
+    ti.recorder.push_constant(IslandCounterPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandCounterTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+  };
+
+  using TTask_IC = TaskTemplate<IslandCounterTaskHead::Task, decltype(user_callback_IC)>;
+
+  // Instantiate the task using the template class
+  TTask_IC task_IC(std::array{
+                       daxa::attachment_view(IslandCounterTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(IslandCounterTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(IslandCounterTaskHead::AT.scratch_body_links, task_scratch_body_links),
+                        daxa::attachment_view(IslandCounterTaskHead::AT.islands, task_islands),
+                   },
+                   user_callback_IC);
 
   auto user_callback_CS_dispatcher = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -217,24 +230,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                                          },
                                          user_callback_CS_dispatcher);
 
-  auto user_callback_IC = [this](daxa::TaskInterface ti, auto &self)
-  {
-    ti.recorder.set_pipeline(*pipeline_IC);
-    ti.recorder.push_constant(IslandCounterPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandCounterTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
-  };
-
-  using TTask_IC = TaskTemplate<IslandCounterTaskHead::Task, decltype(user_callback_IC)>;
-
-  // Instantiate the task using the template class
-  TTask_IC task_IC(std::array{
-                       daxa::attachment_view(IslandCounterTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
-                       daxa::attachment_view(IslandCounterTaskHead::AT.sim_config, task_sim_config),
-                        daxa::attachment_view(IslandCounterTaskHead::AT.body_links, task_body_links),
-                        daxa::attachment_view(IslandCounterTaskHead::AT.islands, task_islands),
-                   },
-                   user_callback_IC);
-
   auto user_callback_IB = [this](daxa::TaskInterface ti, auto &self)
   {
     ti.recorder.set_pipeline(*pipeline_IB);
@@ -248,10 +243,45 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_IB task_IB(std::array{
                        daxa::attachment_view(IslandBuilderTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(IslandBuilderTaskHead::AT.sim_config, task_sim_config),
-                        daxa::attachment_view(IslandBuilderTaskHead::AT.body_links, task_body_links),
+                        daxa::attachment_view(IslandBuilderTaskHead::AT.scratch_body_links, task_scratch_body_links),
                         daxa::attachment_view(IslandBuilderTaskHead::AT.islands, task_islands),
                    },
                    user_callback_IB);
+                   
+  auto user_callback_IPS = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_IPS);
+    ti.recorder.push_constant(IslandPrefixSumPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+
+  using TTask_IPS = TaskTemplate<IslandPrefixSumTaskHead::Task, decltype(user_callback_IPS)>;
+
+  // Instantiate the task using the template class
+  TTask_IPS task_IPS(std::array{
+                       daxa::attachment_view(IslandPrefixSumTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(IslandPrefixSumTaskHead::AT.islands, task_islands),
+                   },
+                   user_callback_IPS);    
+
+  auto user_callback_IBL = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_IBL);
+    ti.recorder.push_constant(IslandBuilderBodyLink2IslandPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderBodyLink2IslandTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+  };
+
+  using TTask_IBL = TaskTemplate<IslandBuilderBodyLink2IslandTaskHead::Task, decltype(user_callback_IBL)>;
+
+  // Instantiate the task using the template class
+  TTask_IBL task_IBL(std::array{
+                       daxa::attachment_view(IslandBuilderBodyLink2IslandTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(IslandBuilderBodyLink2IslandTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(IslandBuilderBodyLink2IslandTaskHead::AT.scratch_body_links, task_scratch_body_links),
+                        daxa::attachment_view(IslandBuilderBodyLink2IslandTaskHead::AT.islands, task_islands),
+                        daxa::attachment_view(IslandBuilderBodyLink2IslandTaskHead::AT.body_links, task_body_links),
+                   },
+                   user_callback_IBL);               
 
   auto user_callback_CPS = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -384,11 +414,12 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 14> buffers = {
+  std::array<daxa::TaskBuffer, 15> buffers = {
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
       task_active_rigid_bodies,
+      task_scratch_body_links,
       task_body_links,
       task_islands,
       task_rigid_bodies,
@@ -406,10 +437,12 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_RC);
   RB_TG.add_task(task_RBL);
   RB_TG.add_task(task_BP);
-  RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_advect);
   RB_TG.add_task(task_IC);
+  RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_IB);
+  RB_TG.add_task(task_IPS);
+  RB_TG.add_task(task_IBL);
   RB_TG.add_task(task_CPS);
   for(auto i = 0u; i < iteration_count; ++i)
     RB_TG.add_task(task_CS);
@@ -509,6 +542,7 @@ void RigidBodyManager::destroy()
     device.destroy_buffer(sim_config[i]);
     device.destroy_buffer(collisions[i]);
     device.destroy_buffer(active_rigid_bodies[i]);
+    device.destroy_buffer(scratch_body_links[i]);
     device.destroy_buffer(body_links[i]);
     device.destroy_buffer(island_buffer[i]);
   }
@@ -620,6 +654,7 @@ void RigidBodyManager::update_buffers()
   task_next_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_next_rigid_body_buffer()}});
   task_collisions.set_buffers({.buffers = std::array{collisions[current_frame]}});
   task_old_collisions.set_buffers({.buffers = std::array{collisions[previous_frame]}});
+  task_scratch_body_links.set_buffers({.buffers = std::array{scratch_body_links[current_frame]}});
   task_body_links.set_buffers({.buffers = std::array{body_links[current_frame]}});
   task_islands.set_buffers({.buffers = std::array{island_buffer[current_frame]}});
   task_active_rigid_bodies.set_buffers({.buffers = std::array{active_rigid_bodies[current_frame]}});

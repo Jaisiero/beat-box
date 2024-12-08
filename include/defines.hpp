@@ -94,6 +94,18 @@ const auto island_counter_pipeline_name = "Island Counter";
 const auto entry_island_builder = "entry_island_builder";
 const auto island_builder_pipeline_name = "Island Builder";
 
+// island prefix sum
+const auto entry_island_prefix_sum = "entry_island_prefix_sum";
+const auto island_prefix_sum_pipeline_name = "Island Prefix Sum";
+
+// body link to island
+const auto entry_body_link_to_island = "entry_body_link_to_island";
+const auto body_link_to_island_pipeline_name = "Body Link to Island";
+
+// sort body links in island
+const auto entry_sort_body_links_in_island = "entry_sort_body_links_in_island";
+const auto sort_body_links_in_island_pipeline_name = "Sort Body Links in Island";
+
 // sim
 const auto entry_rigid_body_sim = "entry_rigid_body_sim";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
@@ -325,6 +337,51 @@ struct IslandBuilderInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(IslandBuilderPushConstants),
       .name = island_builder_pipeline_name,
+  };
+};
+
+struct IslandPrefixSumInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_island_prefix_sum,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(IslandPrefixSumPushConstants),
+      .name = island_prefix_sum_pipeline_name,
+  };
+};
+
+struct BodyLink2IslandInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_body_link_to_island,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(IslandBuilderBodyLink2IslandPushConstants),
+      .name = body_link_to_island_pipeline_name,
+  };
+};
+
+struct SortBodyLinksInIslandInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_sort_body_links_in_island,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(IslandBuilderSortBodyLinkInIslandPushConstants),
+      .name = sort_body_links_in_island_pipeline_name,
   };
 };
 // ISLANDS
