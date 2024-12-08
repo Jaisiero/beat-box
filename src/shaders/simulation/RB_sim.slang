@@ -267,7 +267,15 @@
     return;
   }
 
-  // TODO: Implement islands
+  Ptr<BodyLinkIsland> body_link_island =
+      Ptr<BodyLinkIsland>(SBLI.task_head.body_links);
+
+  Ptr<Island> islands =
+      Ptr<Island>(SBLI.task_head.islands);
+  
+  IslandBuilder builder = IslandBuilder(sim_config->island_count, islands, sim_config->active_rigid_body_count, body_link_island);
+
+  builder.sort_body_links_in_island(index);
 
 }
 
