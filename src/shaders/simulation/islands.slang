@@ -368,6 +368,17 @@ private
     manifold_indices = manifold_storage;
   }
 
+
+  __init(Ptr<daxa_u32> contact_island_num, Ptr<ContactIsland> contact_island_storage, daxa_u32 collision_num, Ptr<ManifoldLinkIsland> manifold_storage)
+  {
+    island_count = 0;
+    contact_island_count = contact_island_num;
+    max_active_bodies = 0;
+    max_manifold_count = collision_num;
+    contact_islands = contact_island_storage;
+    manifold_indices = manifold_storage;
+  }
+
   void gather_contact_islands(daxa_u32 island_index)
   {
     if (island_index >= island_count)
@@ -457,36 +468,36 @@ private
     }
   }
 
-  // void sort_manifold_links_in_island(daxa_u32 island_index)
-  // {
+  void sort_manifold_links_in_island(daxa_u32 contact_island_index)
+  {
 
-  //   if (island_index >= island_count)
-  //     return;
+    if (contact_island_index >= *contact_island_count)
+      return;
 
-  //   daxa_u32 start_index = islands[island_index].manifold_start_index;
-  //   daxa_u32 max_count = islands[island_index].max_manifold_count;
+    daxa_u32 start_index = contact_islands[contact_island_index].start_index;
+    daxa_u32 max_count = contact_islands[contact_island_index].max_count;
 
-  //   if (start_index + max_count >= max_manifold_count)
-  //     return;
+    if (start_index + max_count > max_manifold_count)
+      return;
 
-  //   // Sort body links in island
-  //   for (daxa_u32 i = 0; i < max_count; i++)
-  //   {
-  //     daxa_u32 min_index = i;
-  //     for (daxa_u32 j = i + 1; j < max_count; j++)
-  //     {
-  //       if (compare_manifold_link(manifold_indices[start_index + j], manifold_indices[start_index + min_index]))
-  //       {
-  //         min_index = j;
-  //       }
-  //     }
+    // Sort body links in island
+    for (daxa_u32 i = 0; i < max_count; i++)
+    {
+      daxa_u32 min_index = i;
+      for (daxa_u32 j = i + 1; j < max_count; j++)
+      {
+        if (compare_manifold_link(manifold_indices[start_index + j], manifold_indices[start_index + min_index]))
+        {
+          min_index = j;
+        }
+      }
 
-  //     if (min_index != i)
-  //     {
-  //       ManifoldLinkIsland tmp = manifold_indices[start_index + i];
-  //       manifold_indices[start_index + i] = manifold_indices[start_index + min_index];
-  //       manifold_indices[start_index + min_index] = tmp;
-  //     }
-  //   }
-  // };
+      if (min_index != i)
+      {
+        ManifoldLinkIsland tmp = manifold_indices[start_index + i];
+        manifold_indices[start_index + i] = manifold_indices[start_index + min_index];
+        manifold_indices[start_index + min_index] = tmp;
+      }
+    }
+  };
 };

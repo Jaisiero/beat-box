@@ -449,9 +449,8 @@
   Ptr<ContactIsland> islands =
       Ptr<ContactIsland>(MBLI.task_head.contact_islands);
   
-  IslandBuilder builder = IslandBuilder(sim_config->island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
+  ContactIslandBuilder builder = ContactIslandBuilder(&sim_config->contact_island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
 
-  TODO: fix this
   builder.sort_manifold_links_in_island(index);
 }
 
@@ -492,7 +491,6 @@
     return;
   }
   
-  // TODO: Implement islands
   for(daxa_u32 m = start_index; m < start_index + max_count; ++m)
   {
 
@@ -557,7 +555,6 @@
     return;
   }
   
-  // TODO: Implement islands
   for(daxa_u32 m = start_index; m < start_index + max_count; ++m)
   {
 
@@ -647,7 +644,6 @@
     return;
   }
   
-  // TODO: Implement islands
   for(daxa_u32 m = start_index; m < start_index + max_count; ++m)
   {
 
