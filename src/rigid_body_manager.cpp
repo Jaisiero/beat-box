@@ -22,6 +22,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_MIB = task_manager->create_compute(ManifoldIslandBuilderInfo{}.info);
     pipeline_MIPS = task_manager->create_compute(ManifoldIslandPrefixSumInfo{}.info);
     pipeline_IML = task_manager->create_compute(ManifoldLink2IslandInfo{}.info);
+    pipeline_SMLI = task_manager->create_compute(SortManifoldLinksInIslandInfo{}.info);
     pipeline_CPS = task_manager->create_compute(CollisionPreSolverInfo{}.info);
     pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
     pipeline_IP = task_manager->create_compute(IntegratePositionsInfo{}.info);
@@ -381,7 +382,25 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                         daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.islands, task_islands),
                         daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.manifold_links, task_manifold_links),
                    },
-                   user_callback_IML);                        
+                   user_callback_IML);     
+
+  auto user_callback_SMLI = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_SMLI);
+    ti.recorder.push_constant(IslandBuilderSortManifoldLinkInIslandPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderSortManifoldLinkInIslandTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ISLAND_DISPATCH_COUNT_OFFSET});
+  };
+
+  using TTask_SMLI = TaskTemplate<IslandBuilderSortManifoldLinkInIslandTaskHead::Task, decltype(user_callback_SMLI)>;
+
+  // Instantiate the task using the template class
+  TTask_SMLI task_SMLI(std::array{
+                       daxa::attachment_view(IslandBuilderSortManifoldLinkInIslandTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(IslandBuilderSortManifoldLinkInIslandTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(IslandBuilderSortManifoldLinkInIslandTaskHead::AT.islands, task_islands),
+                        daxa::attachment_view(IslandBuilderSortManifoldLinkInIslandTaskHead::AT.manifold_links, task_manifold_links),
+                   },
+                   user_callback_SMLI);                                       
 
   auto user_callback_CPS = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -549,6 +568,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_MIB);
   RB_TG.add_task(task_MIPS);
   RB_TG.add_task(task_IML);
+  RB_TG.add_task(task_SMLI);
   RB_TG.add_task(task_CPS);
   for(auto i = 0u; i < iteration_count; ++i)
     RB_TG.add_task(task_CS);

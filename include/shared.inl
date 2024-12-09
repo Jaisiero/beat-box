@@ -503,6 +503,8 @@ DAXA_DECL_BUFFER_PTR(BodyLinkIsland)
 struct ManifoldLinkIsland 
 {
   daxa_u32 manifold_index;
+  daxa_u32 body_a_index;
+  daxa_u32 body_b_index;
 };
 DAXA_DECL_BUFFER_PTR(ManifoldLinkIsland)
 
@@ -690,6 +692,19 @@ DAXA_DECL_TASK_HEAD_END
 struct IslandBuilderManifoldLink2IslandPushConstants
 {
   DAXA_TH_BLOB(IslandBuilderManifoldLink2IslandTaskHead, task_head)
+};
+
+// simple bubble sort for sorting body links in island for now
+DAXA_DECL_TASK_HEAD_BEGIN(IslandBuilderSortManifoldLinkInIslandTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ManifoldLinkIsland), manifold_links)
+DAXA_DECL_TASK_HEAD_END
+
+struct IslandBuilderSortManifoldLinkInIslandPushConstants
+{
+  DAXA_TH_BLOB(IslandBuilderSortManifoldLinkInIslandTaskHead, task_head)
 };
 
 // SOLVER

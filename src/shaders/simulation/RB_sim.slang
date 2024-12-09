@@ -15,6 +15,7 @@
 [[vk::push_constant]] ManifoldIslandBuilderPushConstants MIB; 
 [[vk::push_constant]] ManifoldIslandPrefixSumPushConstants MIPS;
 [[vk::push_constant]] IslandBuilderManifoldLink2IslandPushConstants MLI;
+[[vk::push_constant]] IslandBuilderSortManifoldLinkInIslandPushConstants MBLI;
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodyIntegratePositionsPushConstants RB_integrate;
@@ -254,7 +255,6 @@
   builder.body_link_to_island(index);
 }
 
-
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_sort_body_links_in_island(uint3 pixel_i : SV_DispatchThreadID)
@@ -393,9 +393,33 @@
   Ptr<ManifoldLinkIsland> manifold_links =
       Ptr<ManifoldLinkIsland>(MLI.task_head.manifold_links);
 
-  IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, manifold_links);
+  IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
 
-  builder.manifold_link_to_island(index, min_body_index);
+  builder.manifold_link_to_island(index, a_active_body_index, b_active_body_index);
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_sort_manifold_links_in_island(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(MBLI.task_head.sim_config);
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->island_count)
+  {
+    return;
+  }
+
+  Ptr<ManifoldLinkIsland> manifold_links =
+      Ptr<ManifoldLinkIsland>(MBLI.task_head.manifold_links);
+
+  Ptr<Island> islands =
+      Ptr<Island>(MBLI.task_head.islands);
+  
+  IslandBuilder builder = IslandBuilder(sim_config->island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
+
+  builder.sort_manifold_links_in_island(index);
 }
 
 
