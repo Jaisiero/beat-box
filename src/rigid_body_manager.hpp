@@ -76,6 +76,7 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_active_rigid_bodies{{.initial_buffers = {}, .name = "RB_active_rigid_bodies"}};
   daxa::TaskBuffer task_scratch_body_links{{.initial_buffers = {}, .name = "RB_scratch_body_links"}};
   daxa::TaskBuffer task_body_links{{.initial_buffers = {}, .name = "RB_body_links"}};
+  daxa::TaskBuffer task_manifold_links{{.initial_buffers = {}, .name = "RB_manifold_links"}};
   daxa::TaskBuffer task_islands{{.initial_buffers = {}, .name = "RB_islands"}};
 
 private: 
@@ -119,6 +120,8 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_IBL;
   std::shared_ptr<daxa::ComputePipeline> pipeline_SBLI;
   std::shared_ptr<daxa::ComputePipeline> pipeline_MIB;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_MIPS;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_IML;
   std::shared_ptr<daxa::ComputePipeline> pipeline_advect;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CPS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS;
@@ -144,6 +147,7 @@ private:
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};
   daxa::BufferId body_links[DOUBLE_BUFFERING] = {};
+  daxa::BufferId manifold_links[DOUBLE_BUFFERING] = {};
   daxa::BufferId scratch_body_links[DOUBLE_BUFFERING] = {};
   daxa::BufferId island_buffer[DOUBLE_BUFFERING] = {};
 

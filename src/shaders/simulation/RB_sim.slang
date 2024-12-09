@@ -13,6 +13,8 @@
 [[vk::push_constant]] IslandBuilderBodyLink2IslandPushConstants BLI;
 [[vk::push_constant]] IslandBuilderSortBodyLinkInIslandPushConstants SBLI;
 [[vk::push_constant]] ManifoldIslandBuilderPushConstants MIB; 
+[[vk::push_constant]] ManifoldIslandPrefixSumPushConstants MIPS;
+[[vk::push_constant]] IslandBuilderManifoldLink2IslandPushConstants MLI;
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodyIntegratePositionsPushConstants RB_integrate;
@@ -321,9 +323,82 @@
 
   IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands);
 
-  builder.expand_manifold_island(index, min_body_index);
-
+  builder.expand_manifold_island(min_body_index);
 }
+
+[shader("compute")]
+    [numthreads(1, 1, 1)] void
+    entry_manifold_island_prefix_sum(uint3 pixel_i : SV_DispatchThreadID)
+{
+
+  if (pixel_i.x >= 1u)
+  {
+    return;
+  }
+
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(MIPS.task_head.sim_config);
+      
+
+  Ptr<Island> islands =
+      Ptr<Island>(MIPS.task_head.islands);
+
+  IslandBuilder builder = IslandBuilder(sim_config->island_count, islands);
+
+  builder.manifold_prefix_sum_islands();
+}
+
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_manifold_link_to_island(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(MLI.task_head.sim_config);
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->g_c_info.collision_count)
+  {
+    return;
+  }
+
+  Ptr<Manifold> m =
+      &MLI.task_head.collisions[index];
+
+  daxa_u32 body_a_index = m->obb1_index;
+  daxa_u32 body_b_index = m->obb2_index;
+
+  if(body_a_index >= sim_config->rigid_body_count || body_b_index >= sim_config->rigid_body_count || body_a_index == body_b_index)
+  {
+#if defined(BB_DEBUG)
+    printf("Manifold link index %d, body_a_index %d, body_b_index %d\n", index, body_a_index, body_b_index);
+#endif // BB_DEBUG
+    return;
+  }
+
+  Ptr<RigidBody> rigid_bodies =
+      Ptr<RigidBody>(MLI.task_head.rigid_bodies);
+
+  daxa_u32 a_active_body_index = rigid_bodies[body_a_index].active_index;
+  daxa_u32 b_active_body_index = rigid_bodies[body_b_index].active_index;
+
+  daxa_u32 min_body_index = min(a_active_body_index, b_active_body_index);
+
+  Ptr<Island> islands =
+      Ptr<Island>(MLI.task_head.islands);
+
+  Ptr<BodyLink> body_links =
+      Ptr<BodyLink>(MLI.task_head.scratch_body_links);
+
+  Ptr<ManifoldLinkIsland> manifold_links =
+      Ptr<ManifoldLinkIsland>(MLI.task_head.manifold_links);
+
+  IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, manifold_links);
+
+  builder.manifold_link_to_island(index, min_body_index);
+}
+
+
 
 
 

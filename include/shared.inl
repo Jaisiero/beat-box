@@ -500,6 +500,12 @@ struct BodyLinkIsland
 };
 DAXA_DECL_BUFFER_PTR(BodyLinkIsland)
 
+struct ManifoldLinkIsland 
+{
+  daxa_u32 manifold_index;
+};
+DAXA_DECL_BUFFER_PTR(ManifoldLinkIsland)
+
 // TODO: Island config struct by AABB tree (active bodies, island count, ...)
 
 struct Island 
@@ -507,7 +513,7 @@ struct Island
   daxa_u32 start_index;
   daxa_u32 max_count; // atomic add
   daxa_u32 count;
-  daxa_u32 start_manifold_index;
+  daxa_u32 manifold_start_index;
   daxa_u32 max_manifold_count; // atomic add
   daxa_u32 manifold_count;
 };
@@ -646,8 +652,7 @@ struct IslandBuilderSortBodyLinkInIslandPushConstants
   DAXA_TH_BLOB(IslandBuilderSortBodyLinkInIslandTaskHead, task_head)
 };
 
-
-
+// MANIFOLDS
 DAXA_DECL_TASK_HEAD_BEGIN(ManifoldIslandBuilderTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
@@ -662,6 +667,30 @@ struct ManifoldIslandBuilderPushConstants
   DAXA_TH_BLOB(ManifoldIslandBuilderTaskHead, task_head)
 };
 
+DAXA_DECL_TASK_HEAD_BEGIN(ManifoldIslandPrefixSumTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
+DAXA_DECL_TASK_HEAD_END
+
+struct ManifoldIslandPrefixSumPushConstants
+{
+  DAXA_TH_BLOB(ManifoldIslandPrefixSumTaskHead, task_head)
+};
+
+DAXA_DECL_TASK_HEAD_BEGIN(IslandBuilderManifoldLink2IslandTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(BodyLink), scratch_body_links)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ManifoldLinkIsland), manifold_links)
+DAXA_DECL_TASK_HEAD_END
+
+struct IslandBuilderManifoldLink2IslandPushConstants
+{
+  DAXA_TH_BLOB(IslandBuilderManifoldLink2IslandTaskHead, task_head)
+};
 
 // SOLVER
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionPreSolverTaskHead)

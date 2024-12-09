@@ -20,6 +20,8 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_IBL = task_manager->create_compute(BodyLink2IslandInfo{}.info);
     pipeline_SBLI = task_manager->create_compute(SortBodyLinksInIslandInfo{}.info);
     pipeline_MIB = task_manager->create_compute(ManifoldIslandBuilderInfo{}.info);
+    pipeline_MIPS = task_manager->create_compute(ManifoldIslandPrefixSumInfo{}.info);
+    pipeline_IML = task_manager->create_compute(ManifoldLink2IslandInfo{}.info);
     pipeline_CPS = task_manager->create_compute(CollisionPreSolverInfo{}.info);
     pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
     pipeline_IP = task_manager->create_compute(IntegratePositionsInfo{}.info);
@@ -102,6 +104,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     body_links[i] = device.create_buffer({
         .size = sizeof(BodyLinkIsland) * MAX_RIGID_BODY_COUNT,
         .name = "body_links" + std::to_string(i),
+    });
+    manifold_links[i] = device.create_buffer({
+        .size = sizeof(ManifoldLinkIsland) * MAX_RIGID_BODY_COUNT * 6, // TODO: Change to a more reasonable size
+        .name = "manifold_links" + std::to_string(i),
     });
     island_buffer[i] = device.create_buffer({
         .size = sizeof(Island) * MAX_RIGID_BODY_COUNT,
@@ -338,7 +344,44 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                         daxa::attachment_view(ManifoldIslandBuilderTaskHead::AT.rigid_bodies, task_rigid_bodies),
                         daxa::attachment_view(ManifoldIslandBuilderTaskHead::AT.islands, task_islands),
                    },
-                   user_callback_MIB);              
+                   user_callback_MIB);   
+
+  auto user_callback_MIPS = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_MIPS);
+    ti.recorder.push_constant(IslandPrefixSumPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+
+  using TTask_MIPS = TaskTemplate<IslandPrefixSumTaskHead::Task, decltype(user_callback_MIPS)>;
+
+  // Instantiate the task using the template class
+  TTask_MIPS task_MIPS(std::array{
+                       daxa::attachment_view(IslandPrefixSumTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(IslandPrefixSumTaskHead::AT.islands, task_islands),
+                   },
+                   user_callback_MIPS);      
+
+  auto user_callback_IML = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_IML);
+    ti.recorder.push_constant(IslandBuilderManifoldLink2IslandPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderManifoldLink2IslandTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * COLLISION_DISPATCH_COUNT_OFFSET});
+  };
+
+  using TTask_IML = TaskTemplate<IslandBuilderManifoldLink2IslandTaskHead::Task, decltype(user_callback_IML)>;
+
+  // Instantiate the task using the template class
+  TTask_IML task_IML(std::array{
+                       daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.scratch_body_links, task_scratch_body_links),
+                        daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.collisions, task_collisions),
+                        daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                        daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.islands, task_islands),
+                        daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.manifold_links, task_manifold_links),
+                   },
+                   user_callback_IML);                        
 
   auto user_callback_CPS = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -471,13 +514,14 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 15> buffers = {
+  std::array<daxa::TaskBuffer, 16> buffers = {
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
       task_active_rigid_bodies,
       task_scratch_body_links,
       task_body_links,
+      task_manifold_links,
       task_islands,
       task_rigid_bodies,
       task_next_rigid_bodies,
@@ -503,6 +547,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_IBL);
   RB_TG.add_task(task_SBLI);
   RB_TG.add_task(task_MIB);
+  RB_TG.add_task(task_MIPS);
+  RB_TG.add_task(task_IML);
   RB_TG.add_task(task_CPS);
   for(auto i = 0u; i < iteration_count; ++i)
     RB_TG.add_task(task_CS);
@@ -604,6 +650,7 @@ void RigidBodyManager::destroy()
     device.destroy_buffer(active_rigid_bodies[i]);
     device.destroy_buffer(scratch_body_links[i]);
     device.destroy_buffer(body_links[i]);
+    device.destroy_buffer(manifold_links[i]);
     device.destroy_buffer(island_buffer[i]);
   }
 
@@ -716,6 +763,7 @@ void RigidBodyManager::update_buffers()
   task_old_collisions.set_buffers({.buffers = std::array{collisions[previous_frame]}});
   task_scratch_body_links.set_buffers({.buffers = std::array{scratch_body_links[current_frame]}});
   task_body_links.set_buffers({.buffers = std::array{body_links[current_frame]}});
+  task_manifold_links.set_buffers({.buffers = std::array{manifold_links[current_frame]}});
   task_islands.set_buffers({.buffers = std::array{island_buffer[current_frame]}});
   task_active_rigid_bodies.set_buffers({.buffers = std::array{active_rigid_bodies[current_frame]}});
 }
