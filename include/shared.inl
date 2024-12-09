@@ -516,9 +516,8 @@ struct Island
   daxa_u32 start_index;
   daxa_u32 max_count; // atomic add
   daxa_u32 count;
-  daxa_u32 manifold_start_index; // TODO:delete
+  daxa_u32 contact_island_index;
   daxa_u32 max_manifold_count; // atomic add
-  daxa_u32 manifold_count; // TODO:delete
 };
 DAXA_DECL_BUFFER_PTR(Island)
 
@@ -691,7 +690,7 @@ struct ContactIslandGatherPushConstants
 
 DAXA_DECL_TASK_HEAD_BEGIN(ManifoldIslandPrefixSumTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ContactIsland), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ContactIsland), contact_islands)
 DAXA_DECL_TASK_HEAD_END
 
 struct ManifoldIslandPrefixSumPushConstants
@@ -705,7 +704,8 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(BodyLink), scratch_body_links)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), collisions)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(RigidBody), rigid_bodies)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ContactIsland), contact_islands)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ManifoldLinkIsland), manifold_links)
 DAXA_DECL_TASK_HEAD_END
 
@@ -718,7 +718,7 @@ struct IslandBuilderManifoldLink2IslandPushConstants
 DAXA_DECL_TASK_HEAD_BEGIN(IslandBuilderSortManifoldLinkInIslandTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ContactIsland), contact_islands)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ManifoldLinkIsland), manifold_links)
 DAXA_DECL_TASK_HEAD_END
 
@@ -733,7 +733,7 @@ DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ContactIsland), contact_islands)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ManifoldLinkIsland), manifold_links)
 DAXA_DECL_TASK_HEAD_END
 
@@ -747,7 +747,7 @@ DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ContactIsland), contact_islands)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ManifoldLinkIsland), manifold_links)
 DAXA_DECL_TASK_HEAD_END
 
@@ -772,7 +772,7 @@ DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ContactIsland), contact_islands)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ManifoldLinkIsland), manifold_links)
 DAXA_DECL_TASK_HEAD_END
 

@@ -192,7 +192,7 @@ private
       InterlockedAdd(*atomic_island_count, 1, island_index);
       body_link.island_index = island_index;
       // unknow start index yet, reset counter
-      islands[island_index] = Island(MAX_U32, 0, 0, MAX_U32, 0, 0);
+      islands[island_index] = Island(MAX_U32, 0, 0, MAX_U32, 0);
 #if defined(BB_DEBUG)
       // printf("add_island: %d\n", island_index);
 #endif // BB_DEBUG
@@ -314,24 +314,98 @@ private
     }
 #endif // BB_DEBUG
   }
+};
+
+public
+struct ContactIslandBuilder
+{
+private
+  daxa_u32 island_count;
+private
+  Ptr<daxa_u32> contact_island_count;
+private
+  daxa_u32 max_active_bodies;
+private
+  Ptr<ContactIsland> contact_islands;
+private
+  Ptr<Island> islands;
+private
+  daxa_u32 max_manifold_count;
+private
+  Ptr<BodyLink> body_links;
+private
+  Ptr<ManifoldLinkIsland> manifold_indices;
+
+  __init() {}
+
+  __init(daxa_u32 island_num, Ptr<Island> island_storage, Ptr<daxa_u32> contact_island_num, Ptr<ContactIsland> contact_island_storage)
+  {
+    island_count = island_num;
+    contact_island_count = contact_island_num;
+    max_active_bodies = 0;
+    max_manifold_count = 0;
+    islands = island_storage;
+    contact_islands = contact_island_storage;
+  }
+
+   __init(Ptr<daxa_u32> contact_island_num, Ptr<ContactIsland> contact_island_storage) {
+    island_count = 0;
+    contact_island_count = contact_island_num;
+    max_active_bodies = 0;
+    max_manifold_count = 0;
+    contact_islands = contact_island_storage;
+  }
+
+  __init(daxa_u32 active_body_count, Ptr<BodyLink> body_link, daxa_u32 island_num, Ptr<Island> island_storage, Ptr<daxa_u32> contact_island_num, Ptr<ContactIsland> contact_island_storage, daxa_u32 collision_num, Ptr<ManifoldLinkIsland> manifold_storage)
+  {
+    island_count = island_num;
+    contact_island_count = contact_island_num;
+    max_active_bodies = active_body_count;
+    max_manifold_count = collision_num;
+    islands = island_storage;
+    contact_islands = contact_island_storage;
+    body_links = body_link;
+    manifold_indices = manifold_storage;
+  }
+
+  void gather_contact_islands(daxa_u32 island_index)
+  {
+    if (island_index >= island_count)
+      return;
+
+    // get manifold count from island
+    daxa_u32 manifold_count = islands[island_index].max_manifold_count;
+
+    // if no manifolds, skip
+    if (manifold_count == 0)
+      return;
+
+    // increment atomic counter from island
+    daxa_u32 old_count = 0;
+    InterlockedAdd(*contact_island_count, 1, old_count);
+    // write contact island inside range in atomic counter from island
+    daxa_u32 contact_island_index = old_count;
+    contact_islands[contact_island_index] = ContactIsland(island_index, MAX_U32, manifold_count, 0);
+    islands[island_index].contact_island_index = contact_island_index;
+  }
 
   void manifold_prefix_sum_islands()
   {
-    if (island_count == 0)
+    if (*contact_island_count == 0)
       return;
 
     // Prefix sum the island sizes
-    islands[0].manifold_start_index = 0;
+    contact_islands[0].start_index = 0;
 #if defined(BB_DEBUG)
-    // printf("island[0]start index: %d, count: %d\n", islands[0].manifold_start_index, islands[0].max_manifold_count);
+    // printf("contact_islands[0]start index: %d, count: %d\n", contact_islands[0].start_index, contact_islands[0].max_count);
 #endif // BB_DEBUG
 
     // Calculate the start index for each island
-    for (daxa_u32 i = 1; i < island_count; i++)
+    for (daxa_u32 i = 1; i < *contact_island_count; i++)
     {
-      islands[i].manifold_start_index = islands[i - 1].manifold_start_index + islands[i - 1].max_manifold_count;
+      contact_islands[i].start_index = contact_islands[i - 1].start_index + contact_islands[i - 1].max_count;
 #if defined(BB_DEBUG)
-      // printf("island[%d]. start index: %d, count: %d\n", i, islands[i].manifold_start_ndex, islands[i].max_manifold_count);
+      // printf("contact_islands[%d]. start index: %d, count: %d\n", i, contact_islands[i].start_index, contact_islands[i].max_count);
 #endif // BB_DEBUG
     }
   }
@@ -348,12 +422,17 @@ private
 
     // increment atomic counter from island
     daxa_u32 island_index = b_link.island_index;
-    if (island_index < island_count)
+    if (island_index < *contact_island_count)
     {
+      daxa_u32 contact_island_index = islands[island_index].contact_island_index;
+
+      if(contact_island_index >= *contact_island_count)
+        return;
+      
       daxa_u32 old_count = 0;
-      InterlockedAdd(islands[island_index].manifold_count, 1, old_count);
+      InterlockedAdd(contact_islands[contact_island_index].count, 1, old_count);
       // write body link inside range in atomic counter from island
-      daxa_u32 manifold_link_index = islands[island_index].manifold_start_index + old_count;
+      daxa_u32 manifold_link_index = contact_islands[contact_island_index].start_index + old_count;
       if (manifold_index < max_manifold_count)
       {
         daxa_u32 max_index = max(body_a_index, body_b_index);
@@ -378,79 +457,36 @@ private
     }
   }
 
-  void sort_manifold_links_in_island(daxa_u32 island_index)
-  {
+  // void sort_manifold_links_in_island(daxa_u32 island_index)
+  // {
 
-    if (island_index >= island_count)
-      return;
+  //   if (island_index >= island_count)
+  //     return;
 
-    daxa_u32 start_index = islands[island_index].manifold_start_index;
-    daxa_u32 max_count = islands[island_index].max_manifold_count;
+  //   daxa_u32 start_index = islands[island_index].manifold_start_index;
+  //   daxa_u32 max_count = islands[island_index].max_manifold_count;
 
-    if (start_index + max_count >= max_manifold_count)
-      return;
+  //   if (start_index + max_count >= max_manifold_count)
+  //     return;
 
-    // Sort body links in island
-    for (daxa_u32 i = 0; i < max_count; i++)
-    {
-      daxa_u32 min_index = i;
-      for (daxa_u32 j = i + 1; j < max_count; j++)
-      {
-        if (compare_manifold_link(manifold_indices[start_index + j], manifold_indices[start_index + min_index]))
-        {
-          min_index = j;
-        }
-      }
+  //   // Sort body links in island
+  //   for (daxa_u32 i = 0; i < max_count; i++)
+  //   {
+  //     daxa_u32 min_index = i;
+  //     for (daxa_u32 j = i + 1; j < max_count; j++)
+  //     {
+  //       if (compare_manifold_link(manifold_indices[start_index + j], manifold_indices[start_index + min_index]))
+  //       {
+  //         min_index = j;
+  //       }
+  //     }
 
-      if (min_index != i)
-      {
-        ManifoldLinkIsland tmp = manifold_indices[start_index + i];
-        manifold_indices[start_index + i] = manifold_indices[start_index + min_index];
-        manifold_indices[start_index + min_index] = tmp;
-      }
-    }
-  };
-};
-
-public
-struct ContactIslandBuilder
-{
-private
-  daxa_u32 island_count;
-private
-  Ptr<daxa_u32> contact_island_count;
-private
-  Ptr<Island> islands;
-private
-  Ptr<ContactIsland> contact_islands;
-
-  __init() {}
-
-  __init(daxa_u32 island_num, Ptr<Island> island_storage, Ptr<daxa_u32> contact_island_num, Ptr<ContactIsland> contact_island_storage)
-  {
-    island_count = island_num;
-    contact_island_count = contact_island_num;
-    islands = island_storage;
-    contact_islands = contact_island_storage;
-  }
-
-  void gather_contact_islands(daxa_u32 island_index)
-  {
-    if (island_index >= island_count)
-      return;
-
-    // get manifold count from island
-    daxa_u32 manifold_count = islands[island_index].max_manifold_count;
-
-    // if no manifolds, skip
-    if (manifold_count == 0)
-      return;
-
-    // increment atomic counter from island
-    daxa_u32 old_count = 0;
-    InterlockedAdd(*contact_island_count, 1, old_count);
-    // write contact island inside range in atomic counter from island
-    daxa_u32 contact_island_index = old_count;
-    contact_islands[contact_island_index] = ContactIsland(island_index, MAX_U32, manifold_count, 0);
-  }
+  //     if (min_index != i)
+  //     {
+  //       ManifoldLinkIsland tmp = manifold_indices[start_index + i];
+  //       manifold_indices[start_index + i] = manifold_indices[start_index + min_index];
+  //       manifold_indices[start_index + min_index] = tmp;
+  //     }
+  //   }
+  // };
 };

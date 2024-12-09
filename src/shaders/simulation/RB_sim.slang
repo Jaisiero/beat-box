@@ -369,10 +369,10 @@
       Ptr<SimConfig>(MIPS.task_head.sim_config);
       
 
-  Ptr<Island> islands =
-      Ptr<Island>(MIPS.task_head.islands);
+  Ptr<ContactIsland> contact_islands =
+      Ptr<ContactIsland>(MIPS.task_head.contact_islands);
 
-  IslandBuilder builder = IslandBuilder(sim_config->island_count, islands);
+  ContactIslandBuilder builder = ContactIslandBuilder(&sim_config->contact_island_count, contact_islands);
 
   builder.manifold_prefix_sum_islands();
 }
@@ -419,10 +419,13 @@
   Ptr<BodyLink> body_links =
       Ptr<BodyLink>(MLI.task_head.scratch_body_links);
 
+  Ptr<ContactIsland> contact_islands =
+      Ptr<ContactIsland>(MLI.task_head.contact_islands);
+
   Ptr<ManifoldLinkIsland> manifold_links =
       Ptr<ManifoldLinkIsland>(MLI.task_head.manifold_links);
 
-  IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
+  ContactIslandBuilder builder = ContactIslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands, sim_config->g_c_info.collision_count, manifold_links);
 
   builder.manifold_link_to_island(index, a_active_body_index, b_active_body_index);
 }
@@ -435,7 +438,7 @@
       Ptr<SimConfig>(MBLI.task_head.sim_config);
     
   daxa_u32 index = pixel_i.x;
-  if (index >= sim_config->island_count)
+  if (index >= sim_config->contact_island_count)
   {
     return;
   }
@@ -443,13 +446,13 @@
   Ptr<ManifoldLinkIsland> manifold_links =
       Ptr<ManifoldLinkIsland>(MBLI.task_head.manifold_links);
 
-  Ptr<Island> islands =
-      Ptr<Island>(MBLI.task_head.islands);
+  Ptr<ContactIsland> islands =
+      Ptr<ContactIsland>(MBLI.task_head.contact_islands);
   
   IslandBuilder builder = IslandBuilder(sim_config->island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
 
-  // TODO: fix this
-  // builder.sort_manifold_links_in_island(index);
+  TODO: fix this
+  builder.sort_manifold_links_in_island(index);
 }
 
 
@@ -469,21 +472,21 @@
     return;
   }
 
-  Ptr<Island> islands =
-      Ptr<Island>(CPS.task_head.islands);
+  Ptr<ContactIsland> islands =
+      Ptr<ContactIsland>(CPS.task_head.contact_islands);
 
   Ptr<ManifoldLinkIsland> manifold_links =
       Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
 
   // printf("Pre solver collision count %d, tmp_collision_count: %d\n", sim_config->g_c_info.collision_count, sim_config->g_c_info.tmp_collision_count);
   
-  daxa_u32 start_index = islands[index].manifold_start_index;
-  daxa_u32 max_count = islands[index].max_manifold_count;
+  daxa_u32 start_index = islands[index].start_index;
+  daxa_u32 max_count = islands[index].count;
 
   if(start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
   {
 #if defined(BB_DEBUG)
-    daxa_u32 count = islands[index].manifold_count;
+    // daxa_u32 count = islands[index].max_count;
     // printf("Collision pre solver failed index %d, start_index %d, max_count %d, count: %d\n", index, start_index, max_count, count);
 #endif // BB_DEBUG
     return;
@@ -537,14 +540,14 @@
     return;
   }
 
-  Ptr<Island> islands =
-      Ptr<Island>(CS.task_head.islands);
+  Ptr<ContactIsland> islands =
+      Ptr<ContactIsland>(CS.task_head.contact_islands);
 
   Ptr<ManifoldLinkIsland> manifold_links =
       Ptr<ManifoldLinkIsland>(CS.task_head.manifold_links);
   
-  daxa_u32 start_index = islands[index].manifold_start_index;
-  daxa_u32 max_count = islands[index].max_manifold_count;
+  daxa_u32 start_index = islands[index].start_index;
+  daxa_u32 max_count = islands[index].count;
 
   if(start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
   {
@@ -627,14 +630,14 @@
     return;
   }
 
-  Ptr<Island> islands =
-      Ptr<Island>(CSR.task_head.islands);
+  Ptr<ContactIsland> islands =
+      Ptr<ContactIsland>(CSR.task_head.contact_islands);
 
   Ptr<ManifoldLinkIsland> manifold_links =
       Ptr<ManifoldLinkIsland>(CSR.task_head.manifold_links);
   
-  daxa_u32 start_index = islands[index].manifold_start_index;
-  daxa_u32 max_count = islands[index].max_manifold_count;
+  daxa_u32 start_index = islands[index].start_index;
+  daxa_u32 max_count = islands[index].count;
 
   if(start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
   {
