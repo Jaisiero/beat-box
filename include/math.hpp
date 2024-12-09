@@ -29,8 +29,10 @@
 #include <glm/gtc/quaternion.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/quaternion.hpp>
+#include <limits>
 #define MAX std::max
 #define MIN std::min
+#define MAX_U32 std::numeric_limits<daxa_u32>::max()
 
 FORCE_INLINE daxa_f32vec3 operator-(const daxa_f32vec3& a, const daxa_f32vec3& b)
 {

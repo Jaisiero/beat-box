@@ -78,6 +78,7 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_body_links{{.initial_buffers = {}, .name = "RB_body_links"}};
   daxa::TaskBuffer task_manifold_links{{.initial_buffers = {}, .name = "RB_manifold_links"}};
   daxa::TaskBuffer task_islands{{.initial_buffers = {}, .name = "RB_islands"}};
+  daxa::TaskBuffer task_contact_islands{{.initial_buffers = {}, .name = "RB_contact_islands"}};
 
 private: 
   void record_read_back_sim_config_tasks(TaskGraph &readback_SC_TG);
@@ -120,6 +121,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_IBL;
   std::shared_ptr<daxa::ComputePipeline> pipeline_SBLI;
   std::shared_ptr<daxa::ComputePipeline> pipeline_MIB;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_CIG;
   std::shared_ptr<daxa::ComputePipeline> pipeline_MIPS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_IML;
   std::shared_ptr<daxa::ComputePipeline> pipeline_SMLI;
@@ -151,6 +153,7 @@ private:
   daxa::BufferId manifold_links[DOUBLE_BUFFERING] = {};
   daxa::BufferId scratch_body_links[DOUBLE_BUFFERING] = {};
   daxa::BufferId island_buffer[DOUBLE_BUFFERING] = {};
+  daxa::BufferId contact_island_buffer[DOUBLE_BUFFERING] = {};
 
   // Simulation configuration
   SimSolverType solver_type = SimSolverType::PGS_SOFT;

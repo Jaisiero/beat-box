@@ -13,6 +13,7 @@
 [[vk::push_constant]] IslandBuilderBodyLink2IslandPushConstants BLI;
 [[vk::push_constant]] IslandBuilderSortBodyLinkInIslandPushConstants SBLI;
 [[vk::push_constant]] ManifoldIslandBuilderPushConstants MIB; 
+[[vk::push_constant]] ContactIslandGatherPushConstants CIG;
 [[vk::push_constant]] ManifoldIslandPrefixSumPushConstants MIPS;
 [[vk::push_constant]] IslandBuilderManifoldLink2IslandPushConstants MLI;
 [[vk::push_constant]] IslandBuilderSortManifoldLinkInIslandPushConstants MBLI;
@@ -302,7 +303,7 @@
   if(body_a_index >= sim_config->rigid_body_count || body_b_index >= sim_config->rigid_body_count || body_a_index == body_b_index)
   {
 #if defined(BB_DEBUG)
-    printf("Manifold index %d, body_a_index %d, body_b_index %d\n", index, body_a_index, body_b_index);
+    // printf("Manifold index %d, body_a_index %d, body_b_index %d\n", index, body_a_index, body_b_index);
 #endif // BB_DEBUG
     return;
   }
@@ -312,6 +313,10 @@
 
   daxa_u32 a_active_body_index = rigid_bodies[body_a_index].active_index;
   daxa_u32 b_active_body_index = rigid_bodies[body_b_index].active_index;
+  
+#if defined(BB_DEBUG)
+  // printf("Manifold index %d, body_a_index %d (active_idx: %d), body_b_index %d (active_idx: %d), manifold count: %d, active_count: %d, island_count: %d\n", index, body_a_index, a_active_body_index, body_b_index, b_active_body_index, sim_config->g_c_info.collision_count, sim_config->active_rigid_body_count, sim_config->island_count);
+#endif // BB_DEBUG
 
   daxa_u32 min_body_index = min(a_active_body_index, b_active_body_index);
 
@@ -324,6 +329,30 @@
   IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands);
 
   builder.expand_manifold_island(min_body_index);
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_contact_island_gather(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(CIG.task_head.sim_config);
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->island_count)
+  {
+    return;
+  }
+
+  Ptr<Island> islands =
+      Ptr<Island>(CIG.task_head.islands);
+
+  Ptr<ContactIsland> contact_islands =
+      Ptr<ContactIsland>(CIG.task_head.contact_islands);
+  
+  ContactIslandBuilder builder = ContactIslandBuilder(sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands);
+
+  builder.gather_contact_islands(index);
 }
 
 [shader("compute")]
@@ -371,7 +400,7 @@
   if(body_a_index >= sim_config->rigid_body_count || body_b_index >= sim_config->rigid_body_count || body_a_index == body_b_index)
   {
 #if defined(BB_DEBUG)
-    printf("Manifold link index %d, body_a_index %d, body_b_index %d\n", index, body_a_index, body_b_index);
+    // printf("Manifold link index %d, body_a_index %d, body_b_index %d\n", index, body_a_index, body_b_index);
 #endif // BB_DEBUG
     return;
   }
@@ -419,7 +448,8 @@
   
   IslandBuilder builder = IslandBuilder(sim_config->island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
 
-  builder.sort_manifold_links_in_island(index);
+  // TODO: fix this
+  // builder.sort_manifold_links_in_island(index);
 }
 
 
@@ -433,18 +463,40 @@
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(CPS.task_head.sim_config);
 
-  if (pixel_i.x >= 1)
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->island_count)
   {
     return;
   }
 
+  Ptr<Island> islands =
+      Ptr<Island>(CPS.task_head.islands);
+
+  Ptr<ManifoldLinkIsland> manifold_links =
+      Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
+
   // printf("Pre solver collision count %d, tmp_collision_count: %d\n", sim_config->g_c_info.collision_count, sim_config->g_c_info.tmp_collision_count);
   
-  // TODO: Implement islands
-  for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
+  daxa_u32 start_index = islands[index].manifold_start_index;
+  daxa_u32 max_count = islands[index].max_manifold_count;
+
+  if(start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
   {
+#if defined(BB_DEBUG)
+    daxa_u32 count = islands[index].manifold_count;
+    // printf("Collision pre solver failed index %d, start_index %d, max_count %d, count: %d\n", index, start_index, max_count, count);
+#endif // BB_DEBUG
+    return;
+  }
+  
+  // TODO: Implement islands
+  for(daxa_u32 m = start_index; m < start_index + max_count; ++m)
+  {
+
+    daxa_u32 manifold_index = manifold_links[m].manifold_index;
+
     Manifold manifold =
-      CPS.task_head.collisions[m];
+      CPS.task_head.collisions[manifold_index];
 
     if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
     {
@@ -465,7 +517,7 @@
       PGS.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction);
     }
 
-    CPS.task_head.collisions[m] = manifold;
+    CPS.task_head.collisions[manifold_index] = manifold;
     CPS.task_head.rigid_bodies[manifold.obb1_index] = r1;
     CPS.task_head.rigid_bodies[manifold.obb2_index] = r2;
   }
@@ -479,16 +531,37 @@
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(CS.task_head.sim_config);
 
-  if (pixel_i.x >= 1)
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->island_count)
   {
+    return;
+  }
+
+  Ptr<Island> islands =
+      Ptr<Island>(CS.task_head.islands);
+
+  Ptr<ManifoldLinkIsland> manifold_links =
+      Ptr<ManifoldLinkIsland>(CS.task_head.manifold_links);
+  
+  daxa_u32 start_index = islands[index].manifold_start_index;
+  daxa_u32 max_count = islands[index].max_manifold_count;
+
+  if(start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
+  {
+#if defined(BB_DEBUG)
+    // printf("Collision solver failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
+#endif // BB_DEBUG
     return;
   }
   
   // TODO: Implement islands
-  for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
+  for(daxa_u32 m = start_index; m < start_index + max_count; ++m)
   {
+
+    daxa_u32 manifold_index = manifold_links[m].manifold_index;
+
     Manifold manifold =
-      CS.task_head.collisions[m];
+      CS.task_head.collisions[manifold_index];
 
     if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
     {
@@ -511,7 +584,7 @@
       PGS.solve(manifold, r1, r2, accum_impulse, friction);
     }
     
-    CS.task_head.collisions[m] = manifold;
+    CS.task_head.collisions[manifold_index] = manifold;
     CS.task_head.rigid_bodies[manifold.obb1_index] = r1;
     CS.task_head.rigid_bodies[manifold.obb2_index] = r2;
   }
@@ -548,16 +621,37 @@
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(CSR.task_head.sim_config);
 
-  if (pixel_i.x >= 1)
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->island_count)
   {
+    return;
+  }
+
+  Ptr<Island> islands =
+      Ptr<Island>(CSR.task_head.islands);
+
+  Ptr<ManifoldLinkIsland> manifold_links =
+      Ptr<ManifoldLinkIsland>(CSR.task_head.manifold_links);
+  
+  daxa_u32 start_index = islands[index].manifold_start_index;
+  daxa_u32 max_count = islands[index].max_manifold_count;
+
+  if(start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
+  {
+#if defined(BB_DEBUG)
+    // printf("Collision solver relaxation failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
+#endif // BB_DEBUG
     return;
   }
   
   // TODO: Implement islands
-  for(daxa_u32 m = 0u; m < sim_config->g_c_info.collision_count; ++m)
+  for(daxa_u32 m = start_index; m < start_index + max_count; ++m)
   {
+
+    daxa_u32 manifold_index = manifold_links[m].manifold_index;
+
     Manifold manifold =
-      CSR.task_head.collisions[m];
+      CSR.task_head.collisions[manifold_index];
 
     if(manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
     {
@@ -577,7 +671,7 @@
       PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
     }
     
-    CSR.task_head.collisions[m] = manifold;
+    CSR.task_head.collisions[manifold_index] = manifold;
     CSR.task_head.rigid_bodies[manifold.obb1_index] = r1;
     CSR.task_head.rigid_bodies[manifold.obb2_index] = r2;
   }
@@ -641,9 +735,6 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
 
   RigidBody r = RB_update.task_head.rigid_bodies[index];
   RigidBody r_copy = RB_update.task_head.rigid_bodies_update[index];
-  
-  // printf("Updating pos rigid body %d, pos: %f %f %f, rot: %f %f %f %f\n", index, r.position.x, r.position.y, r.position.z, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w);
-  // printf("Updating rigid body %d, frame: %lu, vel: %f %f %f, omega: %f %f %f\n", index, r.frame_count, r.velocity.x, r.velocity.y, r.velocity.z, r.omega.x, r.omega.y, r.omega.z);
 
   r_copy.position = r.position;
   r_copy.rotation = r.rotation;

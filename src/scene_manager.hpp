@@ -1,6 +1,7 @@
 #pragma once
 
 #include "defines.hpp"
+#include "math.hpp"
 #include "camera_manager.hpp"
 #include "rigid_body_manager.hpp"
 #include "acceleration_structure_manager.hpp"
@@ -179,6 +180,7 @@ public:
     daxa_u32 i = 0;
     for(auto &rigid_body : rigid_bodies)
     {
+      rigid_body.active_index = MAX_U32;
       rigid_body.inv_mass = rigid_body.mass == 0.0f ? 0.0f :
       1.0f / rigid_body.mass;
       rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);

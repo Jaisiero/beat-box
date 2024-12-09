@@ -114,6 +114,10 @@ const auto sort_body_links_in_island_pipeline_name = "Sort Body Links in Island"
 const auto entry_manifold_island_builder = "entry_manifold_island_builder";
 const auto manifold_island_builder_pipeline_name = "Manifold Island Builder";
 
+// manifold island gather
+const auto entry_contact_island_gather = "entry_contact_island_gather";
+const auto contact_island_gather_pipeline_name = "Contact Island Gather";
+
 // manifold island prefix sum
 const auto entry_manifold_island_prefix_sum = "entry_manifold_island_prefix_sum";
 const auto manifold_island_prefix_sum_pipeline_name = "Manifold Island Prefix Sum";
@@ -432,6 +436,21 @@ struct ManifoldIslandBuilderInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(ManifoldIslandBuilderPushConstants),
       .name = manifold_island_builder_pipeline_name,
+  };
+};
+
+struct ContactIslandGatherInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_contact_island_gather,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(ContactIslandGatherPushConstants),
+      .name = contact_island_gather_pipeline_name,
   };
 };
 
