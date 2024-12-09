@@ -1,25 +1,47 @@
 #include "shared.inl"
 
-struct IslandBuilder {
+struct IslandBuilder
+{
 
-  private daxa_u32 max_active_bodies;
-  private daxa_u32 island_count;
-  private Ptr<BodyLink> body_links;
-  private Ptr<Island> islands;
-  private Ptr<BodyLinkIsland> body_indices;
+private
+  daxa_u32 max_active_bodies;
+private
+  daxa_u32 island_count;
+private
+  Ptr<BodyLink> body_links;
+private
+  Ptr<Island> islands;
+private
+  Ptr<BodyLinkIsland> body_indices;
 
+  __init(Ptr<BodyLink> links, Ptr<Island> island_storage)
+  {
+    body_links = links;
+    islands = island_storage;
+  }
 
-  __init(daxa_u32 active_rigid_body_count, Ptr<BodyLink> links) {
+  __init(daxa_u32 active_rigid_body_count, Ptr<BodyLink> links)
+  {
     max_active_bodies = active_rigid_body_count;
     body_links = links;
   }
 
-  __init(daxa_u32 island_num, Ptr<Island> island_storage) {
+  __init(daxa_u32 island_num, Ptr<Island> island_storage)
+  {
     island_count = island_num;
     islands = island_storage;
   }
 
-  __init(daxa_u32 active_rigid_body_count, Ptr<BodyLink> links, daxa_u32 island_num, Ptr<Island> island_storage, Ptr<BodyLinkIsland> indices) {
+  __init(daxa_u32 active_rigid_body_count, Ptr<BodyLink> links, daxa_u32 island_num, Ptr<Island> island_storage)
+  {
+    max_active_bodies = active_rigid_body_count;
+    body_links = links;
+    island_count = island_num;
+    islands = island_storage;
+  }
+
+  __init(daxa_u32 active_rigid_body_count, Ptr<BodyLink> links, daxa_u32 island_num, Ptr<Island> island_storage, Ptr<BodyLinkIsland> indices)
+  {
     max_active_bodies = active_rigid_body_count;
     body_links = links;
     island_count = island_num;
@@ -27,7 +49,8 @@ struct IslandBuilder {
     body_indices = indices;
   }
 
-  __init(daxa_u32 island_num, Ptr<Island> island_storage, daxa_u32 active_rigid_body_count, Ptr<BodyLinkIsland> indices) {
+  __init(daxa_u32 island_num, Ptr<Island> island_storage, daxa_u32 active_rigid_body_count, Ptr<BodyLinkIsland> indices)
+  {
     island_count = island_num;
     islands = island_storage;
     max_active_bodies = active_rigid_body_count;
@@ -92,10 +115,10 @@ struct IslandBuilder {
           // doesn't it has been reparented and we need to retry the algorithm
           daxa_u32 old_value = 0;
           InterlockedCompareExchange(body_links[second_link_to].active_index, second_link_to, first_link_to, old_value);
-          if(old_value != second_link_to)
+          if (old_value != second_link_to)
             continue;
 #if BB_DEBUG
-          // printf("linking %d to %d, old_value: %d\n", second_link_to, first_link_to, old_value);
+            // printf("linking %d to %d, old_value: %d\n", second_link_to, first_link_to, old_value);
 #endif // BB_DEBUG
         }
         else
@@ -105,10 +128,10 @@ struct IslandBuilder {
           // doesn't it has been reparented and we need to retry the algorithm
           daxa_u32 old_value = 0;
           InterlockedCompareExchange(body_links[first_link_to].active_index, first_link_to, second_link_to, old_value);
-          if(old_value != first_link_to)
+          if (old_value != first_link_to)
             continue;
 #if BB_DEBUG
-          // printf("linking %d to %d, old_value: %d\n", first_link_to, second_link_to, old_value);
+            // printf("linking %d to %d, old_value: %d\n", first_link_to, second_link_to, old_value);
 #endif // BB_DEBUG
         }
       }
@@ -126,62 +149,106 @@ struct IslandBuilder {
     }
   }
 
+  void add_island(Ptr<daxa_u32> atomic_island_count, daxa_u32 index) {
+    let body_link = &body_links[index];
+    if(body_link.active_index == index) {
+      daxa_u32 island_index = 0u;
+      InterlockedAdd(*atomic_island_count, 1, island_index);
+      body_link.island_index = island_index;
+      // unknow start index yet, reset counter
+      islands[island_index] = Island(MAX_U32, 0, 0);
+    }
+  }
+
   void prefix_sum_islands()
   {
-    if(island_count == 0)
+    if (island_count == 0)
       return;
 
     // Prefix sum the island sizes
     islands[0].start_index = 0;
 
     // Calculate the start index for each island
-    for(daxa_u32 i = 1; i < island_count; i++)
+    for (daxa_u32 i = 1; i < island_count; i++)
     {
-      islands[i].start_index = islands[i-1].start_index + islands[i-1].max_count;
+      islands[i].start_index = islands[i - 1].start_index + islands[i - 1].max_count;
     }
   }
 
-  void body_link_to_island(daxa_u32 index) {
+  void expand_island(daxa_u32 index)
+  {
+    if(index >= max_active_bodies)
+      return;
+
+    BodyLink b_link = body_links[index];
+
+    daxa_u32 island_index = MAX_U32;
+    if (b_link.island_index != index)
+    {
+      let _index = get_lowest_body_index(index);
+      body_links[index].island_index = body_links[_index].island_index;
+      island_index = body_links[index].island_index;
+    }
+    else
+    {
+      island_index = b_link.island_index;
+    }
+
+    if (island_index < island_count)
+    {
+      daxa_u32 old_count = 0;
+      InterlockedAdd(islands[island_index].max_count, 1, old_count);
+    }
+  }
+
+  void body_link_to_island(daxa_u32 index)
+  {
+    if(index >= max_active_bodies)
+      return;
+      
     BodyLink b_link = body_links[index];
 
     // increment atomic counter from island
     daxa_u32 island_index = b_link.island_index;
-    if(island_index < island_count) {
+    if (island_index < island_count)
+    {
       daxa_u32 old_count = 0;
       InterlockedAdd(islands[island_index].count, 1, old_count);
       // write body link inside range in atomic counter from island
       daxa_u32 body_index = islands[island_index].start_index + old_count;
-      if(body_index < max_active_bodies) {
+      if (body_index < max_active_bodies)
+      {
         body_indices[body_index].active_index = index;
       }
     }
   }
 
   // NOTE: Selection sort
-  void sort_body_links_in_island(daxa_u32 island_index) {
+  void sort_body_links_in_island(daxa_u32 island_index)
+  {
 
-    if(island_index >= island_count)
+    if (island_index >= island_count)
       return;
 
     daxa_u32 start_index = islands[island_index].start_index;
     daxa_u32 max_count = islands[island_index].max_count;
 
-    if(start_index + max_count >= max_active_bodies)
+    if (start_index + max_count >= max_active_bodies)
       return;
 
     // Sort body links in island
-    for(daxa_u32 i = 0; i < max_count; i++)
+    for (daxa_u32 i = 0; i < max_count; i++)
     {
       daxa_u32 min_index = i;
-      for(daxa_u32 j = i + 1; j < max_count; j++)
+      for (daxa_u32 j = i + 1; j < max_count; j++)
       {
-        if(body_indices[start_index + j].active_index < body_indices[start_index + min_index].active_index)
+        if (body_indices[start_index + j].active_index < body_indices[start_index + min_index].active_index)
         {
           min_index = j;
         }
       }
 
-      if(min_index != i)
+      if (min_index != i)
       {
         BodyLinkIsland tmp = body_indices[start_index + i];
         body_indices[start_index + i] = body_indices[start_index + min_index];
@@ -189,5 +256,4 @@ struct IslandBuilder {
       }
     }
   }
-  
 };

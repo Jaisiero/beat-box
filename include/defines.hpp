@@ -86,6 +86,10 @@ const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
 const auto entry_collision_solver_dispatcher = "entry_collision_solver_dispatcher";
 const auto collision_solver_dispatcher_pipeline_name = "Collision Solver Dispatcher";
 
+// island dispatcher
+const auto entry_island_dispatcher = "entry_island_dispatcher";
+const auto island_dispatcher_pipeline_name = "Collision Solver Dispatcher";
+
 // island counter
 const auto entry_island_counter = "entry_island_counter";
 const auto island_counter_pipeline_name = "Island Counter";
@@ -310,6 +314,21 @@ struct CollisionSolverDispatcherInfo {
 };
 
 // ISLANDS
+struct IslandDispatcherInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_island_dispatcher,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(IslandDispatcherPushConstants),
+      .name = island_dispatcher_pipeline_name,
+  };
+};
+
 struct IslandCounterInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RB_sim_shader_file_string},

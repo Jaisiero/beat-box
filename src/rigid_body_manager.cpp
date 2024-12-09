@@ -14,6 +14,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
     pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
     pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
+    pipeline_ID = task_manager->create_compute(IslandDispatcherInfo{}.info);
     pipeline_IB = task_manager->create_compute(IslandBuilderInfo{}.info);
     pipeline_IPS = task_manager->create_compute(IslandPrefixSumInfo{}.info);
     pipeline_IBL = task_manager->create_compute(BodyLink2IslandInfo{}.info);
@@ -229,6 +230,22 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                                              daxa::attachment_view(CollisionSolverDispatcherTaskHead::AT.sim_config, task_sim_config),
                                          },
                                          user_callback_CS_dispatcher);
+
+  auto user_callback_ID = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_ID);
+    ti.recorder.push_constant(IslandDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+
+  using TTask_ID = TaskTemplate<IslandDispatcherTaskHead::Task, decltype(user_callback_ID)>;
+
+  // Instantiate the task using the template class
+  TTask_ID task_ID(std::array{
+                       daxa::attachment_view(IslandDispatcherTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(IslandDispatcherTaskHead::AT.sim_config, task_sim_config),
+                   },
+                   user_callback_ID);
 
   auto user_callback_IB = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -459,6 +476,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_advect);
   RB_TG.add_task(task_IC);
   RB_TG.add_task(task_CS_dispatcher);
+  RB_TG.add_task(task_ID);
   RB_TG.add_task(task_IB);
   RB_TG.add_task(task_IPS);
   RB_TG.add_task(task_IBL);

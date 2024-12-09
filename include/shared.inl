@@ -468,12 +468,14 @@ DAXA_DECL_BUFFER_PTR(SimConfig)
 static const daxa_u32 RIGID_BODY_DISPATCH_COUNT_OFFSET = 0;
 static const daxa_u32 ISLAND_DISPATCH_COUNT_OFFSET = 1;
 static const daxa_u32 ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET = 2;
+static const daxa_u32 COLLISION_DISPATCH_COUNT_OFFSET = 3;
 
 struct DispatchBuffer
 {
   daxa_u32vec3 dispatch;
-  daxa_u32vec3 solver_dispatch;
+  daxa_u32vec3 island_dispatch;
   daxa_u32vec3 active_rigid_body_dispatch;
+  daxa_u32vec3 collision_dispatch;
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
@@ -540,6 +542,7 @@ struct BroadPhasePushConstants
   DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
 };
 
+// COMPUTE_SHADER_READ_WRITE_CONCURRENT
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverDispatcherTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
@@ -548,6 +551,17 @@ DAXA_DECL_TASK_HEAD_END
 struct CollisionSolverDispatcherPushConstants
 {
   DAXA_TH_BLOB(CollisionSolverDispatcherTaskHead, task_head)
+};
+
+// COMPUTE_SHADER_READ_WRITE_CONCURRENT
+DAXA_DECL_TASK_HEAD_BEGIN(IslandDispatcherTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_DECL_TASK_HEAD_END
+
+struct IslandDispatcherPushConstants
+{
+  DAXA_TH_BLOB(IslandDispatcherTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)

@@ -5,6 +5,7 @@
 [[vk::push_constant]] ResetBodyLinkPushConstants RBL;
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
+[[vk::push_constant]] IslandDispatcherPushConstants ID;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] IslandCounterPushConstants IC;
 [[vk::push_constant]] IslandBuilderPushConstants IB;
@@ -126,8 +127,6 @@
   Ptr<BodyLink> body_links =
       Ptr<BodyLink>(IC.task_head.scratch_body_links);
 
-  let body_link_index = body_links[index].active_index;
-
   Ptr<Island> islands =
       Ptr<Island>(IC.task_head.islands);
 
@@ -135,13 +134,28 @@
   // printf("IC index %d, body_link_index %d\n", index, body_link_index);
 #endif // BB_DEBUG
 
-  if(body_link_index == index) {
-    daxa_u32 island_index = 0;
-    InterlockedAdd(sim_config->island_count, 1, island_index);
-    body_links[index].island_index = island_index;
-    // unknow start index yet, reset counter
-    islands[island_index] = Island(MAX_U32, 0, 0);
+  IslandBuilder builder = IslandBuilder(body_links, islands);
+
+  builder.add_island(&sim_config->island_count, index);
+}
+
+[shader("compute")]
+    [numthreads(1, 1, 1)] void
+    entry_island_dispatcher(uint3 pixel_i : SV_DispatchThreadID)
+{
+
+  if (pixel_i.x >= 1u)
+  {
+    return;
   }
+
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(ID.task_head.sim_config);
+
+  Ptr<DispatchBuffer> dispatch_buffer =
+      Ptr<DispatchBuffer>(ID.task_head.dispatch_buffer);
+
+  dispatch_buffer->island_dispatch.x = (sim_config->island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
 }
 
 [shader("compute")]
@@ -160,7 +174,7 @@
   Ptr<DispatchBuffer> dispatch_buffer =
       Ptr<DispatchBuffer>(CSD.task_head.dispatch_buffer);
 
-  dispatch_buffer->solver_dispatch.x = (sim_config->island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  dispatch_buffer->collision_dispatch.x = (sim_config->g_c_info.collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
 }
 
 [shader("compute")]
@@ -182,25 +196,9 @@
   Ptr<Island> islands =
       Ptr<Island>(IB.task_head.islands);
 
-  BodyLink b_link = body_links[index];
+  IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands);
 
-  daxa_u32 island_index = MAX_U32;
-  if(b_link.island_index != index) {
-    IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links);
-    let _index = builder.get_lowest_body_index(index);
-    body_links[index].island_index = body_links[_index].island_index;
-    island_index = body_links[index].island_index;
-  } else {
-    island_index = b_link.island_index;
-  }
-
-  if(island_index < sim_config->island_count) {
-    daxa_u32 old_count = 0;
-    InterlockedAdd(islands[island_index].max_count, 1, old_count);
-#if defined(BB_DEBUG)
-    // printf("IC index %d, island_index %d\n", index, island_index);
-#endif // BB_DEBUG
-  }
+  builder.expand_island(index);
 }
 
 [shader("compute")]
@@ -276,7 +274,6 @@
   IslandBuilder builder = IslandBuilder(sim_config->island_count, islands, sim_config->active_rigid_body_count, body_link_island);
 
   builder.sort_body_links_in_island(index);
-
 }
 
 
