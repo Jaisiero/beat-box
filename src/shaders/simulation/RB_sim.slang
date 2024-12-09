@@ -3,6 +3,7 @@
 #include "solvers.slang"
 
 [[vk::push_constant]] ResetBodyLinkPushConstants RBL;
+[[vk::push_constant]] RigidBodyDispatcherPushConstants RBD;
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] IslandDispatcherPushConstants ID;
@@ -51,6 +52,29 @@
 #endif // BB_DEBUG
 
   RBL.task_head.scratch_body_links[index] = BodyLink(index, MAX_U32);
+}
+
+[shader("compute")]
+    [numthreads(1, 1, 1)] void
+    entry_rigid_body_dispatcher(uint3 pixel_i : SV_DispatchThreadID)
+{
+
+  if (pixel_i.x >= 1u)
+  {
+    return;
+  }
+
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(RBD.task_head.sim_config);
+
+  Ptr<DispatchBuffer> dispatch_buffer =
+      Ptr<DispatchBuffer>(RBD.task_head.dispatch_buffer);
+
+  let rb_count = (sim_config->rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  dispatch_buffer->rigid_body_dispatch = daxa_u32vec3(rb_count, 1, 1);
+
+  let arb_count = (sim_config->active_rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  dispatch_buffer->active_rigid_body_dispatch = daxa_u32vec3(arb_count, 1, 1);
 }
 
 
@@ -161,7 +185,8 @@
   Ptr<DispatchBuffer> dispatch_buffer =
       Ptr<DispatchBuffer>(ID.task_head.dispatch_buffer);
 
-  dispatch_buffer->island_dispatch.x = (sim_config->island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  let i_count = (sim_config->island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  dispatch_buffer->island_dispatch = daxa_u32vec3(i_count, 1, 1);
 }
 
 [shader("compute")]
@@ -180,7 +205,8 @@
   Ptr<DispatchBuffer> dispatch_buffer =
       Ptr<DispatchBuffer>(CSD.task_head.dispatch_buffer);
 
-  dispatch_buffer->collision_dispatch.x = (sim_config->g_c_info.collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  var collision_c = (sim_config->g_c_info.collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  dispatch_buffer->collision_dispatch = daxa_u32vec3(collision_c, 1, 1);
 }
 
 [shader("compute")]
@@ -373,7 +399,8 @@
   Ptr<DispatchBuffer> dispatch_buffer =
       Ptr<DispatchBuffer>(CID.task_head.dispatch_buffer);
 
-  dispatch_buffer->conctact_island_dispatch.x = (sim_config->contact_island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  var ci_count = (sim_config->contact_island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  dispatch_buffer->contact_island_dispatch = daxa_u32vec3(ci_count, 1, 1);
 }
 
 [shader("compute")]

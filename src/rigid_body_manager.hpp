@@ -112,6 +112,7 @@ private:
 
   // Compute pipeline reference
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBL;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_RBD;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_ID;

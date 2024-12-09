@@ -78,6 +78,10 @@ const auto RB_sim_shader_file_string = "RB_sim.slang";
 const auto entry_reset_body_links = "entry_reset_body_links";
 const auto reset_body_links_pipeline_name = "Reset Body Links";
 
+// rigid body dispatcher
+const auto entry_rigid_body_dispatcher = "entry_rigid_body_dispatcher";
+const auto rigid_body_dispatcher_pipeline_name = "Rigid Body Dispatcher";
+
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
@@ -304,6 +308,21 @@ struct ResetBodyLinksInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(ResetBodyLinkPushConstants),
       .name = reset_body_links_pipeline_name,
+  };
+};
+
+struct RigidBodyDispatcherInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_rigid_body_dispatcher,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyDispatcherPushConstants),
+      .name = rigid_body_dispatcher_pipeline_name,
   };
 };
 

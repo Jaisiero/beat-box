@@ -27,11 +27,10 @@ struct StatusManager
     
     dispatch_buffer = gpu->device.create_buffer({
         .size = sizeof(DispatchBuffer),
-        .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
         .name = "RB_dispatch_buffer",
     });
 
-    *gpu->device.buffer_host_address_as<DispatchBuffer>(dispatch_buffer).value() = DispatchBuffer(daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u));
+    // *gpu->device.buffer_host_address_as<DispatchBuffer>(dispatch_buffer).value() = DispatchBuffer(daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u));
 
     // Link resources
     accel_struct_mngr->update_TLAS_resources(dispatch_buffer);
@@ -52,18 +51,6 @@ struct StatusManager
     gpu->device.destroy_buffer(dispatch_buffer);
 
     initialized = false;
-  }
-
-  bool update_dispatch_buffer(daxa_u32 rigid_body_count)
-  {
-    if(!initialized)
-    {
-      return false;
-    }
-
-    gpu->device.buffer_host_address_as<DispatchBuffer>(dispatch_buffer).value()->dispatch = daxa_u32vec3((rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X, 1, 1);
-
-    return initialized;
   }
 
   bool next_frame()

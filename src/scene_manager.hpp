@@ -199,8 +199,6 @@ public:
       ++rigid_body_count;
     }
 
-    status_manager->update_dispatch_buffer(get_rigid_body_count());
-
     // TODO: Compute queue here to push an update for all frames?
     // Update simulation info
     rigid_body_manager->update_sim();
