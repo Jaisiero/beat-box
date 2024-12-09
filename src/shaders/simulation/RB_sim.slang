@@ -12,6 +12,7 @@
 [[vk::push_constant]] IslandPrefixSumPushConstants IPS;
 [[vk::push_constant]] IslandBuilderBodyLink2IslandPushConstants BLI;
 [[vk::push_constant]] IslandBuilderSortBodyLinkInIslandPushConstants SBLI;
+[[vk::push_constant]] ManifoldIslandBuilderPushConstants MIB; 
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
 [[vk::push_constant]] RigidBodyIntegratePositionsPushConstants RB_integrate;
@@ -274,6 +275,54 @@
   IslandBuilder builder = IslandBuilder(sim_config->island_count, islands, sim_config->active_rigid_body_count, body_link_island);
 
   builder.sort_body_links_in_island(index);
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_manifold_island_builder(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(MIB.task_head.sim_config);
+
+  daxa_u32 index = pixel_i.x;
+
+  if (index >= sim_config->g_c_info.collision_count)
+  {
+    return;
+  }
+
+  Ptr<Manifold> m =
+      &MIB.task_head.collisions[index];
+
+  daxa_u32 body_a_index = m->obb1_index;
+  daxa_u32 body_b_index = m->obb2_index;
+
+  if(body_a_index >= sim_config->rigid_body_count || body_b_index >= sim_config->rigid_body_count || body_a_index == body_b_index)
+  {
+#if defined(BB_DEBUG)
+    printf("Manifold index %d, body_a_index %d, body_b_index %d\n", index, body_a_index, body_b_index);
+#endif // BB_DEBUG
+    return;
+  }
+
+  Ptr<RigidBody> rigid_bodies =
+      Ptr<RigidBody>(MIB.task_head.rigid_bodies);
+
+  daxa_u32 a_active_body_index = rigid_bodies[body_a_index].active_index;
+  daxa_u32 b_active_body_index = rigid_bodies[body_b_index].active_index;
+
+  daxa_u32 min_body_index = min(a_active_body_index, b_active_body_index);
+
+  Ptr<Island> islands =
+      Ptr<Island>(MIB.task_head.islands);
+  
+  Ptr<BodyLink> body_links =
+      Ptr<BodyLink>(MIB.task_head.scratch_body_links);
+
+  IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands);
+
+  builder.expand_manifold_island(index, min_body_index);
+
 }
 
 

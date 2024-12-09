@@ -118,6 +118,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_IPS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_IBL;
   std::shared_ptr<daxa::ComputePipeline> pipeline_SBLI;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_MIB;
   std::shared_ptr<daxa::ComputePipeline> pipeline_advect;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CPS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS;

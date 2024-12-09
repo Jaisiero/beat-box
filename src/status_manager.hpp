@@ -31,7 +31,7 @@ struct StatusManager
         .name = "RB_dispatch_buffer",
     });
 
-    *gpu->device.buffer_host_address_as<DispatchBuffer>(dispatch_buffer).value() = DispatchBuffer(daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u));
+    *gpu->device.buffer_host_address_as<DispatchBuffer>(dispatch_buffer).value() = DispatchBuffer(daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u));
 
     // Link resources
     accel_struct_mngr->update_TLAS_resources(dispatch_buffer);

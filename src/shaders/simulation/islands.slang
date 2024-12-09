@@ -20,9 +20,9 @@ private
     islands = island_storage;
   }
 
-  __init(daxa_u32 active_rigid_body_count, Ptr<BodyLink> links)
+  __init(daxa_u32 active_body_count, Ptr<BodyLink> links)
   {
-    max_active_bodies = active_rigid_body_count;
+    max_active_bodies = active_body_count;
     body_links = links;
   }
 
@@ -32,28 +32,28 @@ private
     islands = island_storage;
   }
 
-  __init(daxa_u32 active_rigid_body_count, Ptr<BodyLink> links, daxa_u32 island_num, Ptr<Island> island_storage)
+  __init(daxa_u32 active_body_count, Ptr<BodyLink> links, daxa_u32 island_num, Ptr<Island> island_storage)
   {
-    max_active_bodies = active_rigid_body_count;
+    max_active_bodies = active_body_count;
     body_links = links;
     island_count = island_num;
     islands = island_storage;
   }
 
-  __init(daxa_u32 active_rigid_body_count, Ptr<BodyLink> links, daxa_u32 island_num, Ptr<Island> island_storage, Ptr<BodyLinkIsland> indices)
+  __init(daxa_u32 active_body_count, Ptr<BodyLink> links, daxa_u32 island_num, Ptr<Island> island_storage, Ptr<BodyLinkIsland> indices)
   {
-    max_active_bodies = active_rigid_body_count;
+    max_active_bodies = active_body_count;
     body_links = links;
     island_count = island_num;
     islands = island_storage;
     body_indices = indices;
   }
 
-  __init(daxa_u32 island_num, Ptr<Island> island_storage, daxa_u32 active_rigid_body_count, Ptr<BodyLinkIsland> indices)
+  __init(daxa_u32 island_num, Ptr<Island> island_storage, daxa_u32 active_body_count, Ptr<BodyLinkIsland> indices)
   {
     island_count = island_num;
     islands = island_storage;
-    max_active_bodies = active_rigid_body_count;
+    max_active_bodies = active_body_count;
     body_indices = indices;
   }
 
@@ -254,6 +254,18 @@ private
         body_indices[start_index + i] = body_indices[start_index + min_index];
         body_indices[start_index + min_index] = tmp;
       }
+    }
+  }
+
+
+  void expand_manifold_island(daxa_u32 manifold_index, daxa_u32 active_body_index) {
+    if(active_body_index >= max_active_bodies)
+      return;
+      
+    daxa_u32 island_index = body_links[active_body_index].island_index;
+    if(island_index < island_count) {
+      daxa_u32 old_count = 0;
+      InterlockedAdd(islands[island_index].max_manifold_count, 1, old_count);
     }
   }
 };

@@ -110,6 +110,10 @@ const auto body_link_to_island_pipeline_name = "Body Link to Island";
 const auto entry_sort_body_links_in_island = "entry_sort_body_links_in_island";
 const auto sort_body_links_in_island_pipeline_name = "Sort Body Links in Island";
 
+// manifold island builder
+const auto entry_manifold_island_builder = "entry_manifold_island_builder";
+const auto manifold_island_builder_pipeline_name = "Manifold Island Builder";
+
 // sim
 const auto entry_rigid_body_sim = "entry_rigid_body_sim";
 const auto RB_sim_pipeline_name = "Rigid Body Simulation";
@@ -401,6 +405,21 @@ struct SortBodyLinksInIslandInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(IslandBuilderSortBodyLinkInIslandPushConstants),
       .name = sort_body_links_in_island_pipeline_name,
+  };
+};
+
+struct ManifoldIslandBuilderInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_manifold_island_builder,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(ManifoldIslandBuilderPushConstants),
+      .name = manifold_island_builder_pipeline_name,
   };
 };
 // ISLANDS
