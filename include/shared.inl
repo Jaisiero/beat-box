@@ -470,6 +470,7 @@ static const daxa_u32 RIGID_BODY_DISPATCH_COUNT_OFFSET = 0;
 static const daxa_u32 ISLAND_DISPATCH_COUNT_OFFSET = 1;
 static const daxa_u32 ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET = 2;
 static const daxa_u32 COLLISION_DISPATCH_COUNT_OFFSET = 3;
+static const daxa_u32 CONTACT_ISLAND_DISPATCH_COUNT_OFFSET = 4;
 
 struct DispatchBuffer
 {
@@ -477,6 +478,7 @@ struct DispatchBuffer
   daxa_u32vec3 island_dispatch;
   daxa_u32vec3 active_rigid_body_dispatch;
   daxa_u32vec3 collision_dispatch;
+  daxa_u32vec3 conctact_island_dispatch;
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
@@ -686,6 +688,17 @@ DAXA_DECL_TASK_HEAD_END
 struct ContactIslandGatherPushConstants
 {
   DAXA_TH_BLOB(ContactIslandGatherTaskHead, task_head)
+};
+
+// COMPUTE_SHADER_READ_WRITE_CONCURRENT
+DAXA_DECL_TASK_HEAD_BEGIN(ContactIslandDispatcherTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_DECL_TASK_HEAD_END
+
+struct ContactIslandDispatcherPushConstants
+{
+  DAXA_TH_BLOB(ContactIslandDispatcherTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(ManifoldIslandPrefixSumTaskHead)

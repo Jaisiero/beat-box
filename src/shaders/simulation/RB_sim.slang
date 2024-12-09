@@ -14,6 +14,7 @@
 [[vk::push_constant]] IslandBuilderSortBodyLinkInIslandPushConstants SBLI;
 [[vk::push_constant]] ManifoldIslandBuilderPushConstants MIB; 
 [[vk::push_constant]] ContactIslandGatherPushConstants CIG;
+[[vk::push_constant]] ContactIslandDispatcherPushConstants CID;
 [[vk::push_constant]] ManifoldIslandPrefixSumPushConstants MIPS;
 [[vk::push_constant]] IslandBuilderManifoldLink2IslandPushConstants MLI;
 [[vk::push_constant]] IslandBuilderSortManifoldLinkInIslandPushConstants MBLI;
@@ -355,6 +356,26 @@
   builder.gather_contact_islands(index);
 }
 
+
+[shader("compute")]
+    [numthreads(1, 1, 1)] void
+    entry_contact_island_dispatcher(uint3 pixel_i : SV_DispatchThreadID)
+{
+
+  if (pixel_i.x >= 1u)
+  {
+    return;
+  }
+
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(CID.task_head.sim_config);
+
+  Ptr<DispatchBuffer> dispatch_buffer =
+      Ptr<DispatchBuffer>(CID.task_head.dispatch_buffer);
+
+  dispatch_buffer->conctact_island_dispatch.x = (sim_config->contact_island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+}
+
 [shader("compute")]
     [numthreads(1, 1, 1)] void
     entry_manifold_island_prefix_sum(uint3 pixel_i : SV_DispatchThreadID)
@@ -466,7 +487,7 @@
       Ptr<SimConfig>(CPS.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
-  if (index >= sim_config->island_count)
+  if (index >= sim_config->contact_island_count)
   {
     return;
   }
@@ -533,7 +554,7 @@
       Ptr<SimConfig>(CS.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
-  if (index >= sim_config->island_count)
+  if (index >= sim_config->contact_island_count)
   {
     return;
   }
@@ -622,7 +643,7 @@
       Ptr<SimConfig>(CSR.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
-  if (index >= sim_config->island_count)
+  if (index >= sim_config->contact_island_count)
   {
     return;
   }

@@ -122,6 +122,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_SBLI;
   std::shared_ptr<daxa::ComputePipeline> pipeline_MIB;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CIG;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_CID;
   std::shared_ptr<daxa::ComputePipeline> pipeline_MIPS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_IML;
   std::shared_ptr<daxa::ComputePipeline> pipeline_SMLI;

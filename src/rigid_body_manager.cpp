@@ -21,6 +21,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_SBLI = task_manager->create_compute(SortBodyLinksInIslandInfo{}.info);
     pipeline_MIB = task_manager->create_compute(ManifoldIslandBuilderInfo{}.info);
     pipeline_CIG = task_manager->create_compute(ContactIslandGatherInfo{}.info);
+    pipeline_CID = task_manager->create_compute(ContactIslandDispatcherInfo{}.info);
     pipeline_MIPS = task_manager->create_compute(ManifoldIslandPrefixSumInfo{}.info);
     pipeline_IML = task_manager->create_compute(ManifoldLink2IslandInfo{}.info);
     pipeline_SMLI = task_manager->create_compute(SortManifoldLinksInIslandInfo{}.info);
@@ -341,7 +342,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     ti.recorder.set_pipeline(*pipeline_MIB);
     ti.recorder.push_constant(ManifoldIslandBuilderPushConstants{.task_head = ti.attachment_shader_blob}); 
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(ManifoldIslandBuilderTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * COLLISION_DISPATCH_COUNT_OFFSET});
-    // ti.device.wait_idle();
   };
 
   using TTask_MIB = TaskTemplate<ManifoldIslandBuilderTaskHead::Task, decltype(user_callback_MIB)>;
@@ -375,12 +375,27 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_CGI); 
 
+  auto user_callback_CID = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_CID);
+    ti.recorder.push_constant(ContactIslandDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+
+  using TTask_CID = TaskTemplate<ContactIslandDispatcherTaskHead::Task, decltype(user_callback_CID)>;
+
+  // Instantiate the task using the template class
+  TTask_CID task_CID(std::array{
+                       daxa::attachment_view(ContactIslandDispatcherTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(ContactIslandDispatcherTaskHead::AT.sim_config, task_sim_config),
+                   },
+                   user_callback_CID);
+
   auto user_callback_MIPS = [this](daxa::TaskInterface ti, auto &self)
   {
     ti.recorder.set_pipeline(*pipeline_MIPS);
     ti.recorder.push_constant(ManifoldIslandPrefixSumPushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
-    // ti.device.wait_idle();
   };
 
   using TTask_MIPS = TaskTemplate<ManifoldIslandPrefixSumTaskHead::Task, decltype(user_callback_MIPS)>;
@@ -418,7 +433,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_SMLI);
     ti.recorder.push_constant(IslandBuilderSortManifoldLinkInIslandPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderSortManifoldLinkInIslandTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ISLAND_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderSortManifoldLinkInIslandTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_SMLI = TaskTemplate<IslandBuilderSortManifoldLinkInIslandTaskHead::Task, decltype(user_callback_SMLI)>;
@@ -436,7 +451,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_CPS);
     ti.recorder.push_constant(CollisionPreSolverPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionPreSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ISLAND_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionPreSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_CPS = TaskTemplate<CollisionPreSolverTaskHead::Task, decltype(user_callback_CPS)>;
@@ -456,7 +471,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_CS);
     ti.recorder.push_constant(CollisionSolverPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ISLAND_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_CS = TaskTemplate<CollisionSolverTaskHead::Task, decltype(user_callback_CS)>;
@@ -495,7 +510,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     if(solver_type == SimSolverType::PGS_SOFT) {
       ti.recorder.set_pipeline(*pipeline_CSR);
       ti.recorder.push_constant(CollisionSolverRelaxationPushConstants{.task_head = ti.attachment_shader_blob});
-      ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ISLAND_DISPATCH_COUNT_OFFSET});
+      ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
     }
   };
 
@@ -605,6 +620,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_SBLI);
   RB_TG.add_task(task_MIB);
   RB_TG.add_task(task_CGI);
+  RB_TG.add_task(task_CID);
   RB_TG.add_task(task_MIPS);
   RB_TG.add_task(task_IML);
   RB_TG.add_task(task_SMLI);
