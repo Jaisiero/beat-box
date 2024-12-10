@@ -33,6 +33,7 @@
 #define MAX std::max
 #define MIN std::min
 #define MAX_U32 std::numeric_limits<daxa_u32>::max()
+#define MAX_U64 std::numeric_limits<daxa_u64>::max()
 
 FORCE_INLINE daxa_f32vec3 operator-(const daxa_f32vec3& a, const daxa_f32vec3& b)
 {
@@ -129,6 +130,7 @@ static const daxa_f32 FLT_MAX = 3.402823466e+38F;
 static const daxa_f32 FLT_MIN = 1.175494351e-38F;
 static const daxa_f32 EPSILON = 1.192092896e-07F;
 static const daxa_u32 MAX_U32 = 0xFFFFFFFF;
+static const daxa_u64 MAX_U64 = 0xFFFFFFFFFFFFFFFF;
 static const daxa_f32 GOLDEN_RATIO = 1.61803398875F;
 #endif // __cplusplus
 

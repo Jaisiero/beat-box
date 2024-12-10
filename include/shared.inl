@@ -387,6 +387,8 @@ DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rig
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Light), lights)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Material), materials)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(ContactIsland), contact_islands)
 DAXA_DECL_TASK_HEAD_END
 
 struct RTPushConstants
@@ -527,6 +529,12 @@ struct ManifoldLinkIsland
   daxa_u32 manifold_index;
   daxa_u32 body_a_index;
   daxa_u32 body_b_index;
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+  daxa_u32 min_index()
+  {
+    return min(body_a_index, body_b_index);
+  }
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 };
 DAXA_DECL_BUFFER_PTR(ManifoldLinkIsland)
 
@@ -544,6 +552,7 @@ DAXA_DECL_BUFFER_PTR(Island)
 
 struct ContactIsland 
 {
+  daxa_u32 key;
   daxa_u32 body_island_index;
   daxa_u32 start_index;
   daxa_u32 max_count;

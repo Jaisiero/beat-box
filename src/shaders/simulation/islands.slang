@@ -427,7 +427,7 @@ private
     InterlockedAdd(*contact_island_count, 1, old_count);
     // write contact island inside range in atomic counter from island
     daxa_u32 contact_island_index = old_count;
-    contact_islands[contact_island_index] = ContactIsland(island_index, MAX_U32, manifold_count, 0);
+    contact_islands[contact_island_index] = ContactIsland(MAX_U64, island_index, MAX_U32, manifold_count, 0);
     islands[island_index].contact_island_index = contact_island_index;
   }
 
@@ -499,6 +499,14 @@ private
     }
   }
 
+  internal void compare_and_set_min_key(daxa_u32 key, daxa_u32 *min_key)
+  {
+    if (key < *min_key)
+    {
+      *min_key = key;
+    }
+  }
+
   void sort_manifold_links_in_island(daxa_u32 contact_island_index)
   {
 
@@ -511,6 +519,8 @@ private
     if (start_index + max_count > max_manifold_count)
       return;
 
+    daxa_u32 min_key = manifold_indices[start_index].min_index();
+
     // Sort body links in island
     for (daxa_u32 i = 0; i < max_count; i++)
     {
@@ -520,6 +530,8 @@ private
         if (compare_manifold_link(manifold_indices[start_index + j], manifold_indices[start_index + min_index]))
         {
           min_index = j;
+          let key = manifold_indices[start_index + min_index].min_index();
+          compare_and_set_min_key(key, &min_key);
         }
       }
 
@@ -530,5 +542,7 @@ private
         manifold_indices[start_index + min_index] = tmp;
       }
     }
+
+    contact_islands[contact_island_index].key = min_key;
   };
 };

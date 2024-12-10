@@ -91,6 +91,8 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
                   daxa::attachment_view(RayTracingTaskHead::AT.aabbs, accel_struct_mngr->task_aabb_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.lights, scene_manager->task_lights_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.materials, scene_manager->task_material_buffer),
+                  daxa::attachment_view(RayTracingTaskHead::AT.islands, rigid_body_manager->task_islands),
+                  daxa::attachment_view(RayTracingTaskHead::AT.contact_islands, rigid_body_manager->task_contact_islands),
               },
               user_callback);
 
@@ -120,9 +122,10 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   });
   
 
-  std::array<daxa::TaskBuffer, 10> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer,  gui_manager->task_vertex_buffer,
+  std::array<daxa::TaskBuffer, 12> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer,  gui_manager->task_vertex_buffer,
   gui_manager->task_line_vertex_buffer, gui_manager->task_axes_vertex_buffer,
-  scene_manager->task_material_buffer, task_ray_tracing_config, task_ray_tracing_config_host, scene_manager->task_lights_buffer};
+  scene_manager->task_material_buffer, task_ray_tracing_config, task_ray_tracing_config_host, scene_manager->task_lights_buffer, 
+  rigid_body_manager->task_islands, rigid_body_manager->task_contact_islands};
 
   std::array<daxa::TaskImage, 2> images = {task_swapchain_image, task_accumulation_buffer};
 
