@@ -165,7 +165,8 @@ enum RayTracingFlag : daxa_u32
 {
   RT_NONE = 0,
   RT_ACCUMULATE = 1 << 0,
-  RT_DEBUG = 1 << 1,
+  RT_SHOW_NORMALS = 1 << 1,
+  RT_SHOW_ISLANDS = 1 << 2,
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 RayTracingFlag  operator|(RayTracingFlag a, RayTracingFlag b)
@@ -220,6 +221,23 @@ struct RayTracingConfig {
   daxa_u64 current_frame_index;
   daxa_u64 frame_count;
   daxa_u32 light_count;
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+
+  [mutating] bool has_flag(RayTracingFlag flag)
+  {
+    return (this.flags & flag) != 0;
+  }
+
+  [mutating] void set_flag(RayTracingFlag flag)
+  {
+    this.flags |= flag;
+  }
+
+  [mutating] void clear_flag(RayTracingFlag flag)
+  {
+    this.flags &= ~flag;
+  }
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 };
 DAXA_DECL_BUFFER_PTR(RayTracingConfig)
 
@@ -227,6 +245,7 @@ DAXA_DECL_BUFFER_PTR(RayTracingConfig)
 struct RigidBody
 {
   RigidBodyFlag flags;
+  daxa_u32 island_index;
   daxa_u32 active_index;
   daxa_u32 material_index;
 #if defined(BB_DEBUG)
@@ -630,6 +649,8 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(DispatchBuffer), dispat
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(BodyLink), scratch_body_links)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ActiveRigidBody), active_rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_DECL_TASK_HEAD_END
 
 struct IslandBuilderPushConstants

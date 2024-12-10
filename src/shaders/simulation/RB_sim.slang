@@ -227,8 +227,14 @@
 
   Ptr<Island> islands =
       Ptr<Island>(IB.task_head.islands);
+  
+  Ptr<ActiveRigidBody> active_rigid_bodies =
+      Ptr<ActiveRigidBody>(IB.task_head.active_rigid_bodies);
+      
+  Ptr<RigidBody> rigid_bodies =
+      Ptr<RigidBody>(IB.task_head.rigid_bodies);
 
-  IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands);
+  IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, active_rigid_bodies, sim_config->island_count, islands, sim_config->rigid_body_count, rigid_bodies);
 
   builder.expand_island(index);
 }
@@ -783,12 +789,13 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   RigidBody r = RB_update.task_head.rigid_bodies[index];
   RigidBody r_copy = RB_update.task_head.rigid_bodies_update[index];
 
+  r_copy.island_index = MAX_U32;
+  r_copy.active_index = MAX_U32;
   r_copy.position = r.position;
   r_copy.rotation = r.rotation;
   r_copy.velocity = r.velocity;
   r_copy.omega = r.omega;
   r_copy.flags = r.flags;
-  r_copy.active_index = MAX_U32;
 #if defined(BB_DEBUG)
   r_copy.face_collided = r.face_collided;
 #endif // BB_DEBUG

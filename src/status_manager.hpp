@@ -172,6 +172,26 @@ struct StatusManager
       std::cout << "Accumulation enabled" << std::endl;
     }
   }
+  
+  bool is_showing_islands()
+  {
+    return show_islands;
+  }
+
+  void switch_show_islands()
+  {
+    show_islands = !show_islands;
+#if defined(BB_DEBUG)
+    if(show_islands)
+    {
+      std::cout << "Showing islands" << std::endl;
+    }
+    else
+    {
+      std::cout << "Hiding islands" << std::endl;
+    }
+#endif
+  }
 
   daxa_u64 get_accumulation_count()
   {
@@ -216,6 +236,8 @@ private:
   bool warm_starting = true;
   // flag for accumulation
   bool accumulation = false;
+  // flag for showing islands
+  bool show_islands = false;
   // double buffering counter
   daxa_u32 double_buffering_counter = 0;
   // frame index

@@ -44,8 +44,11 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
       .task = [this](daxa::TaskInterface const &ti)
       {
         auto const accumulating = status_manager->is_accumulating();
+        auto const show_islands = status_manager->is_showing_islands();
+        auto flags = accumulating ? RayTracingFlag::RT_ACCUMULATE : RayTracingFlag::RT_NONE;
+        flags |= show_islands ? RayTracingFlag::RT_SHOW_ISLANDS : RayTracingFlag::RT_NONE;
         ti.device.buffer_host_address_as<RayTracingConfig>(ti.get(task_ray_tracing_config_host).ids[0]).value()[0] = RayTracingConfig{
-            .flags = accumulating ? RayTracingFlag::RT_ACCUMULATE : RayTracingFlag::RT_NONE,
+            .flags = flags,
             .max_bounces = MAX_BOUNCES,
             .current_frame_index = status_manager->get_frame_count(),
             .frame_count = accumulating ? status_manager->get_accumulation_count() : 0,

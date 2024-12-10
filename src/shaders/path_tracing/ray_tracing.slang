@@ -212,6 +212,38 @@ daxa_f32vec3 get_face_color(BoxFace face)
   }
 }
 
+daxa_f32vec3 get_color_by_island_index(daxa_u32 island_index)
+{
+  island_index %= 6;
+
+  daxa_f32vec3 color = daxa_f32vec3(0.0);
+  switch (island_index)
+  {
+  case 0:
+    color = daxa_f32vec3(1.0, 0.0, 0.0);
+    break;
+  case 1:
+    color = daxa_f32vec3(0.0, 1.0, 0.0);
+    break;
+  case 2:
+    color = daxa_f32vec3(0.0, 0.0, 1.0);
+    break;
+  case 3:
+    color = daxa_f32vec3(1.0, 1.0, 0.0);
+    break;
+  case 4:
+    color = daxa_f32vec3(1.0, 0.0, 1.0);
+    break;
+  case 5:
+    color = daxa_f32vec3(0.0, 1.0, 1.0);
+    break;
+  default:
+    color = daxa_f32vec3(0.0);
+    break;
+  }
+  return color;
+}
+
 [shader("closesthit")] void closest_hit(inout HitPayload payload, in MyAttributes attr)
 {
     // Get the hit information
@@ -230,27 +262,32 @@ daxa_f32vec3 get_face_color(BoxFace face)
     // Set the payload
     payload.position = hit_location;
     payload.normal = normalize(normal);
-#if BB_RT_DEBUG
-    // get face by normal
-    BoxFace face = get_face_by_normal(normal);
-    if (r->has_flag(RigidBodyFlag::COLLIDING))
-    {
-      if (r->is_face_colliding(face))
+    var ray_tracing_config = p.task_head.ray_tracing_config;
+
+    if(ray_tracing_config.has_flag(RayTracingFlag::RT_SHOW_NORMALS)) {
+      // get face by normal
+      BoxFace face = get_face_by_normal(normal);
+      if (r->has_flag(RigidBodyFlag::COLLIDING))
       {
-        payload.albedo = collision_material_color;
+        if (r->is_face_colliding(face))
+        {
+          payload.albedo = collision_material_color;
+        }
+        else
+        {
+          payload.albedo = get_face_color(face);
+        }
       }
       else
       {
-        payload.albedo = m.albedo;
+        payload.albedo = get_face_color(face);
       }
+    } else if(ray_tracing_config.has_flag(RayTracingFlag::RT_SHOW_ISLANDS)) {
+      payload.albedo = r->island_index == MAX_U32 ? m.albedo : get_color_by_island_index(r->island_index);
     }
-    else
-    {
+    else {
       payload.albedo = m.albedo;
     }
-#else
-    payload.albedo = m.albedo;
-#endif
     payload.instance_index = instance_index;
     payload.primitive_index = prim_index;
     payload.emission = m.emission; // Add emission to the payload

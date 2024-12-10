@@ -120,6 +120,12 @@ void InputManager::on_key(i32 key, i32 action)
       status_mngr->set_solver(SimSolverType::PGS_SOFT);
     }
     break;
+  case GLFW_KEY_9:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->switch_show_islands();
+    }
+    break;
   case GLFW_KEY_P:
     if (action == GLFW_PRESS)
     {

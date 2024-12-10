@@ -11,6 +11,8 @@ private
 private
   daxa_u32 max_manifold_count;
 private
+  daxa_u32 max_rigid_bodies;
+private
   Ptr<BodyLink> body_links;
 private
   Ptr<Island> islands;
@@ -18,6 +20,10 @@ private
   Ptr<BodyLinkIsland> body_indices;
 private
   Ptr<ManifoldLinkIsland> manifold_indices;
+private
+  Ptr<ActiveRigidBody> active_rigid_bodies;
+private
+  Ptr<RigidBody> rigid_bodies;
 
   __init(Ptr<BodyLink> links, Ptr<Island> island_storage)
   {
@@ -33,6 +39,7 @@ private
     max_active_bodies = active_body_count;
     island_count = 0;
     max_manifold_count = 0;
+    max_rigid_bodies = 0;
     body_links = links;
   }
 
@@ -41,6 +48,7 @@ private
     max_active_bodies = 0;
     island_count = island_num;
     max_manifold_count = 0;
+    max_rigid_bodies = 0;
     islands = island_storage;
   }
 
@@ -49,6 +57,7 @@ private
     max_active_bodies = active_body_count;
     island_count = island_num;
     max_manifold_count = 0;
+    max_rigid_bodies = 0;
     body_links = links;
     islands = island_storage;
   }
@@ -58,6 +67,7 @@ private
     max_active_bodies = active_body_count;
     island_count = island_num;
     max_manifold_count = 0;
+    max_rigid_bodies = 0;
     body_links = links;
     islands = island_storage;
     body_indices = indices;
@@ -68,6 +78,7 @@ private
     max_active_bodies = active_body_count;
     island_count = island_num;
     max_manifold_count = 0;
+    max_rigid_bodies = 0;
     islands = island_storage;
     body_indices = indices;
   }
@@ -77,9 +88,22 @@ private
     max_active_bodies = active_body_count;
     island_count = island_num;
     max_manifold_count = manifold_count;
+    max_rigid_bodies = 0;
     body_links = links;
     islands = island_storage;
     manifold_indices = indices;
+  }
+
+  __init(daxa_u32 active_body_count, Ptr<BodyLink> links, Ptr<ActiveRigidBody> active_rigid_body_storage, daxa_u32 island_num, Ptr<Island> island_storage, daxa_u32 rigid_body_count, Ptr<RigidBody> rigid_body_storage)
+  {
+    max_active_bodies = active_body_count;
+    island_count = island_num;
+    max_manifold_count = 0;
+    max_rigid_bodies = rigid_body_count;
+    body_links = links;
+    islands = island_storage;
+    active_rigid_bodies = active_rigid_body_storage;
+    rigid_bodies = rigid_body_storage;
   }
 
   __init(daxa_u32 island_num, Ptr<Island> island_storage, daxa_u32 manifold_count, Ptr<ManifoldLinkIsland> indices)
@@ -87,6 +111,7 @@ private
     max_active_bodies = 0;
     island_count = island_num;
     max_manifold_count = manifold_count;
+    max_rigid_bodies = 0;
     islands = island_storage;
     manifold_indices = indices;
   }
@@ -237,6 +262,12 @@ private
     {
       daxa_u32 old_count = 0;
       InterlockedAdd(islands[island_index].max_count, 1, old_count);
+
+      daxa_u32 rigid_body_index = active_rigid_bodies[index].rigid_body_index;
+      if(rigid_body_index < max_rigid_bodies)
+      {
+        rigid_bodies[rigid_body_index].island_index = island_index;
+      }
     }
   }
 

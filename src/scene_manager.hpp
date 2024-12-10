@@ -225,8 +225,8 @@ public:
     std::random_device rd; // obtain a random number from hardware
     gen = std::mt19937(rd()); // seed the generator
   
-    scene_1();
-    // scene_2();
+    // scene_1();
+    scene_2();
 
     std::uniform_int_distribution<> distr(1, materials.size()-1); // define the range
 
@@ -235,6 +235,7 @@ public:
     daxa_u32 i = 0;
     for(auto &rigid_body : rigid_bodies)
     {
+      rigid_body.island_index = MAX_U32;
       rigid_body.active_index = MAX_U32;
       rigid_body.inv_mass = rigid_body.mass == 0.0f ? 0.0f :
       1.0f / rigid_body.mass;

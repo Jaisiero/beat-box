@@ -295,6 +295,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        daxa::attachment_view(IslandBuilderTaskHead::AT.sim_config, task_sim_config),
                        daxa::attachment_view(IslandBuilderTaskHead::AT.scratch_body_links, task_scratch_body_links),
                        daxa::attachment_view(IslandBuilderTaskHead::AT.islands, task_islands),
+                       daxa::attachment_view(IslandBuilderTaskHead::AT.active_rigid_bodies, task_active_rigid_bodies),
+                       daxa::attachment_view(IslandBuilderTaskHead::AT.rigid_bodies, task_rigid_bodies),
                    },
                    user_callback_IB);
 
