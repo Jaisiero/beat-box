@@ -65,7 +65,7 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
 
   for(auto f = 0; f < DOUBLE_BUFFERING; ++f)
     axes_vertex_buffer[f] = gpu->device.create_buffer({
-      .size = sizeof(GUIVertexLine) * MAX_VERTEX_COUNT,
+      .size = sizeof(GUIVertexLine) * MAX_AXIS_COUNT,
       .name = "GUI axes vertex buffer " + std::to_string(f),
     });
 

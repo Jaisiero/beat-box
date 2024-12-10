@@ -20,17 +20,18 @@ using namespace daxa::types;
 
 BB_NAMESPACE_BEGIN
 
-static constexpr u32 MAX_VERTEX_COUNT = 1024;
-
 static constexpr u32 DOUBLE_BUFFERING = 2;
 
 static constexpr f32 TIME_STEP = 0.01667f;
 static constexpr f32 GRAVITY = 9.81f;
 static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
 static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
+static constexpr u32 MAX_COLLISION_COUNT = MAX_RIGID_BODY_COUNT * (MAX_RIGID_BODY_COUNT - 1) / 2;
+static constexpr u32 MAX_VERTEX_COUNT = MAX_RIGID_BODY_COUNT * 8;
+static constexpr u32 MAX_AXIS_COUNT = MAX_RIGID_BODY_COUNT * 3;
 static constexpr u32 MAX_LIGHT_COUNT = 1024;
 static constexpr u32 MAX_MATERIAL_COUNT = 1024;
-static constexpr u32 DEFAULT_ITERATION_COUNT = 4;
+static constexpr u32 DEFAULT_ITERATION_COUNT = 5;
 
 enum StageIndex : u32
 {

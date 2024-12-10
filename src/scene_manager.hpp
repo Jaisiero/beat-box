@@ -109,14 +109,8 @@ public:
     L_TG = task_manager->create_task_graph("Light Upload", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
   }
 
-  bool load_scene()
-  {
-    if (!initialized)
-    {
-      return false;
-    }
-
-    // TODO: temporary scene
+  // TODO: temporary scenes
+  void scene_1() {
     materials = {
       {
         .albedo = daxa_f32vec3(0.1, 0.1, 0.1),
@@ -169,10 +163,71 @@ public:
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(6.9, 2.5, 4.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.2, .friction = 0.3}, 
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(5.8, 3.5, 4.5), .rotation = Quaternion(0.0000f, 1.0000f, 0.0000f, -0.5000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.1, .friction = 0.3}
     };
-  
+  }
 
+  void scene_2() {
+    materials = {
+      {
+        .albedo = daxa_f32vec3(0.1, 0.1, 0.1),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.0, 0.0),
+        .emission = daxa_f32vec3(10.0, 10.0, 10.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0, 1.0, 0.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0, 0.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 1.0, 0.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0, 1.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+    };
+
+    auto const n_body = 500u;
+
+    rigid_bodies.reserve(n_body);
+
+    rigid_bodies = {
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, -50.0, 0.0), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-50.0, -50.0, -50.0), .maximum = daxa_f32vec3(50.0, 50.0, 50.0), .mass = 0.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5}
+    };
+    
+    std::uniform_real_distribution<float> x_distr(-15.0, 15.0); // define the range
+    std::uniform_real_distribution<float> y_distr(2.0, 7.0); // define the range
+    std::uniform_real_distribution<float> z_distr(-15.0, 15.0); // define the range
+
+    for(int i = 0; i < n_body; ++i)
+    {
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(x_distr(gen), y_distr(gen), z_distr(gen)), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5});
+    }
+  }
+
+  bool load_scene()
+  {
+    if (!initialized)
+    {
+      return false;
+    }
+    
     std::random_device rd; // obtain a random number from hardware
-    std::mt19937 gen(rd()); // seed the generator
+    gen = std::mt19937(rd()); // seed the generator
+  
+    scene_1();
+    // scene_2();
+
     std::uniform_int_distribution<> distr(1, materials.size()-1); // define the range
 
     aabb.clear();
@@ -283,6 +338,7 @@ private:
   // TaskGraph for light upload
   TaskGraph light_TG;
 
+  std::mt19937 gen;
 };
 
 BB_NAMESPACE_END

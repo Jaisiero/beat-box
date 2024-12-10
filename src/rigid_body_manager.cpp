@@ -94,7 +94,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .name = "sim_config_" + std::to_string(i),
     });
     collisions[i] = device.create_buffer({
-        .size = sizeof(Manifold) * MAX_RIGID_BODY_COUNT * 6, // TODO: Change to a more reasonable size
+        .size = sizeof(Manifold) * MAX_COLLISION_COUNT,
         .name = "collisions" + std::to_string(i),
     });
     active_rigid_bodies[i] = device.create_buffer({
@@ -110,7 +110,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .name = "body_links" + std::to_string(i),
     });
     manifold_links[i] = device.create_buffer({
-        .size = sizeof(ManifoldLinkIsland) * MAX_RIGID_BODY_COUNT * 6, // TODO: Change to a more reasonable size
+        .size = sizeof(ManifoldLinkIsland) * MAX_COLLISION_COUNT,
         .name = "manifold_links" + std::to_string(i),
     });
     island_buffer[i] = device.create_buffer({
