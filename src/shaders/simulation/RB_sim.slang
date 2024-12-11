@@ -426,9 +426,19 @@
   Ptr<ContactIsland> contact_islands =
       Ptr<ContactIsland>(MIPS.task_head.contact_islands);
 
-  ContactIslandBuilder builder = ContactIslandBuilder(&sim_config->contact_island_count, contact_islands);
+  Ptr<Island> islands =
+      Ptr<Island>(MIPS.task_head.islands);
 
-  builder.manifold_prefix_sum_islands();
+  ContactIslandBuilder builder = ContactIslandBuilder(sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands);
+
+  let contact_collision_count = builder.manifold_prefix_sum_islands();
+  
+#if defined(BB_DEBUG)
+  if(contact_collision_count != sim_config->g_c_info.collision_count)
+  {
+    printf("Manifold prefix sum failed, contact_collision_count: %d, collision_count: %d\n", contact_collision_count, sim_config->g_c_info.collision_count);
+  }
+#endif // BB_DEBUG
 }
 
 
@@ -520,18 +530,24 @@
       Ptr<SimConfig>(CPS.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
+#if defined(BB_SIM_DEBUG)
+  if (index >= 1)
+#else 
   if (index >= sim_config->contact_island_count)
+#endif // BB_SIM_DEBUG
   {
     return;
   }
-
+  
+#if defined(BB_SIM_DEBUG)
+  for(daxa_u32 manifold_index = 0; manifold_index < sim_config->g_c_info.collision_count; ++manifold_index)
+  {
+#else 
   Ptr<ContactIsland> islands =
       Ptr<ContactIsland>(CPS.task_head.contact_islands);
 
   Ptr<ManifoldLinkIsland> manifold_links =
       Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
-
-  // printf("Pre solver collision count %d, tmp_collision_count: %d\n", sim_config->g_c_info.collision_count, sim_config->g_c_info.tmp_collision_count);
   
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
@@ -539,8 +555,7 @@
   if(start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
   {
 #if defined(BB_DEBUG)
-    // daxa_u32 count = islands[index].max_count;
-    // printf("Collision pre solver failed index %d, start_index %d, max_count %d, count: %d\n", index, start_index, max_count, count);
+    printf("Collision pre solver failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
 #endif // BB_DEBUG
     return;
   }
@@ -549,6 +564,7 @@
   {
 
     daxa_u32 manifold_index = manifold_links[m].manifold_index;
+#endif // BB_SIM_DEBUG
 
     Manifold manifold =
       CPS.task_head.collisions[manifold_index];
@@ -587,16 +603,25 @@
       Ptr<SimConfig>(CS.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
+#if defined(BB_SIM_DEBUG)
+  if (index >= 1)
+#else 
   if (index >= sim_config->contact_island_count)
+#endif // BB_SIM_DEBUG
   {
     return;
   }
 
+    
+#if defined(BB_SIM_DEBUG)
+  for(daxa_u32 manifold_index = 0; manifold_index < sim_config->g_c_info.collision_count; ++manifold_index)
+  {
+#else 
   Ptr<ContactIsland> islands =
-      Ptr<ContactIsland>(CS.task_head.contact_islands);
+      Ptr<ContactIsland>(CPS.task_head.contact_islands);
 
   Ptr<ManifoldLinkIsland> manifold_links =
-      Ptr<ManifoldLinkIsland>(CS.task_head.manifold_links);
+      Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
   
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
@@ -604,7 +629,7 @@
   if(start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
   {
 #if defined(BB_DEBUG)
-    // printf("Collision solver failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
+    printf("Collision solver failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
 #endif // BB_DEBUG
     return;
   }
@@ -613,6 +638,7 @@
   {
 
     daxa_u32 manifold_index = manifold_links[m].manifold_index;
+#endif // BB_SIM_DEBUG
 
     Manifold manifold =
       CS.task_head.collisions[manifold_index];
@@ -676,16 +702,26 @@
       Ptr<SimConfig>(CSR.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
+  
+#if defined(BB_SIM_DEBUG)
+  if (index >= 1)
+#else 
   if (index >= sim_config->contact_island_count)
+#endif // BB_SIM_DEBUG
   {
     return;
   }
 
+    
+#if defined(BB_SIM_DEBUG)
+  for(daxa_u32 manifold_index = 0; manifold_index < sim_config->g_c_info.collision_count; ++manifold_index)
+  {
+#else 
   Ptr<ContactIsland> islands =
-      Ptr<ContactIsland>(CSR.task_head.contact_islands);
+      Ptr<ContactIsland>(CPS.task_head.contact_islands);
 
   Ptr<ManifoldLinkIsland> manifold_links =
-      Ptr<ManifoldLinkIsland>(CSR.task_head.manifold_links);
+      Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
   
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
@@ -693,7 +729,7 @@
   if(start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
   {
 #if defined(BB_DEBUG)
-    // printf("Collision solver relaxation failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
+    printf("Collision solver relaxation failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
 #endif // BB_DEBUG
     return;
   }
@@ -702,6 +738,7 @@
   {
 
     daxa_u32 manifold_index = manifold_links[m].manifold_index;
+#endif // BB_SIM_DEBUG
 
     Manifold manifold =
       CSR.task_head.collisions[manifold_index];

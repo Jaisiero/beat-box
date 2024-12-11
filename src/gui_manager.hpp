@@ -85,7 +85,7 @@ struct GUIAxesDrawTask : GUIAxesTaskHead::Task
   std::shared_ptr<StatusManager> status_manager = {};
   void callback(daxa::TaskInterface ti)
   {
-    if(status_manager->is_gui_enabled()) {
+    if(status_manager->is_gui_enabled() && status_manager->is_axis_enabled()) {
       daxa::ImageInfo color_img_info = ti.info(AT.render_target).value();
       auto const size_x = color_img_info.size.x;
       auto const size_y = color_img_info.size.y;

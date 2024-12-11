@@ -17,6 +17,7 @@ static const daxa_f32 BIAS_FACTOR = 0.2f;
 #define BB_DEBUG 1
 #if defined(BB_DEBUG) 
 // #define BB_RT_DEBUG 1  
+// #define BB_SIM_DEBUG 1
 #endif // BB_DEBUG
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
@@ -564,7 +565,7 @@ DAXA_DECL_BUFFER_PTR(ContactIsland)
 DAXA_DECL_TASK_HEAD_BEGIN(ResetBodyLinkTaskHead)
 DAXA_TH_BUFFER_PTR(HOST_TRANSFER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ActiveRigidBody), active_rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(BodyLink), scratch_body_links)
 DAXA_DECL_TASK_HEAD_END
@@ -588,7 +589,7 @@ struct RigidBodyDispatcherPushConstants
 
 // BROAD PHASE
 DAXA_DECL_TASK_HEAD_BEGIN(BroadPhaseTaskHead)
-DAXA_TH_BUFFER_PTR(HOST_TRANSFER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), previous_sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
@@ -614,21 +615,11 @@ struct CollisionSolverDispatcherPushConstants
 };
 
 // COMPUTE_SHADER_READ_WRITE_CONCURRENT
-DAXA_DECL_TASK_HEAD_BEGIN(IslandDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
-DAXA_DECL_TASK_HEAD_END
-
-struct IslandDispatcherPushConstants
-{
-  DAXA_TH_BLOB(IslandDispatcherTaskHead, task_head)
-};
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
-DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
 DAXA_DECL_TASK_HEAD_END
 
 
@@ -636,8 +627,6 @@ struct RigidBodySimPushConstants
 {
   DAXA_TH_BLOB(RigidBodySimTaskHead, task_head)
 };
-
-
 
 
 // ISLANDS
@@ -651,6 +640,16 @@ DAXA_DECL_TASK_HEAD_END
 struct IslandCounterPushConstants
 {
   DAXA_TH_BLOB(IslandCounterTaskHead, task_head)
+};
+
+DAXA_DECL_TASK_HEAD_BEGIN(IslandDispatcherTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_DECL_TASK_HEAD_END
+
+struct IslandDispatcherPushConstants
+{
+  DAXA_TH_BLOB(IslandDispatcherTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(IslandBuilderTaskHead)
@@ -720,7 +719,7 @@ struct ManifoldIslandBuilderPushConstants
 
 DAXA_DECL_TASK_HEAD_BEGIN(ContactIslandGatherTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Island), islands)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ContactIsland), contact_islands)
 DAXA_DECL_TASK_HEAD_END
@@ -744,6 +743,7 @@ struct ContactIslandDispatcherPushConstants
 DAXA_DECL_TASK_HEAD_BEGIN(ManifoldIslandPrefixSumTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ContactIsland), contact_islands)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Island), islands)
 DAXA_DECL_TASK_HEAD_END
 
 struct ManifoldIslandPrefixSumPushConstants

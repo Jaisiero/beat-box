@@ -102,6 +102,12 @@ void InputManager::on_key(i32 key, i32 action)
       status_mngr->switch_gui_enabled();
     }
     break;
+  case GLFW_KEY_GRAVE_ACCENT:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->switch_axis_enabled();
+    }
+    break;
   case GLFW_KEY_0:
     if (action == GLFW_PRESS)
     {

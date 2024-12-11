@@ -908,6 +908,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
       // Add collision to buffer
       collisions[index] = manifold;
 
+#if !defined(BB_SIM_DEBUG)
       // ISLAND BUILDER
       // Get active rigid body indices
       daxa_u32 in_first = r->has_flag(RigidBodyFlag::DYNAMIC) ? r->active_index : MAX_U32;
@@ -916,6 +917,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
       // Link the bodies
       island_builder.link_bodies(in_first, in_second);
       // ISLAND BUILDER
+#endif // BB_SIM_DEBUG
 
 
 #if defined(BB_DEBUG)

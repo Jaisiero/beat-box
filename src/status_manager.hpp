@@ -7,6 +7,19 @@
 
 BB_NAMESPACE_BEGIN
 
+static std::string sim_solver_type_to_string(SimSolverType type)
+{
+  switch (type)
+  {
+  case SimSolverType::PGS:
+    return "PGS";
+  case SimSolverType::PGS_SOFT:
+    return "PGS_SOFT";
+  default:
+    return "UNKNOWN";
+  }
+}
+
 struct StatusManager
 {
 
@@ -125,6 +138,16 @@ struct StatusManager
     }
   }
 
+  bool is_axis_enabled()
+  {
+    return axes_enabled;
+  }
+
+  void switch_axis_enabled()
+  {
+    axes_enabled = !axes_enabled;
+  }
+
   void switch_warm_starting()
   {
     warm_starting = !warm_starting;
@@ -211,6 +234,7 @@ struct StatusManager
   void set_solver(SimSolverType s)
   {
     rigid_body_manager->set_sim_type(s);
+    std::cout << "Solver set to " << sim_solver_type_to_string(s) << std::endl;
   };
 
 
@@ -229,7 +253,9 @@ private:
   // update simulation buffer
   bool update_sim_buffer = false;
   // flag for gui
-  bool gui_enabled = true;
+  bool gui_enabled = false;
+  // flag for axes display
+  bool axes_enabled = false;
   // flag for advection
   bool advection = true;
   // flag for warm starting

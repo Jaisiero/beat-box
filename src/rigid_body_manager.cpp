@@ -420,6 +420,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_MIPS task_MIPS(std::array{
                            daxa::attachment_view(ManifoldIslandPrefixSumTaskHead::AT.sim_config, task_sim_config),
                            daxa::attachment_view(ManifoldIslandPrefixSumTaskHead::AT.contact_islands, task_contact_islands),
+                           daxa::attachment_view(ManifoldIslandPrefixSumTaskHead::AT.islands, task_islands),
                        },
                        user_callback_MIPS);
 
@@ -558,7 +559,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                               daxa::attachment_view(RigidBodySimTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                               daxa::attachment_view(RigidBodySimTaskHead::AT.sim_config, task_sim_config),
                               daxa::attachment_view(RigidBodySimTaskHead::AT.rigid_bodies, task_rigid_bodies),
-                              daxa::attachment_view(RigidBodySimTaskHead::AT.aabbs, accel_struct_mngr->task_aabb_buffer),
                           },
                           user_callback_advect);
 
