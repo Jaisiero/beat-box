@@ -171,6 +171,14 @@ daxa::TlasId AccelerationStructureManager::get_tlas()
   return tlas[renderer_manager->get_frame_index()];
 }
 
+daxa::BufferId AccelerationStructureManager::get_previous_rigid_body_buffer()
+{
+  if(!initialized) {
+    return {};
+  }
+  return rigid_body_buffer[renderer_manager->get_previous_frame_index()];
+}
+
 daxa::BufferId AccelerationStructureManager::get_rigid_body_buffer()
 {
   if(!initialized) {

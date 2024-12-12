@@ -248,6 +248,7 @@ struct RigidBody
   RigidBodyFlag flags;
   daxa_u32 island_index;
   daxa_u32 active_index;
+  daxa_u32 manifold_node_index;
   daxa_u32 material_index;
 #if defined(BB_DEBUG)
   daxa_u32 face_collided;
@@ -464,6 +465,7 @@ struct SimConfig
   daxa_u32 active_rigid_body_count;
   daxa_u32 island_count; // atomic add
   daxa_u32 contact_island_count; // atomic add
+  daxa_u32 manifold_node_count; // atomic add
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
@@ -511,6 +513,13 @@ struct ActiveRigidBody
   daxa_u32 rigid_body_index;
 };
 DAXA_DECL_BUFFER_PTR(ActiveRigidBody)
+
+
+struct ManifoldNode {
+    daxa_u32 manifold_index;       // Index in collisions[]
+    daxa_i32 next;                 // Index of next node or -1 if end
+};
+DAXA_DECL_BUFFER_PTR(ManifoldNode)
 
 struct BodyLink 
 {
@@ -593,7 +602,10 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(DispatchBuffer), dispat
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), previous_sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ManifoldNode), rigid_body_link_manifolds)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), previous_rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(ManifoldNode), previous_rigid_body_link_manifolds)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(Manifold), old_collisions)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(BodyLink), scratch_body_links)
 DAXA_DECL_TASK_HEAD_END
@@ -620,6 +632,8 @@ DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), previous_rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ManifoldNode), previous_rigid_body_link_manifolds)
 DAXA_DECL_TASK_HEAD_END
 
 

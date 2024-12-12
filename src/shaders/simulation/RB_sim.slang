@@ -96,17 +96,30 @@
 
   Ptr<RigidBody> rigid_bodies =
       Ptr<RigidBody>(BP.task_head.rigid_bodies);
+  
+  Ptr<RigidBody> previous_rigid_bodies =
+      Ptr<RigidBody>(BP.task_head.previous_rigid_bodies);
+
+  Ptr<ManifoldNode> rigid_body_link_manifolds =
+      Ptr<ManifoldNode>(BP.task_head.rigid_body_link_manifolds);
 
   Ptr<Manifold> collisions =
-      Ptr<Manifold>(BP.task_head.collisions);
+      Ptr<Manifold>(BP.task_head.collisions); 
+      
+  Ptr<ManifoldNode> previous_rigid_body_link_manifolds =
+      Ptr<ManifoldNode>(BP.task_head.previous_rigid_body_link_manifolds);
 
   Ptr<Manifold> old_collisions =
       Ptr<Manifold>(BP.task_head.old_collisions);
 
   Ptr<BodyLink> body_links =
       Ptr<BodyLink>(BP.task_head.scratch_body_links);
+  
+ 
 
-  broad_phase(index, rigid_bodies, sim_config, previous_sim_config, collisions, old_collisions, body_links);
+  
+
+  broad_phase(index, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collisions, previous_rigid_bodies, previous_rigid_body_link_manifolds, old_collisions, body_links);
 
 #if defined(BB_DEBUG)
   // if(index == 0)
@@ -124,18 +137,24 @@
   Ptr<SimConfig> sim_config =
       Ptr<SimConfig>(RB_sim.task_head.sim_config);
 
-  if (pixel_i.x >= sim_config->rigid_body_count)
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->rigid_body_count)
   {
     return;
   }
 
   Ptr<RigidBody> r =
-      Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[pixel_i.x]);
+      Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[index]);
+
+  Ptr<RigidBody> p_r =
+      Ptr<RigidBody>(&RB_sim.task_head.previous_rigid_bodies[index]);
 
   if(sim_config->has_flag(SimFlag::ADVECTION))
   {
     r->advect(sim_config);
   }
+
+  p_r->manifold_node_index = MAX_U32;
 }
 
 

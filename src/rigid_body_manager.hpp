@@ -70,7 +70,10 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config"}};
   daxa::TaskBuffer task_old_sim_config{{.initial_buffers = {}, .name = "RB_old_sim_config"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
-  daxa::TaskBuffer task_next_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
+  daxa::TaskBuffer task_previous_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
+  daxa::TaskBuffer task_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "rigid_body_link_manifold"}};
+  daxa::TaskBuffer task_previous_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "previous_rigid_body_link_manifold"}};
+  daxa::TaskBuffer task_next_rigid_bodies{{.initial_buffers = {}, .name = "RB_next_task"}};
   daxa::TaskBuffer task_collisions{{.initial_buffers = {}, .name = "RB_collisions"}};
   daxa::TaskBuffer task_old_collisions{{.initial_buffers = {}, .name = "RB_old_collisions"}};
   daxa::TaskBuffer task_active_rigid_bodies{{.initial_buffers = {}, .name = "RB_active_rigid_bodies"}};
@@ -151,6 +154,7 @@ private:
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};
+  daxa::BufferId rigid_body_link_manifolds[DOUBLE_BUFFERING] = {};
   daxa::BufferId body_links[DOUBLE_BUFFERING] = {};
   daxa::BufferId manifold_links[DOUBLE_BUFFERING] = {};
   daxa::BufferId scratch_body_links[DOUBLE_BUFFERING] = {};

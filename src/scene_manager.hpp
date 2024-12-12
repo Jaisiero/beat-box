@@ -245,7 +245,8 @@ public:
       },
     };
 
-    auto const n_body = 250u;
+    // auto const n_body = 250u;
+    auto const n_body = 500u;
 
     rigid_bodies.reserve(n_body);
 
@@ -370,6 +371,7 @@ public:
     for(auto &rigid_body : rigid_bodies)
     {
       rigid_body.island_index = MAX_U32;
+      rigid_body.manifold_node_index = MAX_U32;
       rigid_body.active_index = MAX_U32;
       rigid_body.inv_mass = rigid_body.mass == 0.0f ? 0.0f :
       1.0f / rigid_body.mass;

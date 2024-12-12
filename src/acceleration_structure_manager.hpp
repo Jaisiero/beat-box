@@ -37,6 +37,7 @@ struct AccelerationStructureManager
   void free_accel_structs();
 
   daxa::TlasId get_tlas();
+  daxa::BufferId get_previous_rigid_body_buffer();
   daxa::BufferId get_rigid_body_buffer();
   daxa::BufferId get_next_rigid_body_buffer();
 
