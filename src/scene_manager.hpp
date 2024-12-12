@@ -140,6 +140,30 @@ public:
         .albedo = daxa_f32vec3(0.0, 1.0, 1.0),
         .emission = daxa_f32vec3(0.0, 0.0, 0.0),
       },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.5, 0.5),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.5, 1.0, 0.5),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.5, 0.5, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.5, 1.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.5, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 1.0, 0.5),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
     };
 
     rigid_bodies = {
@@ -195,9 +219,33 @@ public:
         .albedo = daxa_f32vec3(0.0, 1.0, 1.0),
         .emission = daxa_f32vec3(0.0, 0.0, 0.0),
       },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.5, 0.5),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.5, 1.0, 0.5),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.5, 0.5, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.5, 1.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.5, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 1.0, 0.5),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
     };
 
-    auto const n_body = 500u;
+    auto const n_body = 250u;
 
     rigid_bodies.reserve(n_body);
 
@@ -215,6 +263,91 @@ public:
     }
   }
 
+  void scene_3() {
+    materials = {
+      {
+        .albedo = daxa_f32vec3(0.1, 0.1, 0.1),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.0, 0.0),
+        .emission = daxa_f32vec3(10.0, 10.0, 10.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0, 1.0, 0.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0, 0.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 1.0, 0.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0, 1.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.5, 0.5),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.5, 1.0, 0.5),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.5, 0.5, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(0.5, 1.0, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 0.5, 1.0),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0, 1.0, 0.5),
+        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+      },
+      
+    };
+
+    auto const n_body = 50u;
+
+    rigid_bodies.reserve(n_body);
+
+    rigid_bodies = {
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, -50.0, 0.0), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-50.0, -50.0, -50.0), .maximum = daxa_f32vec3(50.0, 50.0, 50.0), .mass = 0.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5}
+    };
+
+    // stack of boxes over main box
+    // maybe start with 8 of them
+
+    for(int i = 0; i < 7; ++i)
+    {
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5, 0.5 + i, -0.5), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5});
+    }
+
+    for(int i = 0; i < 7; ++i)
+    {
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-2.5, 0.5 + i, -0.5), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5});
+    }
+
+    for(int i = 0; i < 7; ++i)
+    {
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(1.5, 0.5 + i, -0.5), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .tmp_velocity = daxa_f32vec3(0, 0, 0), .tmp_omega = daxa_f32vec3(0, 0, 0), .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5});
+    }
+
+  }
+
   bool load_scene()
   {
     if (!initialized)
@@ -227,6 +360,7 @@ public:
   
     // scene_1();
     scene_2();
+    // scene_3();
 
     std::uniform_int_distribution<> distr(1, materials.size()-1); // define the range
 
