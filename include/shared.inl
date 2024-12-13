@@ -506,7 +506,7 @@ struct DispatchBuffer
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
-static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 64;
+static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 32;
 
 struct ActiveRigidBody
 {
@@ -584,9 +584,8 @@ struct ResetBodyLinkPushConstants
   DAXA_TH_BLOB(ResetBodyLinkTaskHead, task_head)
 };
 
-// COMPUTE_SHADER_READ_WRITE_CONCURRENT
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
@@ -615,9 +614,8 @@ struct BroadPhasePushConstants
   DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
 };
 
-// COMPUTE_SHADER_READ_WRITE_CONCURRENT
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
@@ -625,8 +623,6 @@ struct CollisionSolverDispatcherPushConstants
 {
   DAXA_TH_BLOB(CollisionSolverDispatcherTaskHead, task_head)
 };
-
-// COMPUTE_SHADER_READ_WRITE_CONCURRENT
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodySimTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
@@ -657,7 +653,7 @@ struct IslandCounterPushConstants
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(IslandDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
@@ -743,9 +739,8 @@ struct ContactIslandGatherPushConstants
   DAXA_TH_BLOB(ContactIslandGatherTaskHead, task_head)
 };
 
-// COMPUTE_SHADER_READ_WRITE_CONCURRENT
 DAXA_DECL_TASK_HEAD_BEGIN(ContactIslandDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
