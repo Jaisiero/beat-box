@@ -1,9 +1,11 @@
 // #include "extensions.slang"
 #include "collision_detection.slang"
 #include "solvers.slang"
+#include "LBVH.slang"
 
 [[vk::push_constant]] ResetBodyLinkPushConstants RBL;
 [[vk::push_constant]] RigidBodyDispatcherPushConstants RBD;
+[[vk::push_constant]] RigidBodyGenerateMortonCodePushConstants GMC;
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] IslandDispatcherPushConstants ID;
@@ -75,6 +77,34 @@
 
   let arb_count = (sim_config->active_rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
   dispatch_buffer->active_rigid_body_dispatch = daxa_u32vec3(arb_count, 1, 1);
+}
+
+
+
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_generate_morton_codes(uint3 pixel_i : SV_DispatchThreadID)
+{
+  Ptr<SimConfig> sim_config =
+      Ptr<SimConfig>(GMC.task_head.sim_config);
+    
+  daxa_u32 index = pixel_i.x;
+  if (index >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+
+  Ptr<RigidBody> rigid_bodies =
+      Ptr<RigidBody>(GMC.task_head.rigid_bodies);
+
+  Ptr<MortonCode> morton_codes =
+      Ptr<MortonCode>(GMC.task_head.morton_codes);
+
+  let morton_code = MortonCodeGenerator.morton3D(rigid_bodies[index].position);
+
+  morton_codes[index] = MortonCode(morton_code, index);
+
 }
 
 

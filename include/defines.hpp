@@ -83,6 +83,10 @@ const auto reset_body_links_pipeline_name = "Reset Body Links";
 const auto entry_rigid_body_dispatcher = "entry_rigid_body_dispatcher";
 const auto rigid_body_dispatcher_pipeline_name = "Rigid Body Dispatcher";
 
+// generate morton codes
+const auto entry_generate_morton_codes = "entry_generate_morton_codes";
+const auto generate_morton_codes_pipeline_name = "Generate Morton Codes";
+
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
@@ -324,6 +328,21 @@ struct RigidBodyDispatcherInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(RigidBodyDispatcherPushConstants),
       .name = rigid_body_dispatcher_pipeline_name,
+  };
+};
+
+struct GenerateMortonCodesInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_generate_morton_codes,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyGenerateMortonCodePushConstants),
+      .name = generate_morton_codes_pipeline_name,
   };
 };
 

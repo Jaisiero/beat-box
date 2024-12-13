@@ -508,12 +508,19 @@ DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
 static const daxa_u32 RIGID_BODY_SIM_COMPUTE_X = 32;
 
+
 struct ActiveRigidBody
 {
   daxa_u32 rigid_body_index;
 };
 DAXA_DECL_BUFFER_PTR(ActiveRigidBody)
 
+struct MortonCode
+{
+  daxa_u32 morton_code;
+  daxa_u32 rigid_body_index;
+};
+DAXA_DECL_BUFFER_PTR(MortonCode)
 
 struct ManifoldNode {
     daxa_u32 manifold_index;       // Index in collisions[]
@@ -592,6 +599,18 @@ DAXA_DECL_TASK_HEAD_END
 struct RigidBodyDispatcherPushConstants
 {
   DAXA_TH_BLOB(RigidBodyDispatcherTaskHead, task_head)
+};
+
+DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyGenerateMortonCodeTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(MortonCode), morton_codes)
+DAXA_DECL_TASK_HEAD_END
+
+struct RigidBodyGenerateMortonCodePushConstants
+{
+  DAXA_TH_BLOB(RigidBodyGenerateMortonCodeTaskHead, task_head)
 };
 
 

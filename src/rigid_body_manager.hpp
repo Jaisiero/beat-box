@@ -69,6 +69,7 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_sim_config_host{{.initial_buffers = {}, .name = "RB_sim_config_host"}};
   daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config"}};
   daxa::TaskBuffer task_old_sim_config{{.initial_buffers = {}, .name = "RB_old_sim_config"}};
+  daxa::TaskBuffer task_morton_codes{{.initial_buffers = {}, .name = "RB_morton_codes"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
   daxa::TaskBuffer task_previous_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
   daxa::TaskBuffer task_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "rigid_body_link_manifold"}};
@@ -116,6 +117,7 @@ private:
   // Compute pipeline reference
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBL;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBD;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GMC;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_ID;
@@ -152,6 +154,7 @@ private:
 
   daxa::BufferId sim_config_host_buffer[DOUBLE_BUFFERING] = {};
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
+  daxa::BufferId morton_codes[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};
   daxa::BufferId rigid_body_link_manifolds[DOUBLE_BUFFERING] = {};

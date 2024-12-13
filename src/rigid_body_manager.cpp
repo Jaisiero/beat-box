@@ -11,6 +11,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
   {
     pipeline_RBL = task_manager->create_compute(ResetBodyLinksInfo{}.info);
     pipeline_RBD = task_manager->create_compute(RigidBodyDispatcherInfo{}.info);
+    pipeline_GMC = task_manager->create_compute(GenerateMortonCodesInfo{}.info);
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
     pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
     pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
@@ -92,6 +93,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     sim_config[i] = device.create_buffer({
         .size = sizeof(SimConfig),
         .name = "sim_config_" + std::to_string(i),
+    });
+    morton_codes[i] = device.create_buffer({
+        .size = sizeof(MortonCode) * MAX_RIGID_BODY_COUNT,
+        .name = "morton_codes" + std::to_string(i),
     });
     collisions[i] = device.create_buffer({
         .size = sizeof(Manifold) * MAX_COLLISION_COUNT,
@@ -216,6 +221,24 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                          daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.sim_config, task_sim_config),
                      },
                      user_callback_RBD);
+
+  auto user_callback_GMC = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_GMC);
+    ti.recorder.push_constant(RigidBodyGenerateMortonCodePushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyGenerateMortonCodeTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+  };
+
+  using TTask_GMC = TaskTemplate<RigidBodyGenerateMortonCodeTaskHead::Task, decltype(user_callback_GMC)>;
+
+  // Instantiate the task using the template class
+  TTask_GMC task_GMC(std::array{
+                       daxa::attachment_view(RigidBodyGenerateMortonCodeTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(RigidBodyGenerateMortonCodeTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(RigidBodyGenerateMortonCodeTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                        daxa::attachment_view(RigidBodyGenerateMortonCodeTaskHead::AT.morton_codes, task_morton_codes),
+                   },
+                   user_callback_GMC);
 
   auto user_callback_BP = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -614,10 +637,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 20> buffers = {
+  std::array<daxa::TaskBuffer, 21> buffers = {
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
+      task_morton_codes,
       task_active_rigid_bodies,
       task_scratch_body_links,
       task_body_links,
@@ -642,6 +666,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_RC);
   RB_TG.add_task(task_RBD);
   RB_TG.add_task(task_RBL);
+  RB_TG.add_task(task_GMC);
   RB_TG.add_task(task_BP);
   RB_TG.add_task(task_advect);
   RB_TG.add_task(task_IC);
@@ -755,6 +780,7 @@ void RigidBodyManager::destroy()
   {
     device.destroy_buffer(sim_config_host_buffer[i]);
     device.destroy_buffer(sim_config[i]);
+    device.destroy_buffer(morton_codes[i]);
     device.destroy_buffer(collisions[i]);
     device.destroy_buffer(active_rigid_bodies[i]);
     device.destroy_buffer(scratch_body_links[i]);
@@ -869,6 +895,7 @@ void RigidBodyManager::update_buffers()
   task_sim_config_host.set_buffers({.buffers = std::array{sim_config_host_buffer[current_frame]}});
   task_sim_config.set_buffers({.buffers = std::array{sim_config[current_frame]}});
   task_old_sim_config.set_buffers({.buffers = std::array{sim_config[previous_frame]}});
+  task_morton_codes.set_buffers({.buffers = std::array{morton_codes[current_frame]}});
   task_previous_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_previous_rigid_body_buffer()}});
   task_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_rigid_body_buffer()}});
   task_next_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_next_rigid_body_buffer()}});
