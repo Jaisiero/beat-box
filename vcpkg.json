@@ -1,12 +1,11 @@
 {
   "name": "beat-box",
   "version": "1.0.0",
-  "builtin-baseline": "b346ee32f13f3bf2ef19ac02f982f6938f7a84ea",
+  "builtin-baseline": "2960d7d80e8d09c84ae8abf15c12196c2ca7d39a",
   "dependencies": [
     {
       "name": "daxa",
       "features": [
-        "utils-imgui",
         "utils-mem",
         "utils-pipeline-manager-slang",
         "utils-task-graph"
@@ -24,8 +23,7 @@
   ],
   "vcpkg-configuration": {
     "overlay-ports": [
-      "lib/daxa",
-      "lib/daxa/cmake/vcpkg-overlay-ports/shader-slang"
+      "lib/daxa"
     ]
   }
 }

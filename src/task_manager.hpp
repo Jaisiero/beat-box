@@ -76,6 +76,12 @@ FORCE_INLINE std::vector<std::filesystem::path> paths{
     "src/shaders/simulation",
 };
 
+#if defined(_DEBUG)
+FORCE_INLINE std::filesystem::path debug_path{
+    "shaders_debug",
+};
+#endif
+
 struct TaskGraph
 {
   daxa::TaskGraph task_graph;
@@ -157,6 +163,9 @@ struct TaskManager
         .device = gpu->device,
         .shader_compile_options = {
             .root_paths = paths,
+#if defined(_DEBUG)
+            .write_out_shader_binary = debug_path,
+#endif
             .language = daxa::ShaderLanguage::SLANG,
 #if defined(_DEBUG)
             .enable_debug_info = true,

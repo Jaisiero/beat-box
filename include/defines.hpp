@@ -87,6 +87,14 @@ const auto rigid_body_dispatcher_pipeline_name = "Rigid Body Dispatcher";
 const auto entry_generate_morton_codes = "entry_generate_morton_codes";
 const auto generate_morton_codes_pipeline_name = "Generate Morton Codes";
 
+// radix sort histogram
+const auto entry_radix_sort_histogram = "entry_radix_sort_histogram";
+const auto radix_sort_histogram_pipeline_name = "Radix Sort Histogram";
+
+// single radix sort
+const auto entry_rigid_body_single_radix_sort = "entry_single_radix_sort";
+const auto rigid_body_single_radix_sort_pipeline_name = "Single Radix Sort";
+
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
@@ -343,6 +351,42 @@ struct GenerateMortonCodesInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(RigidBodyGenerateMortonCodePushConstants),
       .name = generate_morton_codes_pipeline_name,
+  };
+};
+
+struct RigidBodyRadixSortHistogramInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_radix_sort_histogram,
+          .defines = {
+              {"BB_RADIX_SORT_HISTOGRAM", "1"},
+          },
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyRadixSortHistogramPushConstants),
+      .name = radix_sort_histogram_pipeline_name,
+  };
+};
+
+struct RigidBodySingleRadixSortInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_rigid_body_single_radix_sort,
+          .defines = {
+              {"BB_RADIX_SORT", "1"},
+          },
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodySingleRadixSortPushConstants),
+      .name = rigid_body_single_radix_sort_pipeline_name,
   };
 };
 
