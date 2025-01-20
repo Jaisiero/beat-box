@@ -8,6 +8,7 @@
 #include "scene_manager.hpp"
 #include "status_manager.hpp"
 #include "gui_manager.hpp"
+#include "image_manager.hpp"
 
 BB_NAMESPACE_BEGIN
 
@@ -88,6 +89,8 @@ private:
   daxa::BufferId ray_tracing_config_host_buffer[DOUBLE_BUFFERING];
 
   daxa::ImageId accumulation_buffer;
+
+  daxa::ImageId stbn_texture;
 };
 
 BB_NAMESPACE_END

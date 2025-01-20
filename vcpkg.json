@@ -20,7 +20,8 @@
         "docking-experimental"
       ]
     },
-    "glm"
+    "glm",
+    "stb"
   ],
   "vcpkg-configuration": {
     "overlay-ports": [

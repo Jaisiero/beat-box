@@ -122,6 +122,45 @@ FORCE_INLINE auto cuboid_get_inverse_intertia(daxa_f32 mass, daxa_f32vec3 min, d
   );
 }
 
+FORCE_INLINE daxa_f32 infinity = std::numeric_limits<daxa_f32>::infinity();
+
+class interval {
+  public:
+    daxa_f32 min, max;
+
+    interval() : min(+infinity), max(-infinity) {} // Default interval is empty
+
+    interval(daxa_f32 _min, daxa_f32 _max) : min(_min), max(_max) {}
+
+    daxa_f32 size() const {
+        return max - min;
+    }
+
+    interval expand(daxa_f32 delta) const {
+        auto padding = delta/2;
+        return interval(min - padding, max + padding);
+    }
+
+    bool contains(daxa_f32 x) const {
+        return min <= x && x <= max;
+    }
+
+    bool surrounds(daxa_f32 x) const {
+        return min < x && x < max;
+    }
+
+    daxa_f32 clamp(daxa_f32 x) const {
+        if (x < min) return min;
+        if (x > max) return max;
+        return x;
+    }
+
+    static const interval empty, universe;
+};
+
+FORCE_INLINE const interval interval::empty    = interval(+infinity, -infinity);
+FORCE_INLINE const interval interval::universe = interval(-infinity, +infinity);
+
 #else 
 #define MAX max
 #define MIN min

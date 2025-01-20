@@ -144,6 +144,50 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   RT_TG.present();
   RT_TG.complete();
 
+  std::unique_ptr<BBImageTexture> image = std::make_unique<BBImageTexture>("stbn_unitvec3_cosine_2Dx1D_128x128x64_0.png", SPATIOTEMPORAL_BLUE_NOISE_PATH);
+
+  // Create the texture
+  stbn_texture = gpu->device.create_image({
+      .format = daxa::Format::R8G8B8A8_UNORM,
+      .size = daxa::Extent3D(128, 128, 1),
+      .array_layer_count = 1, // TODO: up to 64 layers
+      .usage = daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::SHADER_STORAGE,
+      .name = "stbn_texture",
+  });
+
+  // Copy the image to host buffer
+  auto stbn_host_buffer = gpu->device.create_buffer({
+      .size = image->get_size(),
+      .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+      .name = "stbn_host_buffer",
+  });
+  auto stbn_host_address = gpu->device.buffer_host_address(stbn_host_buffer).value();
+  std::memcpy(stbn_host_address, image->get_data(), image->get_size());
+
+  // Copy the image data to the texture
+  // auto sema0 = gpu->device.create_binary_semaphore({.name = "sema 0"});
+  auto rec = gpu->device.create_transfer_command_recorder({daxa::QueueFamily::TRANSFER});
+  rec.pipeline_barrier({daxa::AccessConsts::TRANSFER_WRITE, daxa::AccessConsts::TRANSFER_READ_WRITE});
+  rec.copy_buffer_to_image({
+      .buffer = stbn_host_buffer,
+      .buffer_offset = 0,
+      .image = stbn_texture,
+      .image_extent = daxa::Extent3D(128, 128, 1),
+  });
+  rec.pipeline_barrier({daxa::AccessConsts::TRANSFER_WRITE, daxa::AccessConsts::TRANSFER_READ_WRITE});
+  auto commands = rec.complete_current_commands();
+  gpu->device.submit_commands({
+      .queue = daxa::QUEUE_TRANSFER_0,
+      .command_lists = std::array{commands},
+      // .signal_binary_semaphores = std::array{sema0},
+  });
+
+  // Wait for the transfer to finish
+  gpu->device.queue_wait_idle(daxa::QUEUE_TRANSFER_0);
+
+  // Destroy the host buffer
+  gpu->device.destroy_buffer(stbn_host_buffer);
+
   return initialized = true;
 }
 
@@ -158,6 +202,9 @@ void RendererManager::destroy()
     gpu->device.destroy_buffer(ray_tracing_config_buffer[f]);
     gpu->device.destroy_buffer(ray_tracing_config_host_buffer[f]);
   }
+
+  gpu->device.destroy_image(accumulation_buffer);
+  gpu->device.destroy_image(stbn_texture);
 
   initialized = false;
 }
