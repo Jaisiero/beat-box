@@ -1,123 +1,225 @@
 #pragma once
-
 #include "defines.hpp"
-#include "math.hpp"
-
-#define ASSETS_PATH "assets/"
-#define TEXTURES_PATH ASSETS_PATH "textures/"
-#define SPATIOTEMPORAL_BLUE_NOISE_PATH TEXTURES_PATH "STBN/"
+#include "image.hpp"
+#include "task_manager.hpp"
 
 BB_NAMESPACE_BEGIN
 
-struct BBImage
+// TODO: parameterize this
+constexpr daxa::u32 SPATIOTEMPORAL_BLUE_NOISE_COUNT = 64;
+constexpr daxa::usize SPATIOTEMPORAL_BLUE_NOISE_SIZE = 128 * 128 * 4;
+constexpr daxa::usize INIT_HOST_BUFFER_SIZE = SPATIOTEMPORAL_BLUE_NOISE_SIZE * SPATIOTEMPORAL_BLUE_NOISE_COUNT;
+constexpr char const *SPATIOTEMPORAL_BLUE_NOISE_COSINE = "stbn_vec2_2Dx1D_128x128x64_";
+
+struct ImageManager
 {
-public:
+    // Constructor
+    ImageManager(std::shared_ptr<GPUcontext> gpu,
+                 std::shared_ptr<TaskManager> task_manager) : gpu(gpu), task_manager(task_manager) {}
 
-    BBImage() : data(nullptr) {};
+    // Destructor
+    ~ImageManager() {}
 
-    explicit BBImage(const char *image_filename, const char* path);
-    
-    ~BBImage();
+    // Create image manager
+    bool create()
+    {
+        if (initialized)
+        {
+            return false;
+        }
 
-    int width()  const { return (data == nullptr) ? 0 : image_width; }
-    int height() const { return (data == nullptr) ? 0 : image_height; }
-    unsigned int size() const { return image_width * image_height * bytes_per_pixel; }
+        // TODO: parameterize this
+        // Create the texture
+        stbn_texture = gpu->device.create_image({
+            .flags = daxa::ImageCreateFlagBits::COMPATIBLE_2D_ARRAY,
+            .dimensions = 3,
+            .format = daxa::Format::R8G8B8A8_UNORM,
+            .size = daxa::Extent3D(128, 128, SPATIOTEMPORAL_BLUE_NOISE_COUNT),
+            .usage = daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::SHADER_SAMPLED,
+            .name = "stbn_texture",
+        });
 
-    const unsigned char* pixel_data(int x, int y) const {
-        // Return the address of the three bytes of the pixel at x,y (or magenta if no data).
-        static unsigned char magenta[] = { 255, 0, 255 };
-        if (data == nullptr) return magenta;
+        // Create images
+        for (auto i = 0u; i < SPATIOTEMPORAL_BLUE_NOISE_COUNT; i++)
+        {
+            images.push_back(std::make_shared<BBImageTexture>(std::string(SPATIOTEMPORAL_BLUE_NOISE_COSINE) + std::to_string(i) + ".png", SPATIOTEMPORAL_BLUE_NOISE_PATH));
+        }
 
-        x = clamp(x, 0, image_width);
-        y = clamp(y, 0, image_height);
+        // Copy the image to host buffer
+        image_host_buffer = gpu->device.create_buffer({
+            .size = INIT_HOST_BUFFER_SIZE,
+            .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+            .name = "image_host_buffer",
+        });
 
-        return data + y*bytes_per_scanline + x*bytes_per_pixel;
+        record_task_graph_upload_image(upload_images_TG);
+        upload_images_TG.submit();
+        upload_images_TG.complete();
+
+        return initialized = true;
     }
 
-    const unsigned char* data_ptr() const { return data; }
+    void record_task_graph_upload_image(TaskGraph &UI_TG)
+    {
+        daxa::InlineTaskInfo task_upload_image({
+            .attachments = {
+                daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_host_buffer),
+                daxa::inl_attachment(daxa::TaskImageAccess::TRANSFER_WRITE, task_image),
+            },
+            .task = [this](daxa::TaskInterface const &ti)
+            {
+                ti.recorder.pipeline_barrier({
+                    .dst_access = daxa::AccessConsts::TRANSFER_WRITE,
+                });
 
-  private:
-
-    bool load(const std::string filename);
-
-    const int bytes_per_pixel = 4; // RGBA format cause the fact that many GPUs doesn't support RGB
-    unsigned char *data;
-    int image_width, image_height;
-    int bytes_per_scanline;
-
-    static int clamp(int x, int low, int high) {
-        // Return the value clamped to the range [low, high).
-        if (x < low) return low;
-        if (x < high) return x;
-        return high - 1;
-    }
-};
-
-class BBAbstractTexture {
-public:
-    virtual ~BBAbstractTexture () = default;
-    virtual std::unique_ptr<BBAbstractTexture> clone() const = 0;
-};
-
-template <typename Derived>
-class BBTexture : public BBAbstractTexture {
-public:
-    std::unique_ptr<BBAbstractTexture> clone() const override {
-        return std::make_unique<Derived>(static_cast<Derived const&>(*this));
-    }
-
-    virtual daxa_f32vec3 value(float u, float v, const daxa_f32vec3& p) const = 0;
-
-// protected:
-   // We make clear BBTexture class needs to be inherited
-   BBTexture() = default;
-   BBTexture(const BBTexture&) = default;
-   BBTexture(BBTexture&&) = default;
-};
-
-class BBImageTexture : public BBTexture<BBImageTexture> {
-  public:
-
-    BBImageTexture() = default;
-
-    BBImageTexture(const char* filename, const char* path = TEXTURES_PATH) : image(filename, path) {}
-
-    daxa_f32vec3 value(float u, float v, const daxa_f32vec3& p) const override {
-        // If we have no texture data, then return solid cyan as a debugging aid.
-        if (image.height() <= 0) return daxa_f32vec3(0,1,1);
-
-        // Clamp input texture coordinates to [0,1] x [1,0]
-        u = interval(0,1).clamp(u);
-        v = 1.0 - interval(0,1).clamp(v);  // Flip V to image coordinates
-
-        auto i = static_cast<int>(u * image.width());
-        auto j = static_cast<int>(v * image.height());
-        auto pixel = image.pixel_data(i,j);
-
-        auto color_scale = 1.0 / 255.0;
-        return daxa_f32vec3(color_scale*pixel[0], color_scale*pixel[1], color_scale*pixel[2]);
+                ti.recorder.copy_buffer_to_image({
+                    .buffer = ti.get(task_host_buffer).ids[0],
+                    .buffer_offset = 0,
+                    .image = ti.get(task_image).ids[0],
+                    .image_offset = daxa::Offset3D(0, 0, 0),
+                    .image_extent = daxa::Extent3D(128, 128, 64),
+                });
+                
+            },
+            .name = "upload image",
+        });
+        std::array<daxa::TaskBuffer, 1> buffers = {
+            task_host_buffer};
+        std::array<daxa::TaskImage, 1> images = {
+            task_image};
+        std::array<daxa::InlineTaskInfo, 1> tasks = {
+            task_upload_image};
+        UI_TG = task_manager->create_task_graph("Upload Image Task Graph", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), std::span<daxa::TaskImage>(images), {}, {});
     }
 
-    unsigned int get_size() const {
-        return image.size();
+    void destroy()
+    {
+        if (!initialized)
+        {
+            return;
+        }
+
+        // Destroy the texture
+        gpu->device.destroy_image(stbn_texture);
+
+        // Destroy the host buffer
+        gpu->device.destroy_buffer(image_host_buffer);
+
+        // Destroy the images
+        for (auto &image : images)
+        {
+            image.reset();
+        }
+
+        initialized = false;
     }
 
-    unsigned int get_width() const {
-        return image.width();
+    // Upload an image
+    // TODO: parameterize this
+    bool upload_images()
+    {
+        if (!initialized)
+        {
+            return false;
+        }
+
+        usize offset = 0;
+        u32 image_index = 0;
+        for (auto &image : images)
+        {
+            upload_image(image, image_index++, offset);
+        }
+
+        task_host_buffer.set_buffers({.buffers = std::array{image_host_buffer}});
+
+        task_image.set_images({.images = std::array{stbn_texture}});
+
+
+        // // Copy the image data to the texture
+        // auto rec = gpu->device.create_transfer_command_recorder({daxa::QueueFamily::TRANSFER});
+
+        // rec.pipeline_barrier_image_transition({
+        //     .dst_access = daxa::AccessConsts::TRANSFER_WRITE,
+        //     .dst_layout = daxa::ImageLayout::TRANSFER_DST_OPTIMAL,
+        //     .image_id = stbn_texture,
+        // });
+
+        // upload_image_gpu(rec);
+
+        // rec.pipeline_barrier({daxa::AccessConsts::TRANSFER_WRITE, daxa::AccessConsts::TRANSFER_READ_WRITE});
+        // auto commands = rec.complete_current_commands();
+        // gpu->device.submit_commands({
+        //     .queue = daxa::QUEUE_TRANSFER_0,
+        //     .command_lists = std::array{commands},
+        // });
+
+        // // Wait for the transfer to finish
+        // gpu->device.queue_wait_idle(daxa::QUEUE_TRANSFER_0);
+
+        upload_images_TG.execute();
+
+        if(offset != INIT_HOST_BUFFER_SIZE)
+        {
+            return false;
+        }
+
+        return true;
     }
 
-    unsigned int get_height() const {
-        return image.height();
+    // Upload an image
+    void upload_image(std::shared_ptr<BBImageTexture> image, u32 image_index, usize& offset)
+    {
+
+        auto image_size = image->get_size();
+        // Create the texture
+        auto stbn_host_address = gpu->device.buffer_host_address(image_host_buffer).value() + offset;
+        std::memcpy(stbn_host_address, image->get_data(), image_size);
+
+        offset += image_size;
     }
 
-    const unsigned char* get_data() const {
-        return image.data_ptr();
+    // Upload an image
+    void upload_image_gpu(daxa::TransferCommandRecorder& rec)
+    {
+        rec.pipeline_barrier({
+            .src_access = daxa::AccessConsts::TRANSFER_READ_WRITE,
+            .dst_access = daxa::AccessConsts::TRANSFER_WRITE,
+        });
+
+        rec.copy_buffer_to_image({
+            .buffer = image_host_buffer,
+            .buffer_offset = 0,
+            .image = stbn_texture,
+            .image_offset = daxa::Offset3D(0, 0, 0),
+            .image_extent = daxa::Extent3D(128, 128, 64),
+        });
     }
 
-    ~BBImageTexture() = default;
+    // Get the image
+    daxa::ImageId get_spatiotemporal_blue_noise_image() const
+    {
+        return stbn_texture;
+    }
 
-  private:
-    BBImage image;
+private:
+    daxa::ImageId stbn_texture;
+    // Host buffer for uploading images
+    daxa::BufferId image_host_buffer;
+    // Gpu context reference
+    std::shared_ptr<GPUcontext> gpu;
+    // Task manager reference
+    std::shared_ptr<TaskManager> task_manager;
+    // Initialization flag
+    bool initialized = false;
+    // Task graph for uploading images
+    TaskGraph upload_images_TG;
+    // Task buffer upload image
+    daxa::TaskBuffer task_host_buffer{{.initial_buffers = {}, .name = "task_host_image_buffer"}};
+    // Task image upload image
+    daxa::TaskImage task_image{{.initial_images = {}, .name = "task_upload_image"}};
+
+    // Image references
+    std::vector<std::shared_ptr<BBImageTexture>> images;
 };
 
 BB_NAMESPACE_END

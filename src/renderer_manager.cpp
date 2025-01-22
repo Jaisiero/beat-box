@@ -2,8 +2,8 @@
 
 BB_NAMESPACE_BEGIN
 
-RendererManager::RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager &window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<GUIManager> gui_manager)
-    : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), scene_manager(scene_manager), status_manager(status_manager), gui_manager(gui_manager) {}
+RendererManager::RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager &window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<GUIManager> gui_manager, std::shared_ptr<ImageManager> image_manager)
+    : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), scene_manager(scene_manager), status_manager(status_manager), gui_manager(gui_manager), image_manager(image_manager) {}
 
 bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingPipeline> pipeline, daxa::RayTracingShaderBindingTable SBT)
 {
@@ -39,7 +39,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, 
           task_ray_tracing_config_host),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, 
-          task_ray_tracing_config),
+           task_ray_tracing_config),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
@@ -93,13 +93,12 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
                   daxa::attachment_view(RayTracingTaskHead::AT.materials, scene_manager->task_material_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.islands, rigid_body_manager->task_islands),
                   daxa::attachment_view(RayTracingTaskHead::AT.contact_islands, rigid_body_manager->task_contact_islands),
+                  daxa::attachment_view(RayTracingTaskHead::AT.stbn_texture, task_stbn_texture),
               },
               user_callback);
 
   daxa::InlineTaskInfo task_cpy_to_accum_buffer({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskImageAccess::TRANSFER_READ, 
-          task_swapchain_image),
           daxa::inl_attachment(daxa::TaskImageAccess::TRANSFER_WRITE, 
           task_accumulation_buffer),
       },
@@ -109,7 +108,6 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
         auto const frame_count = status_manager->get_accumulation_count();
         if (accumulating && frame_count == 0)
         {
-          auto const image_info = ti.device.info_image(ti.get(task_swapchain_image).ids[0]).value();
           // zero out the accumulation buffer
           ti.recorder.clear_image({
               .dst_image_layout = daxa::ImageLayout::GENERAL,
@@ -120,6 +118,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
       },
       .name = "copy to accumulation buffer",
   });
+
   
 
   std::array<daxa::TaskBuffer, 12> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer,  gui_manager->task_vertex_buffer,
@@ -127,7 +126,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   scene_manager->task_material_buffer, task_ray_tracing_config, task_ray_tracing_config_host, scene_manager->task_lights_buffer, 
   rigid_body_manager->task_islands, rigid_body_manager->task_contact_islands};
 
-  std::array<daxa::TaskImage, 2> images = {task_swapchain_image, task_accumulation_buffer};
+  std::array<daxa::TaskImage, 3> images = {task_swapchain_image, task_accumulation_buffer, task_stbn_texture};
 
   std::array<daxa::TaskTlas, 1> tlases = {accel_struct_mngr->task_tlas};
 
@@ -144,49 +143,10 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   RT_TG.present();
   RT_TG.complete();
 
-  std::unique_ptr<BBImageTexture> image = std::make_unique<BBImageTexture>("stbn_unitvec3_cosine_2Dx1D_128x128x64_0.png", SPATIOTEMPORAL_BLUE_NOISE_PATH);
-
-  // Create the texture
-  stbn_texture = gpu->device.create_image({
-      .format = daxa::Format::R8G8B8A8_UNORM,
-      .size = daxa::Extent3D(128, 128, 1),
-      .array_layer_count = 1, // TODO: up to 64 layers
-      .usage = daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::SHADER_STORAGE,
-      .name = "stbn_texture",
-  });
-
-  // Copy the image to host buffer
-  auto stbn_host_buffer = gpu->device.create_buffer({
-      .size = image->get_size(),
-      .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
-      .name = "stbn_host_buffer",
-  });
-  auto stbn_host_address = gpu->device.buffer_host_address(stbn_host_buffer).value();
-  std::memcpy(stbn_host_address, image->get_data(), image->get_size());
-
-  // Copy the image data to the texture
-  // auto sema0 = gpu->device.create_binary_semaphore({.name = "sema 0"});
-  auto rec = gpu->device.create_transfer_command_recorder({daxa::QueueFamily::TRANSFER});
-  rec.pipeline_barrier({daxa::AccessConsts::TRANSFER_WRITE, daxa::AccessConsts::TRANSFER_READ_WRITE});
-  rec.copy_buffer_to_image({
-      .buffer = stbn_host_buffer,
-      .buffer_offset = 0,
-      .image = stbn_texture,
-      .image_extent = daxa::Extent3D(128, 128, 1),
-  });
-  rec.pipeline_barrier({daxa::AccessConsts::TRANSFER_WRITE, daxa::AccessConsts::TRANSFER_READ_WRITE});
-  auto commands = rec.complete_current_commands();
-  gpu->device.submit_commands({
-      .queue = daxa::QUEUE_TRANSFER_0,
-      .command_lists = std::array{commands},
-      // .signal_binary_semaphores = std::array{sema0},
-  });
-
-  // Wait for the transfer to finish
-  gpu->device.queue_wait_idle(daxa::QUEUE_TRANSFER_0);
-
-  // Destroy the host buffer
-  gpu->device.destroy_buffer(stbn_host_buffer);
+  // TODO: parameterize this
+  if(!image_manager->upload_images()) {
+    return false;
+  }
 
   return initialized = true;
 }
@@ -204,7 +164,6 @@ void RendererManager::destroy()
   }
 
   gpu->device.destroy_image(accumulation_buffer);
-  gpu->device.destroy_image(stbn_texture);
 
   initialized = false;
 }
@@ -231,6 +190,7 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
   task_ray_tracing_config.set_buffers({.buffers = std::array{ray_tracing_config_buffer[get_frame_index()]}});
   task_ray_tracing_config_host.set_buffers({.buffers = std::array{ray_tracing_config_host_buffer[get_frame_index()]}});
   task_accumulation_buffer.set_images({.images = std::array{accumulation_buffer}});
+  task_stbn_texture.set_images({.images = std::array{image_manager->get_spatiotemporal_blue_noise_image()}});
 
   return true;
 }

@@ -5,13 +5,14 @@
 
 [shader("raygeneration")] void ray_generation()
 {
-  const daxa_u32vec2 thread_idx = DispatchRaysIndex().xy;
-  const daxa_u32vec2 rt_size = DispatchRaysDimensions().xy;
+  const daxa::u32vec2 thread_idx = DispatchRaysIndex().xy;
+  const daxa::u32vec2 rt_size = DispatchRaysDimensions().xy;
 
   // Initialize variables
-  daxa_f32vec3 radiance = daxa_f32vec3(0.0, 0.0, 0.0);
-  daxa_f32vec3 throughput = daxa_f32vec3(1.0, 1.0, 1.0);
-  daxa_u32 depth = 0;
+  daxa::f32vec3 radiance = daxa::f32vec3(0.0, 0.0, 0.0);
+  daxa::f32vec3 throughput = daxa::f32vec3(1.0, 1.0, 1.0);
+  daxa::u32 depth = 0;
+  daxa::i32vec2 sample_shift = daxa::i32vec2(5, 7);
 
   var max_bounces = p.task_head.ray_tracing_config.max_bounces;
   var frame_count = p.task_head.ray_tracing_config.frame_count;
@@ -19,16 +20,16 @@
   var accumulate_flag = (p.task_head.ray_tracing_config.flags & 0x1u) != 0u;
 
   // Initialize the random seed for the pixel
-  daxa_u32 seed = init_random_seed(thread_idx, daxa_u32(current_frame_index));
+  daxa::u32 seed = init_random_seed(thread_idx, daxa::u32(current_frame_index));
 
   // Camera setup
-  daxa_f32mat4x4 inv_view = Ptr<CameraView>(p.task_head.camera).inv_view;
-  daxa_f32mat4x4 inv_proj = Ptr<CameraView>(p.task_head.camera).inv_proj;
-  daxa_f32 tMin = 0.0001f;
-  daxa_f32 tMax = 10000.0f;
+  daxa::f32mat4x4 inv_view = Ptr<CameraView>(p.task_head.camera).inv_view;
+  daxa::f32mat4x4 inv_proj = Ptr<CameraView>(p.task_head.camera).inv_proj;
+  daxa::f32 tMin = 0.0001f;
+  daxa::f32 tMax = 10000.0f;
 
   // Light setup
-  daxa_u32 light_count = p.task_head.ray_tracing_config.light_count;
+  daxa::u32 light_count = p.task_head.ray_tracing_config.light_count;
   Ptr<Light> lights = Ptr<Light>(p.task_head.lights);
 
   // Rigid body setup
@@ -36,6 +37,8 @@
 
   // Material setup
   Ptr<Material> materials = Ptr<Material>(p.task_head.materials);
+
+  Texture3D<daxa::f32vec4> bluenoise_texture = Texture3D<daxa::f32vec4>.get(p.task_head.stbn_texture);
 
   // Generate the primary ray
   RayDesc ray = create_ray(inv_view, inv_proj, thread_idx, rt_size, tMin, tMax);
@@ -56,15 +59,21 @@
     if (!payload.hit)
     {
       // If no hit, accumulate background color and terminate
-      radiance += throughput * daxa_f32vec3(0.95, 0.28, 0.059); // Background color
+      radiance += throughput * daxa::f32vec3(0.95, 0.28, 0.059); // Background color
+      break;
+    }
+
+    if(any(isnan(throughput))) {
+      // pink color for nan
+      radiance = daxa::f32vec3(0.0, 0.0, 0.0);
       break;
     }
 
     // Update throughput
-    daxa_f32vec3 position = payload.position;
-    daxa_f32vec3 normal = payload.normal;
-    daxa_f32vec3 albedo = payload.albedo;
-    daxa_u32 instance_index = payload.instance_index;
+    daxa::f32vec3 position = payload.position;
+    daxa::f32vec3 normal = payload.normal;
+    daxa::f32vec3 albedo = payload.albedo;
+    daxa::u32 instance_index = payload.instance_index;
 
     // **Accumulate Emission**
     if (length(payload.emission) > 0.0f)
@@ -73,33 +82,39 @@
     }
 
     // **Next Event Estimation with MIS**
-    daxa_f32 pdf_light;
-    daxa_f32vec3 light_dir;
+    daxa::f32 pdf_light;
+    daxa::f32vec3 light_dir;
 
-    daxa_f32vec3 direct_lighting = compute_direct_lighting_cubes(light_count, lights, instance_index, rigid_bodies, materials, tlas, position, normal, albedo, seed, pdf_light, light_dir);
+    daxa::f32vec3 direct_lighting = compute_direct_lighting_cubes(light_count, lights, instance_index, rigid_bodies, materials, tlas, position, normal, albedo, seed, pdf_light, light_dir);
 
     if (pdf_light > 0.0f)
     {
       // Compute the BRDF PDF at the light direction
-      daxa_f32 cos_theta = max(0.0f, dot(normal, light_dir));
-      daxa_f32 pdf_brdf_light = cos_theta / PI;
+      daxa::f32 cos_theta = max(0.0f, dot(normal, light_dir));
+      daxa::f32 pdf_brdf_light = cos_theta / PI;
 
       // Compute MIS weight using the power heuristic
-      daxa_f32 mis_weight = (pdf_light) / (pdf_light + pdf_brdf_light);
+      daxa::f32 mis_weight = (pdf_light) / (pdf_light + pdf_brdf_light);
 
       // Accumulate radiance with MIS weight
       radiance += throughput * direct_lighting * mis_weight;
     }
 
     // Sample a new direction (BRDF sampling)
-    daxa_f32vec3 new_direction;
-    daxa_f32 pdf_brdf;
-    daxa_f32vec3 brdf;
+    daxa::f32vec3 new_direction;
+    daxa::f32 pdf_brdf;
+    daxa::f32vec3 brdf;
 
     sample_lambertian(normal, albedo, new_direction, pdf_brdf, brdf, seed);
 
+    // daxa::i32 slice_index = daxa::i32(current_frame_index & 63);
+    // daxa::i32vec2 pixel_index = (daxa::i32vec2(thread_idx.x, thread_idx.y) +  daxa::i32vec2(sample_shift * depth)) & daxa::i32vec2(127, 127);
+    // daxa::f32vec4 bluenoise = bluenoise_texture[daxa::i32vec3(pixel_index, slice_index)];
+    // // printf("bluenoise: %f %f %f %f pixel: %u, %u, slice: %d\n", bluenoise.x, bluenoise.y, bluenoise.z, bluenoise.w, thread_idx.x, thread_idx.y, slice_index);
+    // sample_lambertian(normal, albedo, bluenoise.x, bluenoise.y, new_direction, pdf_brdf, brdf);
+
     // Update throughput for indirect lighting
-    daxa_f32 cos_theta = max(0.0f, dot(normal, new_direction));
+    daxa::f32 cos_theta = max(0.0f, dot(normal, new_direction));
     throughput *= (brdf * cos_theta) / pdf_brdf;
 
     // Prepare the next ray
@@ -114,8 +129,8 @@
     // Russian roulette termination after a certain depth
     if (depth > 2)
     {
-      daxa_f32 max_throughput = max(throughput.r, max(throughput.g, throughput.b));
-      daxa_f32 continue_probability = clamp(max_throughput, 0.1f, 1.0f);
+      daxa::f32 max_throughput = max(throughput.r, max(throughput.g, throughput.b));
+      daxa::f32 continue_probability = clamp(max_throughput, 0.1f, 1.0f);
 
       if (random_float(seed) > continue_probability)
       {
@@ -127,35 +142,35 @@
   }
 
   // Get the swapchain texture
-  let swapchain = RWTexture2D<daxa_f32vec4>::get(p.task_head.swapchain);
+  let swapchain = RWTexture2D<daxa::f32vec4>::get(p.task_head.swapchain);
 
   if (accumulate_flag)
   {
     // Get the accumulation buffer
-    let accumulation_buffer = RWTexture2D<daxa_f32vec4>::get(p.task_head.accumulation_buffer);
+    let accumulation_buffer = RWTexture2D<daxa::f32vec4>::get(p.task_head.accumulation_buffer);
 
     // Get the accumulated color
-    daxa_f32vec4 accumulated_color = accumulation_buffer[thread_idx.xy];
+    daxa::f32vec4 accumulated_color = accumulation_buffer[thread_idx.xy];
 
     // Update the accumulated color by frame_count and add the new radiance
-    daxa_f32vec3 average_radiance = (accumulated_color.rgb * daxa_f32(frame_count) + radiance) / daxa_f32(frame_count + 1);
+    daxa::f32vec3 average_radiance = (accumulated_color.rgb * daxa::f32(frame_count) + radiance) / daxa::f32(frame_count + 1);
 
     // Write the averaged color to the accumulation buffer
-    accumulation_buffer[thread_idx.xy] = daxa_f32vec4(average_radiance, 1.0);
+    accumulation_buffer[thread_idx.xy] = daxa::f32vec4(average_radiance, 1.0);
 
     // Apply gamma correction to the average radiance
-    daxa_f32vec3 gamma_corrected_average = pow(average_radiance, daxa_f32vec3(1.0 / 2.2));
+    daxa::f32vec3 gamma_corrected_average = pow(average_radiance, daxa::f32vec3(1.0 / 2.2));
 
     // Write the averaged color to the output texture (swapchain)
-    swapchain[thread_idx.xy] = daxa_f32vec4(gamma_corrected_average, 1.0);
+    swapchain[thread_idx.xy] = daxa::f32vec4(gamma_corrected_average, 1.0);
   }
   else
   {
     // Apply gamma correction
-    daxa_f32vec3 gamma_corrected_radiance = pow(radiance, daxa_f32vec3(1.0 / 2.2));
+    daxa::f32vec3 gamma_corrected_radiance = pow(radiance, daxa::f32vec3(1.0 / 2.2));
 
     // For real-time rendering without accumulation
-    swapchain[thread_idx.xy] = daxa_f32vec4(gamma_corrected_radiance, 1.0);
+    swapchain[thread_idx.xy] = daxa::f32vec4(gamma_corrected_radiance, 1.0);
   }
 }
 
@@ -169,26 +184,26 @@
   payload.hit = false;
 }
 
-static const daxa_f32vec3 light_intensity = daxa_f32vec3(2.5);
-static const daxa_f32vec3 face_X = daxa_f32vec3(1.0, 0.0, 0.0);                   // red
-static const daxa_f32vec3 face_neg_X = daxa_f32vec3(1.0, 1.0, 0.0);               // yellow
-static const daxa_f32vec3 face_Y = daxa_f32vec3(0.0, 1.0, 0.0);                   // green
-static const daxa_f32vec3 face_neg_Y = daxa_f32vec3(0.0, 1.0, 1.0);               // light blue
-static const daxa_f32vec3 face_Z = daxa_f32vec3(0.0, 0.0, 1.0);                   // blue
-static const daxa_f32vec3 face_neg_Z = daxa_f32vec3(1.0, 0.0, 1.0);               // purple
-static const daxa_f32vec3 material_color = daxa_f32vec3(0.0, 0.0, 0.0);           // black
-static const daxa_f32vec3 collision_material_color = daxa_f32vec3(1.0, 1.0, 1.0); // white
+static const daxa::f32vec3 light_intensity = daxa::f32vec3(2.5);
+static const daxa::f32vec3 face_X = daxa::f32vec3(1.0, 0.0, 0.0);                   // red
+static const daxa::f32vec3 face_neg_X = daxa::f32vec3(1.0, 1.0, 0.0);               // yellow
+static const daxa::f32vec3 face_Y = daxa::f32vec3(0.0, 1.0, 0.0);                   // green
+static const daxa::f32vec3 face_neg_Y = daxa::f32vec3(0.0, 1.0, 1.0);               // light blue
+static const daxa::f32vec3 face_Z = daxa::f32vec3(0.0, 0.0, 1.0);                   // blue
+static const daxa::f32vec3 face_neg_Z = daxa::f32vec3(1.0, 0.0, 1.0);               // purple
+static const daxa::f32vec3 material_color = daxa::f32vec3(0.0, 0.0, 0.0);           // black
+static const daxa::f32vec3 collision_material_color = daxa::f32vec3(1.0, 1.0, 1.0); // white
 
-BoxFace get_face_by_normal(daxa_f32vec3 normal)
+BoxFace get_face_by_normal(daxa::f32vec3 normal)
 {
-  daxa_f32vec3 abs_normal = abs(normal);
-  daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
+  daxa::f32vec3 abs_normal = abs(normal);
+  daxa::f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
   let sign = sign(normal);
   return (max_component == abs_normal.x) ? (sign.x > 0 ? BoxFace::RIGHT : BoxFace::LEFT) : (max_component == abs_normal.y) ? (sign.y > 0 ? BoxFace::TOP : BoxFace::BOTTOM)
                                                                                                                            : (sign.z > 0 ? BoxFace::FRONT : BoxFace::BACK);
 }
 
-daxa_f32vec3 get_face_color(BoxFace face)
+daxa::f32vec3 get_face_color(BoxFace face)
 {
   switch (face)
   {
@@ -205,63 +220,63 @@ daxa_f32vec3 get_face_color(BoxFace face)
   case BoxFace::BACK:
     return face_neg_Z;
   default:
-    return daxa_f32vec3(0.0);
+    return daxa::f32vec3(0.0);
   }
 }
 
-daxa_f32vec3 get_color_by_island_index(daxa_u32 island_index)
+daxa::f32vec3 get_color_by_island_index(daxa::u32 island_index)
 {
   island_index %= 15;
 
-  daxa_f32vec3 color = daxa_f32vec3(0.0);
+  daxa::f32vec3 color = daxa::f32vec3(0.0);
   switch (island_index)
   {
   case 0:
-    color = daxa_f32vec3(1.0, 0.0, 0.0); // red
+    color = daxa::f32vec3(1.0, 0.0, 0.0); // red
     break;
   case 1:
-    color = daxa_f32vec3(0.0, 1.0, 0.0); // green
+    color = daxa::f32vec3(0.0, 1.0, 0.0); // green
     break;
   case 2:
-    color = daxa_f32vec3(0.0, 0.0, 1.0); // blue
+    color = daxa::f32vec3(0.0, 0.0, 1.0); // blue
     break;
   case 3:
-    color = daxa_f32vec3(1.0, 1.0, 0.0); // yellow
+    color = daxa::f32vec3(1.0, 1.0, 0.0); // yellow
     break;
   case 4:
-    color = daxa_f32vec3(1.0, 0.0, 1.0); // purple
+    color = daxa::f32vec3(1.0, 0.0, 1.0); // purple
     break;
   case 5:
-    color = daxa_f32vec3(0.0, 1.0, 1.0); // light blue
+    color = daxa::f32vec3(0.0, 1.0, 1.0); // light blue
   case 6:
-    color = daxa_f32vec3(1.0, 0.5, 0.0); // orange
+    color = daxa::f32vec3(1.0, 0.5, 0.0); // orange
     break;
   case 7:
-    color = daxa_f32vec3(0.5, 1.0, 0.0); // lime
+    color = daxa::f32vec3(0.5, 1.0, 0.0); // lime
     break;
   case 8:
-    color = daxa_f32vec3(0.0, 1.0, 0.5); // mint
+    color = daxa::f32vec3(0.0, 1.0, 0.5); // mint
     break;
   case 9:
-    color = daxa_f32vec3(0.0, 0.5, 1.0); // sky
+    color = daxa::f32vec3(0.0, 0.5, 1.0); // sky
     break;
   case 10:
-    color = daxa_f32vec3(1.0, 0.0, 0.5); // pink
+    color = daxa::f32vec3(1.0, 0.0, 0.5); // pink
     break;
   case 11:
-    color = daxa_f32vec3(0.5, 0.0, 1.0); // purple
+    color = daxa::f32vec3(0.5, 0.0, 1.0); // purple
     break;
   case 12:
-    color = daxa_f32vec3(1.0, 1.0, 0.5); // yellow
+    color = daxa::f32vec3(1.0, 1.0, 0.5); // yellow
     break;
   case 13:
-    color = daxa_f32vec3(0.5, 1.0, 1.0); // light blue
+    color = daxa::f32vec3(0.5, 1.0, 1.0); // light blue
     break;
   case 14:
-    color = daxa_f32vec3(1.0, 0.5, 1.0); // purple
+    color = daxa::f32vec3(1.0, 0.5, 1.0); // purple
     break;
   default:
-    color = daxa_f32vec3(0.0);
+    color = daxa::f32vec3(0.0);
     break;
   }
   return color;
@@ -270,9 +285,9 @@ daxa_f32vec3 get_color_by_island_index(daxa_u32 island_index)
 [shader("closesthit")] void closest_hit(inout HitPayload payload, in MyAttributes attr)
 {
   // Get the hit information
-  daxa_f32vec3 hit_location = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-  daxa_u32 instance_index = InstanceID();
-  daxa_u32 prim_index = PrimitiveIndex();
+  daxa::f32vec3 hit_location = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+  daxa::u32 instance_index = InstanceID();
+  daxa::u32 prim_index = PrimitiveIndex();
 
   Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
   Material m = p.task_head.materials[r->material_index];
@@ -280,7 +295,7 @@ daxa_f32vec3 get_color_by_island_index(daxa_u32 island_index)
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
 
   // Compute the normal at the hit position
-  daxa_f32vec3 normal = compute_normal(hit_location, r, prim_index, aabbs);
+  daxa::f32vec3 normal = compute_normal(hit_location, r, prim_index, aabbs);
 
   // Set the payload
   payload.position = hit_location;
@@ -311,7 +326,7 @@ daxa_f32vec3 get_color_by_island_index(daxa_u32 island_index)
   {
     if (r->island_index != MAX_U32)
     {
-      daxa_u32 island_index = r->island_index;
+      daxa::u32 island_index = r->island_index;
       if (island_index != MAX_U32)
       {
         let contact_island_index = p.task_head.islands[island_index].contact_island_index;
@@ -358,11 +373,11 @@ daxa_f32vec3 get_color_by_island_index(daxa_u32 island_index)
 
     [shader("intersection")] void intersection()
 {
-  daxa_f32 THit = RayTCurrent();
+  daxa::f32 THit = RayTCurrent();
   MyAttributes params = {};
 
-  daxa_u32 instance_index = InstanceID();
-  daxa_u32 prim_index = PrimitiveIndex();
+  daxa::u32 instance_index = InstanceID();
+  daxa::u32 prim_index = PrimitiveIndex();
 
   Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
 

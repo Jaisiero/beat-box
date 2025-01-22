@@ -12,6 +12,7 @@
 #include "rigid_body_manager.hpp"
 #include "status_manager.hpp"
 #include "gui_manager.hpp"
+#include "image_manager.hpp"
 
 
 #include "shared.inl"
@@ -30,6 +31,7 @@ int main(int argc, char const *argv[])
   auto task_manager = std::make_shared<TaskManager>("Pipeline Manager", gpu);
   // Camera manager
   auto camera_manager = std::make_shared<CameraManager>(gpu->device);
+  // Acceleration structure manager
   auto accel_struct_mngr = std::make_shared<AccelerationStructureManager>(gpu->device, task_manager);
   // Rigid body simulator pipeline
   auto rigid_body_manager = std::make_shared<RigidBodyManager>(gpu->device, task_manager, accel_struct_mngr);
@@ -37,13 +39,18 @@ int main(int argc, char const *argv[])
   auto status_manager = std::make_shared<StatusManager>(gpu, accel_struct_mngr, rigid_body_manager);
   // Scene manager
   auto scene_manager = std::make_shared<SceneManager>("Scene Manager", gpu->device, accel_struct_mngr, rigid_body_manager, status_manager, task_manager);
+  // GUI manager
   auto gui_manager = std::make_shared<GUIManager>(gpu, window, task_manager, rigid_body_manager);
+  // Image manager
+  auto image_manager = std::make_shared<ImageManager>(gpu, task_manager);
 
   // Primary tracing pipeline
   auto RT_pipeline = std::make_shared<RayTracingPipeline>(task_manager->create_ray_tracing(MainRayTracingPipeline{}.info), gpu->device);
   // Renderer
-  auto renderer = std::make_shared<RendererManager>(gpu, task_manager, window, camera_manager, accel_struct_mngr, rigid_body_manager, scene_manager, status_manager, gui_manager);
+  auto renderer = std::make_shared<RendererManager>(gpu, task_manager, window, camera_manager, accel_struct_mngr, rigid_body_manager, scene_manager, status_manager, gui_manager, image_manager);
 
+  // Create image manager
+  image_manager->create();
   // Create camera manager
   camera_manager->create("Camera Manager");
   // Create input manager which depends on camera manager and window
@@ -77,6 +84,7 @@ int main(int argc, char const *argv[])
   accel_struct_mngr->destroy();
   input_manager.destroy();
   camera_manager->destroy();
+  image_manager->destroy();
 
   return 0;
 }

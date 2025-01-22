@@ -605,10 +605,12 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
-        // build blas
-        ti.recorder.build_acceleration_structures({
-            .blas_build_infos = blas_build_infos,
-        });
+        if(blas_build_infos.size() > 0) {
+          // build blas
+          ti.recorder.build_acceleration_structures({
+              .blas_build_infos = blas_build_infos,
+          });
+        }
       },
       .name = "blas rebuild",
   });

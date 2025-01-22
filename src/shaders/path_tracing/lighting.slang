@@ -12,9 +12,11 @@ daxa_u32 wang_hash(daxa_u32 seed)
 }
 
 // Function to initialize the random seed
-daxa_u32 init_random_seed(daxa_u32vec2 pixel_coords, daxa_u32 frame_number)
+daxa_u32 init_random_seed(daxa_u32vec2 px, daxa_u32 frame_number)
 {
-    daxa_u32 seed = pixel_coords.x + pixel_coords.y * 12345u + frame_number * 6789u;
+    // Example: combine all bits so no simple linear correlation:
+    daxa_u32 seed = px.x ^ (px.y * 0x9e3779b1u);  // 0x9e3779b1 = golden ratio
+    seed ^= (frame_number + 0x7f4a7c15u) * 0x85ebca6bu;  // arbitrary prime combos
     return wang_hash(seed);
 }
 
@@ -38,18 +40,30 @@ daxa_f32 random_float(inout daxa_u32 state)
 // Function to sample a Lambertian diffuse reflection
 void sample_lambertian(daxa_f32vec3 normal, daxa_f32vec3 albedo, out daxa_f32vec3 direction, out daxa_f32 pdf, out daxa_f32vec3 brdf, inout daxa_u32 seed)
 {
+    // Generate two random numbers
+    daxa_f32 u1 = random_float(seed);
+    daxa_f32 u2 = random_float(seed);
+
     // Generate a random direction in the hemisphere
-    direction = random_in_hemisphere(normal, seed);
+    direction = random_in_hemisphere(normal, u1, u2);
+    daxa_f32 cos_theta = max(0.0f, dot(normal, direction));
+    pdf = cos_theta / PI; // Cosine-weighted PDF
+    brdf = albedo / PI;   // Lambertian BRDF
+}
+
+// Function to sample a Lambertian diffuse reflection
+void sample_lambertian(daxa_f32vec3 normal, daxa_f32vec3 albedo, daxa::f32 u1, daxa::f32 u2, out daxa_f32vec3 direction, out daxa_f32 pdf, out daxa_f32vec3 brdf)
+{
+    // Generate a random direction in the hemisphere
+    direction = random_in_hemisphere(normal, u1, u2);
     daxa_f32 cos_theta = max(0.0f, dot(normal, direction));
     pdf = cos_theta / PI; // Cosine-weighted PDF
     brdf = albedo / PI;   // Lambertian BRDF
 }
 
 // Function to sample a cosine-weighted direction on the sphere
-daxa_f32vec3 random_in_hemisphere(daxa_f32vec3 normal, inout daxa_u32 seed)
+daxa_f32vec3 random_in_hemisphere(daxa_f32vec3 normal, daxa::f32 u1, daxa::f32 u2)
 {
-    daxa_f32 u1 = random_float(seed);
-    daxa_f32 u2 = random_float(seed);
 
     daxa_f32 r = sqrt(u1);
     daxa_f32 theta = 2.0f * PI * u2;

@@ -42,6 +42,8 @@ struct RendererManager
   std::shared_ptr<StatusManager> status_manager;
   // GUI manager reference
   std::shared_ptr<GUIManager> gui_manager;
+  // Image manager reference
+  std::shared_ptr<ImageManager> image_manager;
 
   // Task graph information for ray tracing
   TaskGraph RT_TG;
@@ -50,8 +52,9 @@ struct RendererManager
   daxa::TaskBuffer task_camera_buffer{{.initial_buffers = {}, .name = "camera_buffer"}};
   daxa::TaskBuffer task_ray_tracing_config{{.initial_buffers = {}, .name = "ray_tracing_config"}};
   daxa::TaskBuffer task_ray_tracing_config_host{{.initial_buffers = {}, .name = "ray_tracing_config_host"}};
+  daxa::TaskImage task_stbn_texture{{.swapchain_image = false, .name = "stbn_texture_task"}};
 
-  explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<GUIManager> gui_manager);
+  explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<GUIManager> gui_manager, std::shared_ptr<ImageManager> image_manager);
   ~RendererManager();
 
   bool create(char const *RT_TG_name, std::shared_ptr<RayTracingPipeline> pipeline, daxa::RayTracingShaderBindingTable SBT);
@@ -89,8 +92,6 @@ private:
   daxa::BufferId ray_tracing_config_host_buffer[DOUBLE_BUFFERING];
 
   daxa::ImageId accumulation_buffer;
-
-  daxa::ImageId stbn_texture;
 };
 
 BB_NAMESPACE_END

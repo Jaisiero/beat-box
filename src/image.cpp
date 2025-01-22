@@ -1,4 +1,4 @@
-#include "image_manager.hpp"
+#include "image.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_FAILURE_USERMSG
@@ -6,14 +6,13 @@
 
 BB_NAMESPACE_BEGIN
 
-BBImage::BBImage(const char *image_filename, const char* path)
+BBImage::BBImage(std::string filename, const char* path)
 {
-    auto filename = std::string(image_filename);
 
-    if (load(std::string(path) + "/" + image_filename))
+    if (load(std::string(path) + "/" + filename))
         return;
 
-    std::cerr << "ERROR: Could not load image file '" << image_filename << "'.\n";
+    std::cerr << "ERROR: Could not load image file '" << filename.c_str() << "'.\n";
 }
 
 BBImage::~BBImage()

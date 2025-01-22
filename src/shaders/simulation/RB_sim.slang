@@ -637,10 +637,10 @@
   {
 #else 
   Ptr<ContactIsland> islands =
-      Ptr<ContactIsland>(CPS.task_head.contact_islands);
+      Ptr<ContactIsland>(CS.task_head.contact_islands);
 
   Ptr<ManifoldLinkIsland> manifold_links =
-      Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
+      Ptr<ManifoldLinkIsland>(CS.task_head.manifold_links);
   
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
@@ -737,10 +737,10 @@
   {
 #else 
   Ptr<ContactIsland> islands =
-      Ptr<ContactIsland>(CPS.task_head.contact_islands);
+      Ptr<ContactIsland>(CSR.task_head.contact_islands);
 
   Ptr<ManifoldLinkIsland> manifold_links =
-      Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
+      Ptr<ManifoldLinkIsland>(CSR.task_head.manifold_links);
   
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
