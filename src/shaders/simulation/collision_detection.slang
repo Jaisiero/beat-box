@@ -535,7 +535,7 @@ struct OBBvsOBBCollision {
     }
   }
 
-  static daxa_b32 collision_detection(const Ptr<RigidBody> A, const Ptr<RigidBody> B, out Manifold manifold, out daxa_u32 obb1_faces, out daxa_u32 obb2_faces) {
+  static daxa_b32 collision_detection(const RigidBody* A, const RigidBody* B, out Manifold manifold, out daxa_u32 obb1_faces, out daxa_u32 obb2_faces) {
     manifold.contact_count = 0;
     manifold.key = -1;
     manifold.error = 0;
@@ -849,7 +849,7 @@ struct OBBvsOBBCollision {
 
 
 struct BodyLinkManifold {
-  static void body_link_manifold(daxa_u32 manifold_index, daxa_u32 body_index, Ptr<daxa_u32> manifold_node_count, Ptr<RigidBody> rigid_bodies, Ptr<ManifoldNode> manifold_nodes)
+  static void body_link_manifold(daxa_u32 manifold_index, daxa_u32 body_index, Ptr<daxa_u32> manifold_node_count, RigidBody* rigid_bodies, Ptr<ManifoldNode> manifold_nodes)
   {
     // Add manifold to buffer
     daxa_u32 node_index = 0;
@@ -886,16 +886,16 @@ struct BodyLinkManifold {
 };
 
 
-func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
+func broad_phase(const daxa_u32 rigid_body_index, RigidBody* rigid_bodies,
                  Ptr<SimConfig> sim_config, SimConfig previous_sim_config, 
                  Ptr<ManifoldNode> manifold_nodes,
                  Ptr<Manifold> collisions,
-                 Ptr<RigidBody> previous_rigid_bodies,
+                 RigidBody* previous_rigid_bodies,
                  Ptr<ManifoldNode> previous_manifold_nodes,
                  Ptr<Manifold> old_collisions,
                  Ptr<BodyLink> body_links) -> void
 {
-   Ptr<RigidBody> r = Ptr<RigidBody>(&rigid_bodies[rigid_body_index]);
+   RigidBody* r = (RigidBody*)(&rigid_bodies[rigid_body_index]);
 #if defined(BB_DEBUG)
   r->clear_flag(RigidBodyFlag::COLLIDING);
   r->face_collided = 0u;
@@ -906,7 +906,7 @@ func broad_phase(const daxa_u32 rigid_body_index, Ptr<RigidBody> rigid_bodies,
  
   for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
   {
-    Ptr<RigidBody> r2 = Ptr<RigidBody>(&rigid_bodies[i]);
+    RigidBody* r2 = (RigidBody*)(&rigid_bodies[i]);
 
     Manifold manifold;
 

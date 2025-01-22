@@ -19,7 +19,7 @@
   RigidBody r =
       UI.task_head.rigid_bodies[index];
 
-  Ptr<daxa_BlasInstanceData> instance = Ptr<daxa_BlasInstanceData>(&UI.task_head.blas_instance_data[index]);
+  daxa_BlasInstanceData* instance = (daxa_BlasInstanceData*)(&UI.task_head.blas_instance_data[index]);
 
   instance->instance_custom_index = index;
   instance->mask = 0xFF;

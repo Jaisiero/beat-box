@@ -516,6 +516,8 @@ static const daxa_u32 NUM_BLOCKS_PER_WORKGROUP = 32;
 static const daxa_u32 RADIX_SORT_BINS = 256;
 static const daxa_u32 SUBGROUP_SIZE = 32; // 32 NVIDIA; 64 AMD
 static const daxa_u32 BITS = 32;          // sorting daxa_u32s
+static const daxa::u32 ITERATIONS = 4;    // 4 iterations for 32-bit daxa_u32s
+static const daxa::u32 BIT_SHIFT = BITS / ITERATIONS; // 8
 
 struct ActiveRigidBody
 {

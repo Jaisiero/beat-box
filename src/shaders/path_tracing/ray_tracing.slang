@@ -32,7 +32,7 @@
   Ptr<Light> lights = Ptr<Light>(p.task_head.lights);
 
   // Rigid body setup
-  Ptr<RigidBody> rigid_bodies = Ptr<RigidBody>(p.task_head.rigid_bodies);
+  RigidBody* rigid_bodies = (RigidBody*)(p.task_head.rigid_bodies);
 
   // Material setup
   Ptr<Material> materials = Ptr<Material>(p.task_head.materials);
@@ -274,7 +274,7 @@ daxa_f32vec3 get_color_by_island_index(daxa_u32 island_index)
   daxa_u32 instance_index = InstanceID();
   daxa_u32 prim_index = PrimitiveIndex();
 
-  Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
+  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[instance_index]);
   Material m = p.task_head.materials[r->material_index];
 
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
@@ -364,7 +364,7 @@ daxa_f32vec3 get_color_by_island_index(daxa_u32 island_index)
   daxa_u32 instance_index = InstanceID();
   daxa_u32 prim_index = PrimitiveIndex();
 
-  Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
+  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[instance_index]);
 
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
   Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);

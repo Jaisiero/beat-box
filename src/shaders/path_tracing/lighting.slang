@@ -84,7 +84,7 @@ daxa_f32vec3 random_point_on_sphere(inout daxa_u32 seed)
 }
 
 // Function to compute the normal at the hit point
-daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, Ptr<RigidBody> r, daxa_u32 prim_index, Ptr<Aabb> aabbs)
+daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, RigidBody* r, daxa_u32 prim_index, Ptr<Aabb> aabbs)
 {
     Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);
 
@@ -276,7 +276,7 @@ daxa_u32 select_random_light(inout daxa_u32 seed, daxa_u32 light_count, daxa_u32
 // Function to sample a point on the cube's surface with cosine-weighted distribution towards shading point
 daxa_f32vec3 uniform_sample_on_cube(
     inout daxa_u32 seed,
-    Ptr<RigidBody> r,
+    RigidBody* r,
     daxa_f32vec3 shading_position,
     out daxa_f32vec3 light_normal,
     daxa_f32 half_size)
@@ -392,7 +392,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     daxa_u32 light_count,
     Ptr<Light> lights,
     daxa_u32 instance_index,
-    Ptr<RigidBody> rigid_bodies,
+    RigidBody* rigid_bodies,
     Ptr<Material> materials,
     RaytracingAccelerationStructure tlas,
     daxa_f32vec3 position, // world space position
@@ -423,7 +423,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     daxa_u32 rigid_body_index = lights[selected_light_index].rigid_body_index;
     
     // Step 2: Retrieve rigid body properties (position, rotation, material index)rigid_bodies
-    Ptr<RigidBody> r = Ptr<RigidBody>(&rigid_bodies[rigid_body_index]);
+    RigidBody* r = (RigidBody*)(&rigid_bodies[rigid_body_index]);
     Material m = materials[r->material_index];
 
     if(all(m.emission <= 0.0f))

@@ -39,11 +39,11 @@
     return;
   }
 
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(RBD.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(RBD.task_head.sim_config);
 
-  Ptr<DispatchBuffer> dispatch_buffer =
-      Ptr<DispatchBuffer>(RBD.task_head.dispatch_buffer);
+  DispatchBuffer* dispatch_buffer =
+      (DispatchBuffer*)(RBD.task_head.dispatch_buffer);
 
   let rb_count = (sim_config->rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
   dispatch_buffer->rigid_body_dispatch = daxa_u32vec3(rb_count, 1, 1);
@@ -54,14 +54,14 @@
   let rs_rb_count = (sim_config->rigid_body_count + RADIX_SORT_WORKGROUP_SIZE - 1) / RADIX_SORT_WORKGROUP_SIZE;
   dispatch_buffer->radix_sort_rigid_body_dispatch = daxa_u32vec3(rs_rb_count, 1, 1);
 
-  printf("radix_sort_rigid_body_dispatch %d\n", rs_rb_count);
+  // printf("radix_sort_rigid_body_dispatch %d\n", rs_rb_count);
 }
 
     [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_generate_morton_codes(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(GMC.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(GMC.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
   if (index >= sim_config->rigid_body_count)
@@ -69,20 +69,22 @@
     return;
   }
 
-  Ptr<RigidBody> rigid_bodies =
-      Ptr<RigidBody>(GMC.task_head.rigid_bodies);
+  RigidBody* rigid_bodies =
+      (RigidBody*)(GMC.task_head.rigid_bodies);
 
-  Ptr<MortonCode> morton_codes =
-      Ptr<MortonCode>(GMC.task_head.morton_codes);
+  MortonCode* morton_codes =
+      (MortonCode*)(GMC.task_head.morton_codes);
 
   let morton_code = MortonCodeGenerator.morton3D(rigid_bodies[index].position);
 
   morton_codes[index] = MortonCode(morton_code, index);
+
+  // printf("morton code num %d\n", sim_config->rigid_body_count);
 }
 
 #if defined(BB_RADIX_SORT_HISTOGRAM)
 // groupshared variables
-groupshared daxa_u32 histogram[RADIX_SORT_BINS];
+groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 // Entry point with HLSL semantics
 [numthreads(RADIX_SORT_WORKGROUP_SIZE, 1, 1)] void entry_radix_sort_histogram(daxa_u32vec3 pixel_i : SV_DispatchThreadID,
@@ -92,22 +94,22 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
   daxa_u32 lID = GroupThreadID.x;
   daxa_u32 wID = GroupID.x;
 
-  Ptr<DispatchBuffer> dispatch_buffer =
-      Ptr<DispatchBuffer>(RBRSH.task_head.dispatch_buffer);
+  DispatchBuffer* dispatch_buffer =
+      (DispatchBuffer*)(RBRSH.task_head.dispatch_buffer);
 
   // if (wID >= dispatch_buffer->radix_sort_rigid_body_dispatch.x)
   // {
   //   return;
   // }
 
-  Ptr<daxa_u32> global_histograms =
-      Ptr<daxa_u32>(RBRSH.task_head.global_histograms);
+  daxa::u32* global_histograms =
+      (daxa::u32*)(RBRSH.task_head.global_histograms);
 
-  Ptr<MortonCode> morton_codes =
-      Ptr<MortonCode>(RBRSH.task_head.morton_codes);
+  MortonCode* morton_codes =
+      (MortonCode*)(RBRSH.task_head.morton_codes);
 
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(RBRSH.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(RBRSH.task_head.sim_config);
 
   daxa_u32 shift = sim_config->radix_shift;
 
@@ -118,6 +120,7 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
   }
   GroupMemoryBarrierWithGroupSync();
 
+  // Compute histogram
   for (daxa_u32 index = 0; index < NUM_BLOCKS_PER_WORKGROUP; index++)
   {
     daxa_u32 element_id = wID * NUM_BLOCKS_PER_WORKGROUP * RADIX_SORT_WORKGROUP_SIZE + index * RADIX_SORT_WORKGROUP_SIZE + lID;
@@ -125,23 +128,25 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
     {
       daxa_u32 val = morton_codes[element_id].morton_code;
       daxa_u32 bin = (val >> shift) & (RADIX_SORT_BINS - 1);
-      InterlockedAdd(histogram[bin], 1);
+      histogram[bin].add(1U);
     }
   }
   GroupMemoryBarrierWithGroupSync();
 
+  // Write histogram to global memory
   if (lID < RADIX_SORT_BINS)
   {
-    global_histograms[RADIX_SORT_BINS * wID + lID] = histogram[lID];
+    daxa::u32 value = histogram[lID].load();
+    global_histograms[RADIX_SORT_BINS * wID + lID] = value;
+#if defined(BB_DEBUG)
+      // if(value > 0)
+      // {
+      //   printf("Histogram shift %d, histogram: %u\n", 0, value);
+      // }
+#endif // BB_DEBUG
   }
 
   
-#if defined(BB_DEBUG)
-  if(pixel_i.x == 0)
-  {
-    printf("Histogram shift %d\n", shift);
-  }
-#endif // BB_DEBUG
 }
 #endif // BB_RADIX_SORT_HISTOGRAM
 
@@ -160,25 +165,25 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
   // We'll assume sID = (lID / SUBGROUP_SIZE), since SUBGROUP_SIZE divides WORKGROUP_SIZE evenly.
   daxa_u32 sID = lID / SUBGROUP_SIZE;
 
-  Ptr<DispatchBuffer> dispatch_buffer =
-      Ptr<DispatchBuffer>(SRS.task_head.dispatch_buffer);
+  DispatchBuffer* dispatch_buffer =
+      (DispatchBuffer*)(SRS.task_head.dispatch_buffer);
 
   // if (wID >= dispatch_buffer->radix_sort_rigid_body_dispatch.x)
   // {
   //   return;
   // }
 
-  Ptr<daxa_u32> global_histograms =
-      Ptr<daxa_u32>(SRS.task_head.global_histograms);
+  daxa::u32* global_histograms =
+      (daxa::u32*)(SRS.task_head.global_histograms);
 
-  Ptr<MortonCode> morton_codes_in =
-      Ptr<MortonCode>(SRS.task_head.morton_codes_in);
+  MortonCode* morton_codes_in =
+      (MortonCode*)(SRS.task_head.morton_codes_in);
 
-  Ptr<MortonCode> morton_codes_out =
-      Ptr<MortonCode>(SRS.task_head.morton_codes_out);
+  MortonCode* morton_codes_out =
+      (MortonCode*)(SRS.task_head.morton_codes_out);
 
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(SRS.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(SRS.task_head.sim_config);
 
   daxa_u32 num_of_workgroups = dispatch_buffer->radix_sort_rigid_body_dispatch.x;
 
@@ -195,8 +200,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_reset_body_links(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(RBL.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(RBL.task_head.sim_config);
 
       daxa_u32 index = pixel_i.x;
       if (index >= sim_config->active_rigid_body_count)
@@ -206,8 +211,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 
       ActiveRigidBody active_rigid_body = RBL.task_head.active_rigid_bodies[index];
 
-      Ptr<RigidBody> rigid_bodies =
-          Ptr<RigidBody>(RBL.task_head.rigid_bodies);
+      RigidBody* rigid_bodies =
+          (RigidBody*)(RBL.task_head.rigid_bodies);
 
       rigid_bodies[active_rigid_body.rigid_body_index].active_index = index;
 
@@ -221,8 +226,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_broad_phase(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(BP.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(BP.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
   if (index >= sim_config->rigid_body_count)
@@ -233,26 +238,26 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
   let previous_sim_config =
       *BP.task_head.previous_sim_config;
 
-  Ptr<RigidBody> rigid_bodies =
-      Ptr<RigidBody>(BP.task_head.rigid_bodies);
+  RigidBody* rigid_bodies =
+      (RigidBody*)(BP.task_head.rigid_bodies);
 
-  Ptr<RigidBody> previous_rigid_bodies =
-      Ptr<RigidBody>(BP.task_head.previous_rigid_bodies);
+  RigidBody* previous_rigid_bodies =
+      (RigidBody*)(BP.task_head.previous_rigid_bodies);
 
-  Ptr<ManifoldNode> rigid_body_link_manifolds =
-      Ptr<ManifoldNode>(BP.task_head.rigid_body_link_manifolds);
+  ManifoldNode* rigid_body_link_manifolds =
+      (ManifoldNode*)(BP.task_head.rigid_body_link_manifolds);
 
-  Ptr<Manifold> collisions =
-      Ptr<Manifold>(BP.task_head.collisions);
+  Manifold* collisions =
+      (Manifold*)(BP.task_head.collisions);
 
-  Ptr<ManifoldNode> previous_rigid_body_link_manifolds =
-      Ptr<ManifoldNode>(BP.task_head.previous_rigid_body_link_manifolds);
+  ManifoldNode* previous_rigid_body_link_manifolds =
+      (ManifoldNode*)(BP.task_head.previous_rigid_body_link_manifolds);
 
-  Ptr<Manifold> old_collisions =
-      Ptr<Manifold>(BP.task_head.old_collisions);
+  Manifold* old_collisions =
+      (Manifold*)(BP.task_head.old_collisions);
 
-  Ptr<BodyLink> body_links =
-      Ptr<BodyLink>(BP.task_head.scratch_body_links);
+  BodyLink* body_links =
+      (BodyLink*)(BP.task_head.scratch_body_links);
 
   broad_phase(index, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collisions, previous_rigid_bodies, previous_rigid_body_link_manifolds, old_collisions, body_links);
 
@@ -267,8 +272,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_rigid_body_sim(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(RB_sim.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(RB_sim.task_head.sim_config);
 
       daxa_u32 index = pixel_i.x;
       if (index >= sim_config->rigid_body_count)
@@ -276,11 +281,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Ptr<RigidBody> r =
-          Ptr<RigidBody>(&RB_sim.task_head.rigid_bodies[index]);
+      RigidBody* r =
+          (RigidBody*)(&RB_sim.task_head.rigid_bodies[index]);
 
-      Ptr<RigidBody> p_r =
-          Ptr<RigidBody>(&RB_sim.task_head.previous_rigid_bodies[index]);
+      RigidBody* p_r =
+          (RigidBody*)(&RB_sim.task_head.previous_rigid_bodies[index]);
 
       if (sim_config->has_flag(SimFlag::ADVECTION))
       {
@@ -293,8 +298,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_island_counter(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(IC.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(IC.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
   if (index >= sim_config->active_rigid_body_count)
@@ -302,11 +307,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
     return;
   }
 
-  Ptr<BodyLink> body_links =
-      Ptr<BodyLink>(IC.task_head.scratch_body_links);
+  BodyLink* body_links =
+      (BodyLink*)(IC.task_head.scratch_body_links);
 
-  Ptr<Island> islands =
-      Ptr<Island>(IC.task_head.islands);
+  Island* islands =
+      (Island*)(IC.task_head.islands);
 
 #if defined(BB_DEBUG)
   // printf("IC index %d, body_link_index %d\n", index, body_link_index);
@@ -325,11 +330,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(ID.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(ID.task_head.sim_config);
 
-      Ptr<DispatchBuffer> dispatch_buffer =
-          Ptr<DispatchBuffer>(ID.task_head.dispatch_buffer);
+      DispatchBuffer* dispatch_buffer =
+          (DispatchBuffer*)(ID.task_head.dispatch_buffer);
 
       let i_count = (sim_config->island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
       dispatch_buffer->island_dispatch = daxa_u32vec3(i_count, 1, 1);
@@ -344,11 +349,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
     return;
   }
 
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(CSD.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(CSD.task_head.sim_config);
 
-  Ptr<DispatchBuffer> dispatch_buffer =
-      Ptr<DispatchBuffer>(CSD.task_head.dispatch_buffer);
+  DispatchBuffer* dispatch_buffer =
+      (DispatchBuffer*)(CSD.task_head.dispatch_buffer);
 
   var collision_c = (sim_config->g_c_info.collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
   dispatch_buffer->collision_dispatch = daxa_u32vec3(collision_c, 1, 1);
@@ -357,8 +362,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_island_builder(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(IB.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(IB.task_head.sim_config);
 
       daxa_u32 index = pixel_i.x;
       if (index >= sim_config->active_rigid_body_count)
@@ -366,17 +371,17 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Ptr<BodyLink> body_links =
-          Ptr<BodyLink>(IB.task_head.scratch_body_links);
+      BodyLink* body_links =
+          (BodyLink*)(IB.task_head.scratch_body_links);
 
-      Ptr<Island> islands =
-          Ptr<Island>(IB.task_head.islands);
+      Island* islands =
+          (Island*)(IB.task_head.islands);
 
-      Ptr<ActiveRigidBody> active_rigid_bodies =
-          Ptr<ActiveRigidBody>(IB.task_head.active_rigid_bodies);
+      ActiveRigidBody* active_rigid_bodies =
+          (ActiveRigidBody*)(IB.task_head.active_rigid_bodies);
 
-      Ptr<RigidBody> rigid_bodies =
-          Ptr<RigidBody>(IB.task_head.rigid_bodies);
+      RigidBody* rigid_bodies =
+          (RigidBody*)(IB.task_head.rigid_bodies);
 
       IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, active_rigid_bodies, sim_config->island_count, islands, sim_config->rigid_body_count, rigid_bodies);
 
@@ -392,11 +397,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
     return;
   }
 
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(IPS.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(IPS.task_head.sim_config);
 
-  Ptr<Island> islands =
-      Ptr<Island>(IPS.task_head.islands);
+  Island* islands =
+      (Island*)(IPS.task_head.islands);
 
   IslandBuilder builder = IslandBuilder(sim_config->island_count, islands);
 
@@ -406,8 +411,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_body_link_to_island(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(BLI.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(BLI.task_head.sim_config);
 
       daxa_u32 index = pixel_i.x;
       if (index >= sim_config->active_rigid_body_count)
@@ -415,14 +420,14 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Ptr<BodyLink> scratch_body_links =
-          Ptr<BodyLink>(BLI.task_head.scratch_body_links);
+      BodyLink* scratch_body_links =
+          (BodyLink*)(BLI.task_head.scratch_body_links);
 
-      Ptr<BodyLinkIsland> body_link_island =
-          Ptr<BodyLinkIsland>(BLI.task_head.body_links);
+      BodyLinkIsland* body_link_island =
+          (BodyLinkIsland*)(BLI.task_head.body_links);
 
-      Ptr<Island> islands =
-          Ptr<Island>(BLI.task_head.islands);
+      Island* islands =
+          (Island*)(BLI.task_head.islands);
 
       IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, scratch_body_links, sim_config->island_count, islands, body_link_island);
 
@@ -432,8 +437,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_sort_body_links_in_island(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(SBLI.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(SBLI.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
   if (index >= sim_config->island_count)
@@ -441,11 +446,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
     return;
   }
 
-  Ptr<BodyLinkIsland> body_link_island =
-      Ptr<BodyLinkIsland>(SBLI.task_head.body_links);
+  BodyLinkIsland* body_link_island =
+      (BodyLinkIsland*)(SBLI.task_head.body_links);
 
-  Ptr<Island> islands =
-      Ptr<Island>(SBLI.task_head.islands);
+  Island* islands =
+      (Island*)(SBLI.task_head.islands);
 
   IslandBuilder builder = IslandBuilder(sim_config->island_count, islands, sim_config->active_rigid_body_count, body_link_island);
 
@@ -455,8 +460,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_manifold_island_builder(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(MIB.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(MIB.task_head.sim_config);
 
       daxa_u32 index = pixel_i.x;
 
@@ -465,7 +470,7 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Ptr<Manifold> m =
+      Manifold* m =
           &MIB.task_head.collisions[index];
 
       daxa_u32 body_a_index = m->obb1_index;
@@ -479,8 +484,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Ptr<RigidBody> rigid_bodies =
-          Ptr<RigidBody>(MIB.task_head.rigid_bodies);
+      RigidBody* rigid_bodies =
+          (RigidBody*)(MIB.task_head.rigid_bodies);
 
       daxa_u32 a_active_body_index = rigid_bodies[body_a_index].active_index;
       daxa_u32 b_active_body_index = rigid_bodies[body_b_index].active_index;
@@ -491,11 +496,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 
       daxa_u32 min_body_index = min(a_active_body_index, b_active_body_index);
 
-      Ptr<Island> islands =
-          Ptr<Island>(MIB.task_head.islands);
+      Island* islands =
+          (Island*)(MIB.task_head.islands);
 
-      Ptr<BodyLink> body_links =
-          Ptr<BodyLink>(MIB.task_head.scratch_body_links);
+      BodyLink* body_links =
+          (BodyLink*)(MIB.task_head.scratch_body_links);
 
       IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands);
 
@@ -505,8 +510,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_contact_island_gather(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(CIG.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(CIG.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
   if (index >= sim_config->island_count)
@@ -514,11 +519,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
     return;
   }
 
-  Ptr<Island> islands =
-      Ptr<Island>(CIG.task_head.islands);
+  Island* islands =
+      (Island*)(CIG.task_head.islands);
 
-  Ptr<ContactIsland> contact_islands =
-      Ptr<ContactIsland>(CIG.task_head.contact_islands);
+  ContactIsland* contact_islands =
+      (ContactIsland*)(CIG.task_head.contact_islands);
 
   ContactIslandBuilder builder = ContactIslandBuilder(sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands);
 
@@ -533,11 +538,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(CID.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(CID.task_head.sim_config);
 
-      Ptr<DispatchBuffer> dispatch_buffer =
-          Ptr<DispatchBuffer>(CID.task_head.dispatch_buffer);
+      DispatchBuffer* dispatch_buffer =
+          (DispatchBuffer*)(CID.task_head.dispatch_buffer);
 
       var ci_count = (sim_config->contact_island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
       dispatch_buffer->contact_island_dispatch = daxa_u32vec3(ci_count, 1, 1);
@@ -552,14 +557,14 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
     return;
   }
 
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(MIPS.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(MIPS.task_head.sim_config);
 
-  Ptr<ContactIsland> contact_islands =
-      Ptr<ContactIsland>(MIPS.task_head.contact_islands);
+  ContactIsland* contact_islands =
+      (ContactIsland*)(MIPS.task_head.contact_islands);
 
-  Ptr<Island> islands =
-      Ptr<Island>(MIPS.task_head.islands);
+  Island* islands =
+      (Island*)(MIPS.task_head.islands);
 
   ContactIslandBuilder builder = ContactIslandBuilder(sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands);
 
@@ -576,8 +581,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_manifold_link_to_island(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(MLI.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(MLI.task_head.sim_config);
 
       daxa_u32 index = pixel_i.x;
       if (index >= sim_config->g_c_info.collision_count)
@@ -585,7 +590,7 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Ptr<Manifold> m =
+      Manifold* m =
           &MLI.task_head.collisions[index];
 
       daxa_u32 body_a_index = m->obb1_index;
@@ -599,25 +604,25 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Ptr<RigidBody> rigid_bodies =
-          Ptr<RigidBody>(MLI.task_head.rigid_bodies);
+      RigidBody* rigid_bodies =
+          (RigidBody*)(MLI.task_head.rigid_bodies);
 
       daxa_u32 a_active_body_index = rigid_bodies[body_a_index].active_index;
       daxa_u32 b_active_body_index = rigid_bodies[body_b_index].active_index;
 
       daxa_u32 min_body_index = min(a_active_body_index, b_active_body_index);
 
-      Ptr<Island> islands =
-          Ptr<Island>(MLI.task_head.islands);
+      Island* islands =
+          (Island*)(MLI.task_head.islands);
 
-      Ptr<BodyLink> body_links =
-          Ptr<BodyLink>(MLI.task_head.scratch_body_links);
+      BodyLink* body_links =
+          (BodyLink*)(MLI.task_head.scratch_body_links);
 
-      Ptr<ContactIsland> contact_islands =
-          Ptr<ContactIsland>(MLI.task_head.contact_islands);
+      ContactIsland* contact_islands =
+          (ContactIsland*)(MLI.task_head.contact_islands);
 
-      Ptr<ManifoldLinkIsland> manifold_links =
-          Ptr<ManifoldLinkIsland>(MLI.task_head.manifold_links);
+      ManifoldLinkIsland* manifold_links =
+          (ManifoldLinkIsland*)(MLI.task_head.manifold_links);
 
       ContactIslandBuilder builder = ContactIslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands, sim_config->g_c_info.collision_count, manifold_links);
 
@@ -627,8 +632,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_sort_manifold_links_in_island(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(MBLI.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(MBLI.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
   if (index >= sim_config->contact_island_count)
@@ -636,11 +641,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
     return;
   }
 
-  Ptr<ManifoldLinkIsland> manifold_links =
-      Ptr<ManifoldLinkIsland>(MBLI.task_head.manifold_links);
+  ManifoldLinkIsland* manifold_links =
+      (ManifoldLinkIsland*)(MBLI.task_head.manifold_links);
 
-  Ptr<ContactIsland> islands =
-      Ptr<ContactIsland>(MBLI.task_head.contact_islands);
+  ContactIsland* islands =
+      (ContactIsland*)(MBLI.task_head.contact_islands);
 
   ContactIslandBuilder builder = ContactIslandBuilder(&sim_config->contact_island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
 
@@ -650,8 +655,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_collision_pre_solver(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(CPS.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(CPS.task_head.sim_config);
 
       daxa_u32 index = pixel_i.x;
 #if defined(BB_SIM_DEBUG)
@@ -667,11 +672,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
       for (daxa_u32 manifold_index = 0; manifold_index < sim_config->g_c_info.collision_count; ++manifold_index)
       {
 #else
-  Ptr<ContactIsland> islands =
-      Ptr<ContactIsland>(CPS.task_head.contact_islands);
+  ContactIsland* islands =
+      (ContactIsland*)(CPS.task_head.contact_islands);
 
-  Ptr<ManifoldLinkIsland> manifold_links =
-      Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
+  ManifoldLinkIsland* manifold_links =
+      (ManifoldLinkIsland*)(CPS.task_head.manifold_links);
 
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
@@ -724,8 +729,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(CS.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(CS.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
 #if defined(BB_SIM_DEBUG)
@@ -741,11 +746,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
   for (daxa_u32 manifold_index = 0; manifold_index < sim_config->g_c_info.collision_count; ++manifold_index)
   {
 #else
-  Ptr<ContactIsland> islands =
-      Ptr<ContactIsland>(CPS.task_head.contact_islands);
+  ContactIsland* islands =
+      (ContactIsland*)(CPS.task_head.contact_islands);
 
-  Ptr<ManifoldLinkIsland> manifold_links =
-      Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
+  ManifoldLinkIsland* manifold_links =
+      (ManifoldLinkIsland*)(CPS.task_head.manifold_links);
 
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
@@ -800,8 +805,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_integrate_positions_rigid_bodies(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      Ptr<SimConfig> sim_config =
-          Ptr<SimConfig>(RB_integrate.task_head.sim_config);
+      SimConfig* sim_config =
+          (SimConfig*)(RB_integrate.task_head.sim_config);
 
       if (pixel_i.x >= sim_config->rigid_body_count)
       {
@@ -810,8 +815,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 
       daxa_u32 index = pixel_i.x;
 
-      Ptr<RigidBody> r =
-          Ptr<RigidBody>(&RB_integrate.task_head.rigid_bodies[index]);
+      RigidBody* r =
+          (RigidBody*)(&RB_integrate.task_head.rigid_bodies[index]);
 
       // Integrate positions
       if (sim_config->has_flag(SimFlag::ADVECTION))
@@ -823,8 +828,8 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_relaxation(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(CSR.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(CSR.task_head.sim_config);
 
   daxa_u32 index = pixel_i.x;
 
@@ -841,11 +846,11 @@ groupshared daxa_u32 histogram[RADIX_SORT_BINS];
   for (daxa_u32 manifold_index = 0; manifold_index < sim_config->g_c_info.collision_count; ++manifold_index)
   {
 #else
-  Ptr<ContactIsland> islands =
-      Ptr<ContactIsland>(CPS.task_head.contact_islands);
+  ContactIsland* islands =
+      (ContactIsland*)(CPS.task_head.contact_islands);
 
-  Ptr<ManifoldLinkIsland> manifold_links =
-      Ptr<ManifoldLinkIsland>(CPS.task_head.manifold_links);
+  ManifoldLinkIsland* manifold_links =
+      (ManifoldLinkIsland*)(CPS.task_head.manifold_links);
 
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
@@ -898,8 +903,8 @@ const static daxa_f32 LINE_SIZE = 0.5f;
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_create_contact_points(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(CP.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(CP.task_head.sim_config);
 
   if (pixel_i.x >= sim_config->g_c_info.collision_count)
   {
@@ -914,8 +919,8 @@ const static daxa_f32 LINE_SIZE = 0.5f;
 
   if (sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
-    var vertex_buffer = Ptr<GUIVertex>(CP.task_head.vertex_buffer);
-    var line_vertex_buffer = Ptr<GUIVertexLine>(CP.task_head.line_vertex_buffer);
+    var vertex_buffer = (GUIVertex*)(CP.task_head.vertex_buffer);
+    var line_vertex_buffer = (GUIVertexLine*)(CP.task_head.line_vertex_buffer);
 
     for (int i = 0; i < m.contact_count; i++)
     {
@@ -937,8 +942,8 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_update_rigid_bodies(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
 {
-  Ptr<SimConfig> sim_config =
-      Ptr<SimConfig>(RB_update.task_head.sim_config);
+  SimConfig* sim_config =
+      (SimConfig*)(RB_update.task_head.sim_config);
 
   if (pixel_i.x >= sim_config->rigid_body_count)
   {
@@ -966,7 +971,7 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     daxa_f32vec3 _min = r.minimum;
     daxa_f32vec3 _max = r.maximum;
     daxa_f32vec3 center = (_min + _max) * 0.5f;
-    var axes_vertex_buffer = Ptr<GUIVertexLine>(RB_update.task_head.axes_vertex_buffer);
+    var axes_vertex_buffer = (GUIVertexLine*)(RB_update.task_head.axes_vertex_buffer);
     let x_axis = r.rotate_vector(daxa_f32vec3(1.0f, 0.0f, 0.0f));
     let y_axis = r.rotate_vector(daxa_f32vec3(0.0f, 1.0f, 0.0f));
     let z_axis = r.rotate_vector(daxa_f32vec3(0.0f, 0.0f, 1.0f));

@@ -303,11 +303,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
-        shift += 8;
+        shift += BIT_SHIFT;
         auto radix_shift_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 5;
         allocate_fill_copy(ti, shift, ti.get(task_sim_config), radix_shift_offset);
       },
-      .name = "reset sim config",
+      .name = "update radix shift",
   });
 
   // Task for reseting body links for islands
@@ -759,14 +759,14 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_RC);
   RB_TG.add_task(task_RBD);
   RB_TG.add_task(task_GMC);
-  // for(auto i = 0u; i < 2; ++i) {
+  for(auto i = 0u; i < ITERATIONS/2; ++i) {
     RB_TG.add_task(task_RBSRH);
     RB_TG.add_task(task_RBSRS);
     RB_TG.add_task(task_URS);
-  //   RB_TG.add_task(task_RBSRH_swap);
-  //   RB_TG.add_task(task_RBSRS_swap);
-  //   RB_TG.add_task(task_URS);
-  // }
+    RB_TG.add_task(task_RBSRH_swap);
+    RB_TG.add_task(task_RBSRS_swap);
+    RB_TG.add_task(task_URS);
+  }
   RB_TG.add_task(task_RBL);
   RB_TG.add_task(task_BP);
   RB_TG.add_task(task_advect);

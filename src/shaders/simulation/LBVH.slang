@@ -32,18 +32,16 @@ struct MortonCodeGenerator
 };
 
 #if defined(BB_RADIX_SORT)
-groupshared daxa_u32[RADIX_SORT_BINS] histogram;
-groupshared daxa_u32[RADIX_SORT_BINS / SUBGROUP_SIZE] sums; // subgroup reductions
-groupshared daxa_u32[RADIX_SORT_BINS] local_offsets;        // local exclusive scan (prefix sum) (inside subgroups)
-groupshared daxa_u32[RADIX_SORT_BINS] global_offsets;       // global exclusive scan (prefix sum)
+groupshared Atomic<daxa::u32> sums[RADIX_SORT_BINS / SUBGROUP_SIZE]; // subgroup reductions
+groupshared Atomic<daxa::u32> global_offsets[RADIX_SORT_BINS];       // global exclusive scan (prefix sum)
 
 struct BinFlags
 {
-    daxa_u32 flags[RADIX_SORT_WORKGROUP_SIZE / BITS];
+    Atomic<daxa::u32> flags[RADIX_SORT_WORKGROUP_SIZE / BITS];
 };
 groupshared BinFlags[RADIX_SORT_BINS] bin_flags;
 
-func radix_sort(daxa_u32 lID, daxa_u32 wID, daxa_u32 lsID, daxa_u32 sID, daxa_u32 num_of_elements, daxa_u32 num_of_workgroups, daxa_u32 shift,
+func radix_sort(daxa_u32 lid, daxa_u32 wid, daxa_u32 lsid, daxa_u32 sid, daxa_u32 num_of_elements, daxa_u32 num_of_workgroups, daxa_u32 shift,
                 MortonCode *morton_codes_in, MortonCode *morton_codes_out, daxa_u32 *global_histograms) -> void
 {
     // We'll accumulate local_histogram, prefix_sum, histogram_count
@@ -52,96 +50,95 @@ func radix_sort(daxa_u32 lID, daxa_u32 wID, daxa_u32 lsID, daxa_u32 sID, daxa_u3
     daxa_u32 histogram_count = 0;
 
     // Only threads corresponding to bins do this
-    if (lID < RADIX_SORT_BINS)
+    if (lid < RADIX_SORT_BINS)
     {
         daxa_u32 count = 0;
         // Combine histograms from all workgroups
         for (daxa_u32 j = 0; j < num_of_workgroups; j++)
         {
-            daxa_u32 t = global_histograms[RADIX_SORT_BINS * j + lID];
-            local_histogram = (j == wID) ? count : local_histogram;
+            daxa_u32 t = global_histograms[RADIX_SORT_BINS * j + lid];
+            local_histogram = (j == wid) ? count : local_histogram;
             count += t;
         }
         histogram_count = count;
 
         // Wave operations:
-        daxa_u32 sum = WaveActiveSum(histogram_count);
+        let sum = WaveActiveSum(histogram_count);
         prefix_sum = WavePrefixSum(histogram_count); // Exclusive prefix sum within the wave
 
         // WaveIsFirstLane acts like subgroupElect - returns true if the lane is the first in the wave
         if (WaveIsFirstLane())
         {
-            sums[sID] = sum;
+            sums[sid] = sum;
         }
     }
-
     GroupMemoryBarrierWithGroupSync();
 
-    if (lID < RADIX_SORT_BINS)
+    if (lid < RADIX_SORT_BINS)
     {
         // Perform an exclusive prefix sum within the wave (subgroup)
-        uint sums_prefix_sum = WavePrefixSum(sums[sID]);
-        
+        let sums_prefix_sum = WavePrefixSum(sums[lsid].load());
         // Broadcast the prefix sum result to all lanes of the current subgroup (wave)
-        uint global_histogram = WaveReadLaneAt(sums_prefix_sum, sID);
+        let global_histogram = WaveReadLaneAt(sums_prefix_sum, sid) + prefix_sum;
 
         // Add the local prefix sum and histogram values
-        global_offsets[lID] = global_histogram + prefix_sum + local_histogram;
+        global_offsets[lid] = global_histogram + local_histogram;
     }
 
     // Scatter keys according to global offsets
-    daxa_u32 flags_bin = lID / BITS;
-    daxa_u32 flags_bit = 1 << (lID % BITS);
+    let flags_bin = lid / BITS;
+    let flags_bit = 1 << (lid % BITS);
 
     for (daxa_u32 index = 0; index < NUM_BLOCKS_PER_WORKGROUP; index++)
     {
-        // GroupMemoryBarrierWithGroupSync();
-
-        daxa_u32 elementId = wID * NUM_BLOCKS_PER_WORKGROUP * RADIX_SORT_WORKGROUP_SIZE + index * RADIX_SORT_WORKGROUP_SIZE + lID;
+        daxa_u32 element_id = wid * NUM_BLOCKS_PER_WORKGROUP * RADIX_SORT_WORKGROUP_SIZE + index * RADIX_SORT_WORKGROUP_SIZE + lid;
 
         // initialize bin flags
-        if (lID < RADIX_SORT_BINS)
+        if (lid < RADIX_SORT_BINS)
         {
             // [unroll] 
-            for (int i = 0; i < RADIX_SORT_WORKGROUP_SIZE / BITS; i++)
+            for (daxa_u32 i = 0U; i < RADIX_SORT_WORKGROUP_SIZE / BITS; i++)
             {
-                bin_flags[lID].flags[i] = 0U;
+                // init all bin flags to 0
+                bin_flags[lid].flags[i] = 0U; 
             }
         }
         GroupMemoryBarrierWithGroupSync();
 
         MortonCode element_in = MortonCode();
-        daxa_u32 binID = 0;
-        daxa_u32 binOffset = 0;
-        if (elementId < num_of_elements)
+        var bin_id = 0U;
+        var bin_offset = 0U;
+        if (element_id < num_of_elements)
         {
-            element_in = morton_codes_in[elementId];
-            binID = (element_in.morton_code >> shift) & (RADIX_SORT_BINS - 1);
+            // fetch element
+            element_in = morton_codes_in[element_id];
+            // calculate bin_id from shifted morton code
+            bin_id = (element_in.morton_code >> shift) & (RADIX_SORT_BINS - 1);
             // offset for group
-            binOffset = global_offsets[binID];
+            bin_offset = global_offsets[bin_id].load();
             // add bit to flag
-            InterlockedAdd(bin_flags[binID].flags[flags_bin], flags_bit);
+            bin_flags[bin_id].flags[flags_bin].add(flags_bit);
         }
         GroupMemoryBarrierWithGroupSync();
 
-        if (elementId < num_of_elements)
+        if (element_id < num_of_elements)
         {
             daxa_u32 prefix = 0;
             daxa_u32 count = 0;
             // [unroll] 
             for (daxa_u32 i = 0; i < RADIX_SORT_WORKGROUP_SIZE / BITS; i++)
             {
-                daxa_u32 bits = bin_flags[binID].flags[i];
+                daxa_u32 bits = bin_flags[bin_id].flags[i].load();
                 daxa_u32 full_count = countbits(bits);
                 daxa_u32 partial_count = countbits(bits & (flags_bit - 1));
                 prefix += (i < flags_bin) ? full_count : 0U;
                 prefix += (i == flags_bin) ? partial_count : 0U;
                 count += full_count;
             }
-            morton_codes_out[binOffset + prefix] = element_in;
+            morton_codes_out[bin_offset + prefix] = element_in;
             if (prefix == count - 1)
             {
-                InterlockedAdd(global_offsets[binID], count);
+                global_offsets[bin_id].add(count);
             }
         }
 
