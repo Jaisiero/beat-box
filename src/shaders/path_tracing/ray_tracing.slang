@@ -38,7 +38,7 @@
   // Material setup
   Ptr<Material> materials = Ptr<Material>(p.task_head.materials);
 
-  Texture3D<daxa::f32vec4> bluenoise_texture = Texture3D<daxa::f32vec4>.get(p.task_head.stbn_texture);
+  // Texture3D<daxa::f32vec4> bluenoise_texture = Texture3D<daxa::f32vec4>.get(p.task_head.stbn_texture);
 
   // Generate the primary ray
   RayDesc ray = create_ray(inv_view, inv_proj, thread_idx, rt_size, tMin, tMax);
