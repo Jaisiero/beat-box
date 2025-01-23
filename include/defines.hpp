@@ -95,6 +95,10 @@ const auto radix_sort_histogram_pipeline_name = "Radix Sort Histogram";
 const auto entry_rigid_body_single_radix_sort = "entry_single_radix_sort";
 const auto rigid_body_single_radix_sort_pipeline_name = "Single Radix Sort";
 
+// generate hierarchy for linear bounding volume hierarchy
+const auto entry_generate_hierarchy_linear_bvh = "entry_generate_hierarchy_linear_bvh";
+const auto generate_hierarchy_linear_bvh_pipeline_name = "Generate Hierarchy Linear BVH";
+
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
@@ -389,6 +393,22 @@ struct RigidBodySingleRadixSortInfo {
       .name = rigid_body_single_radix_sort_pipeline_name,
   };
 };
+
+struct RigidBodyGenerateHierarchyLinearBVHInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_generate_hierarchy_linear_bvh,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyGenerateHierarchyLinearBVHPushConstants),
+      .name = generate_hierarchy_linear_bvh_pipeline_name,
+  };
+};
+
 
 struct BroadPhaseInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{

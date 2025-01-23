@@ -146,3 +146,72 @@ func radix_sort(daxa_u32 lid, daxa_u32 wid, daxa_u32 lsid, daxa_u32 sid, daxa_u3
     }
 }
 #endif // BB_RADIX_SORT
+
+
+
+
+struct LBVH {
+    static daxa::i32 delta(MortonCode* morton_codes, daxa::u32 num_bodies, daxa::i32 i, daxa::u32 code_i, daxa::i32 j) {
+        if(j < 0 || j > num_bodies - 1) {
+            return -1;
+        }
+
+        let code_j = morton_codes[j].morton_code;
+        if(code_i == code_j) {
+            // handle duplicate morton codes
+            return 32 + 31 - firstbithigh(i ^ j);
+        }
+        return 31 - firstbithigh(code_i ^ code_j);
+    }
+
+    static daxa::i32vec2 determine_range(MortonCode* morton_codes, daxa::u32 num_bodies, daxa::i32 index) {
+        // determine direction of the range
+        let code = morton_codes[index].morton_code;
+        let delta_left = delta(morton_codes, num_bodies, index, code, index - 1);
+        let delta_right = delta(morton_codes, num_bodies, index, code, index + 1);
+        let d = (delta_right >= delta_left) ? 1 : -1;
+
+        //compute upper bound for the length of the range
+        let delta_min = MIN(delta_left, delta_right);
+        var lmax = 2;
+        while(delta(morton_codes, num_bodies, index, code, index + lmax * d) > delta_min) {
+            lmax <<= 1;
+        }
+
+        // find the other end using binary search
+        var l = 0;
+        var t = lmax >> 1;
+        for(; t > 0; t >>= 1) {
+            if(delta(morton_codes, num_bodies, index, code, index + (l + t) * d) > delta_min) {
+                l += t;
+            }
+        }
+        daxa::i32 jdx = index + l * d;
+
+        return daxa::i32vec2(MIN(index, jdx), MAX(index, jdx));
+    }
+
+
+    static daxa::i32 find_split(MortonCode* morton_codes, daxa::u32 num_bodies, daxa::i32 first, daxa::i32 last) {
+        daxa::i32 fist_code = morton_codes[first].morton_code;
+
+        // find common prefix
+        daxa::i32 common_prefix = delta(morton_codes, num_bodies, first, fist_code, last);
+
+        // find the split position using binary search
+        daxa::i32 split = first;
+        daxa::i32 step = last - first;
+        do {
+            step = (step + 1) >> 1; // exponential decrease
+            let new_split = split + step; // proposed new split
+            if(new_split < last) {
+                let split_prefix = delta(morton_codes, num_bodies, first, fist_code, new_split);
+                if(split_prefix > common_prefix) {
+                    split = new_split; // accept proposal
+                }
+            }
+        } while(step > 1);
+
+        return split;
+    }
+};

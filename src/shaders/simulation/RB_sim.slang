@@ -6,6 +6,7 @@
 [[vk::push_constant]] RigidBodyGenerateMortonCodePushConstants GMC;
 [[vk::push_constant]] RigidBodyRadixSortHistogramPushConstants RBRSH;
 [[vk::push_constant]] RigidBodySingleRadixSortPushConstants SRS;
+[[vk::push_constant]] RigidBodyGenerateHierarchyLinearBVHPushConstants GHLBVH;
 [[vk::push_constant]] ResetBodyLinkPushConstants RBL;
 [[vk::push_constant]] RigidBodyDispatcherPushConstants RBD;
 [[vk::push_constant]] BroadPhasePushConstants BP;
@@ -32,9 +33,9 @@
 
 [shader("compute")]
     [numthreads(1, 1, 1)] void
-    entry_rigid_body_dispatcher(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    entry_rigid_body_dispatcher(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
-  if (pixel_i.x >= 1u)
+  if (compute_i.x >= 1u)
   {
     return;
   }
@@ -58,12 +59,12 @@
 }
 
     [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_generate_morton_codes(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_generate_morton_codes(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(GMC.task_head.sim_config);
 
-  daxa_u32 index = pixel_i.x;
+  daxa_u32 index = compute_i.x;
   if (index >= sim_config->rigid_body_count)
   {
     return;
@@ -87,7 +88,7 @@
 groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 // Entry point with HLSL semantics
-[numthreads(RADIX_SORT_WORKGROUP_SIZE, 1, 1)] void entry_radix_sort_histogram(daxa_u32vec3 pixel_i : SV_DispatchThreadID,
+[numthreads(RADIX_SORT_WORKGROUP_SIZE, 1, 1)] void entry_radix_sort_histogram(daxa_u32vec3 compute_i : SV_DispatchThreadID,
                                                                                                      daxa_u32vec3 GroupThreadID : SV_GroupThreadID,
                                                                                                                                   daxa_u32vec3 GroupID : SV_GroupID)
 {
@@ -197,13 +198,85 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 #endif // BB_RADIX_SORT
 }
 
+
+// credits: https://developer.nvidia.com/blog/thinking-parallel-part-iii-tree-construction-gpu/
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_generate_hierarchy_linear_bvh(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  var sim_config =
+      (SimConfig*)(GHLBVH.task_head.sim_config);
+
+  var rigid_bodies =
+      (RigidBody*)(GHLBVH.task_head.rigid_bodies);
+
+  var morton_codes =
+      (MortonCode*)(GHLBVH.task_head.morton_codes);
+
+  var lbvh_nodes = (LBVHNode*)(GHLBVH.task_head.lbvh_nodes);
+
+  var lbvh_construction_info = (LBVHConstructionInfo*)(GHLBVH.task_head.lbvh_construction_info);
+
+  let num_bodies = sim_config->rigid_body_count;
+  let leaf_offset = num_bodies - 1;
+
+  let index = compute_i.x;
+  // leaf nodes
+  if (index < num_bodies)
+  {
+    let morton_code = morton_codes[index];
+    let r = rigid_bodies[morton_code.index];
+    lbvh_nodes[leaf_offset + index] = LBVHNode(MIN_I32, MAX_I32, morton_code.index, Aabb(r.minimum + r.position, r.maximum + r.position));
+  }
+
+  // internal nodes
+  if(index < num_bodies - 1) {
+    // Find out which range of objects the node corresponds to.
+    // (This is where the magic happens!)
+
+    daxa::i32vec2 range = LBVH.determine_range(morton_codes, num_bodies, (daxa::i32)(index));
+    daxa::i32 first = range.x;
+    daxa::i32 last = range.y;
+
+    // Determine where to split the range.
+    daxa::i32 split = LBVH.find_split(morton_codes, num_bodies, first, last);
+
+    // Select childA.
+    daxa::i32 childA = MAX_I32;
+    if (split == first)
+        childA = leaf_offset + split;
+    else
+        childA = split;
+
+    // Select childB.
+    daxa::i32 childB = MAX_I32;
+    if (split + 1 == last)
+        childB = leaf_offset + split + 1;
+    else
+        childB = split + 1;
+
+    // Record parent-child relationships.
+    // FIXME: record relative indices instead of absolute indices.
+    lbvh_nodes[index] = LBVHNode(childA, childB, MAX_U32, Aabb());
+    lbvh_construction_info[childA] = LBVHConstructionInfo(index, 0);
+    lbvh_construction_info[childB] = LBVHConstructionInfo(index, 0);
+  }
+
+  // root node
+  if(index == 0) {
+    lbvh_construction_info[0] = LBVHConstructionInfo(0, 0);
+  }
+}
+
+
+
+
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_reset_body_links(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
+    entry_reset_body_links(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
       SimConfig* sim_config =
           (SimConfig*)(RBL.task_head.sim_config);
 
-      daxa_u32 index = pixel_i.x;
+      daxa_u32 index = compute_i.x;
       if (index >= sim_config->active_rigid_body_count)
       {
         return;
@@ -224,12 +297,12 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_broad_phase(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_broad_phase(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(BP.task_head.sim_config);
 
-  daxa_u32 index = pixel_i.x;
+  daxa_u32 index = compute_i.x;
   if (index >= sim_config->rigid_body_count)
   {
     return;
@@ -271,11 +344,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_rigid_body_sim(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
+    entry_rigid_body_sim(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
       SimConfig* sim_config =
           (SimConfig*)(RB_sim.task_head.sim_config);
 
-      daxa_u32 index = pixel_i.x;
+      daxa_u32 index = compute_i.x;
       if (index >= sim_config->rigid_body_count)
       {
         return;
@@ -296,12 +369,12 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_island_counter(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_island_counter(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(IC.task_head.sim_config);
 
-  daxa_u32 index = pixel_i.x;
+  daxa_u32 index = compute_i.x;
   if (index >= sim_config->active_rigid_body_count)
   {
     return;
@@ -324,8 +397,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 [shader("compute")]
     [numthreads(1, 1, 1)] void
-    entry_island_dispatcher(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      if (pixel_i.x >= 1u)
+    entry_island_dispatcher(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
+      if (compute_i.x >= 1u)
       {
         return;
       }
@@ -341,10 +414,10 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(1, 1, 1)] void entry_collision_solver_dispatcher(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(1, 1, 1)] void entry_collision_solver_dispatcher(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
 
-  if (pixel_i.x >= 1u)
+  if (compute_i.x >= 1u)
   {
     return;
   }
@@ -361,11 +434,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_island_builder(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
+    entry_island_builder(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
       SimConfig* sim_config =
           (SimConfig*)(IB.task_head.sim_config);
 
-      daxa_u32 index = pixel_i.x;
+      daxa_u32 index = compute_i.x;
       if (index >= sim_config->active_rigid_body_count)
       {
         return;
@@ -389,10 +462,10 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(1, 1, 1)] void entry_island_prefix_sum(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(1, 1, 1)] void entry_island_prefix_sum(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
 
-  if (pixel_i.x >= 1u)
+  if (compute_i.x >= 1u)
   {
     return;
   }
@@ -410,11 +483,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_body_link_to_island(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
+    entry_body_link_to_island(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
       SimConfig* sim_config =
           (SimConfig*)(BLI.task_head.sim_config);
 
-      daxa_u32 index = pixel_i.x;
+      daxa_u32 index = compute_i.x;
       if (index >= sim_config->active_rigid_body_count)
       {
         return;
@@ -435,12 +508,12 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_sort_body_links_in_island(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_sort_body_links_in_island(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(SBLI.task_head.sim_config);
 
-  daxa_u32 index = pixel_i.x;
+  daxa_u32 index = compute_i.x;
   if (index >= sim_config->island_count)
   {
     return;
@@ -459,11 +532,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_manifold_island_builder(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
+    entry_manifold_island_builder(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
       SimConfig* sim_config =
           (SimConfig*)(MIB.task_head.sim_config);
 
-      daxa_u32 index = pixel_i.x;
+      daxa_u32 index = compute_i.x;
 
       if (index >= sim_config->g_c_info.collision_count)
       {
@@ -508,12 +581,12 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_contact_island_gather(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_contact_island_gather(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(CIG.task_head.sim_config);
 
-  daxa_u32 index = pixel_i.x;
+  daxa_u32 index = compute_i.x;
   if (index >= sim_config->island_count)
   {
     return;
@@ -532,8 +605,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 [shader("compute")]
     [numthreads(1, 1, 1)] void
-    entry_contact_island_dispatcher(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
-      if (pixel_i.x >= 1u)
+    entry_contact_island_dispatcher(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
+      if (compute_i.x >= 1u)
       {
         return;
       }
@@ -549,10 +622,10 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(1, 1, 1)] void entry_manifold_island_prefix_sum(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(1, 1, 1)] void entry_manifold_island_prefix_sum(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
 
-  if (pixel_i.x >= 1u)
+  if (compute_i.x >= 1u)
   {
     return;
   }
@@ -580,11 +653,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_manifold_link_to_island(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
+    entry_manifold_link_to_island(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
       SimConfig* sim_config =
           (SimConfig*)(MLI.task_head.sim_config);
 
-      daxa_u32 index = pixel_i.x;
+      daxa_u32 index = compute_i.x;
       if (index >= sim_config->g_c_info.collision_count)
       {
         return;
@@ -630,12 +703,12 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_sort_manifold_links_in_island(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_sort_manifold_links_in_island(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(MBLI.task_head.sim_config);
 
-  daxa_u32 index = pixel_i.x;
+  daxa_u32 index = compute_i.x;
   if (index >= sim_config->contact_island_count)
   {
     return;
@@ -654,11 +727,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_collision_pre_solver(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
+    entry_collision_pre_solver(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
       SimConfig* sim_config =
           (SimConfig*)(CPS.task_head.sim_config);
 
-      daxa_u32 index = pixel_i.x;
+      daxa_u32 index = compute_i.x;
 #if defined(BB_SIM_DEBUG)
       if (index >= 1)
 #else
@@ -727,12 +800,12 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(CS.task_head.sim_config);
 
-  daxa_u32 index = pixel_i.x;
+  daxa_u32 index = compute_i.x;
 #if defined(BB_SIM_DEBUG)
   if (index >= 1)
 #else
@@ -804,16 +877,16 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_integrate_positions_rigid_bodies(daxa_u32vec3 pixel_i : SV_DispatchThreadID) {
+    entry_integrate_positions_rigid_bodies(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
       SimConfig* sim_config =
           (SimConfig*)(RB_integrate.task_head.sim_config);
 
-      if (pixel_i.x >= sim_config->rigid_body_count)
+      if (compute_i.x >= sim_config->rigid_body_count)
       {
         return;
       }
 
-      daxa_u32 index = pixel_i.x;
+      daxa_u32 index = compute_i.x;
 
       RigidBody* r =
           (RigidBody*)(&RB_integrate.task_head.rigid_bodies[index]);
@@ -826,12 +899,12 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
 
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_relaxation(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_relaxation(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(CSR.task_head.sim_config);
 
-  daxa_u32 index = pixel_i.x;
+  daxa_u32 index = compute_i.x;
 
 #if defined(BB_SIM_DEBUG)
   if (index >= 1)
@@ -901,18 +974,18 @@ const static daxa_f32 LINE_SIZE = 0.5f;
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_create_contact_points(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    entry_create_contact_points(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(CP.task_head.sim_config);
 
-  if (pixel_i.x >= sim_config->g_c_info.collision_count)
+  if (compute_i.x >= sim_config->g_c_info.collision_count)
   {
     return;
   }
 
   Manifold m =
-      CP.task_head.collisions[pixel_i.x];
+      CP.task_head.collisions[compute_i.x];
 
   daxa_u32 index = 0;
   InterlockedAdd(sim_config->g_c_info.collision_point_count, m.contact_count, index);
@@ -940,17 +1013,17 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_update_rigid_bodies(daxa_u32vec3 pixel_i : SV_DispatchThreadID)
+    entry_update_rigid_bodies(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config =
       (SimConfig*)(RB_update.task_head.sim_config);
 
-  if (pixel_i.x >= sim_config->rigid_body_count)
+  if (compute_i.x >= sim_config->rigid_body_count)
   {
     return;
   }
 
-  daxa_u32 index = pixel_i.x;
+  daxa_u32 index = compute_i.x;
 
   RigidBody r = RB_update.task_head.rigid_bodies[index];
   RigidBody r_copy = RB_update.task_head.rigid_bodies_update[index];

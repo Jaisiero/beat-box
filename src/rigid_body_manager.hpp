@@ -70,9 +70,11 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config_task"}};
   daxa::TaskBuffer task_old_sim_config{{.initial_buffers = {}, .name = "RB_old_sim_config_task"}};
   daxa::TaskBuffer task_morton_codes{{.initial_buffers = {}, .name = "RB_morton_code_task"}};
-  daxa::TaskBuffer task_sorted_morton_codes{{.initial_buffers = {}, .name = "RB_sorted_morton_code_task"}};
+  daxa::TaskBuffer task_tmp_morton_codes{{.initial_buffers = {}, .name = "RB_sorted_morton_code_task"}};
   daxa::TaskBuffer task_radix_sort_histograms{{.initial_buffers = {}, .name = "RB_radix_sort_histogram_task"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
+  daxa::TaskBuffer task_lbvh_nodes{{.initial_buffers = {}, .name = "RB_lbvh_node_task"}};
+  daxa::TaskBuffer task_lbvh_construction_info{{.initial_buffers = {}, .name = "RB_lbvh_construction_info_task"}};
   daxa::TaskBuffer task_sorted_rigid_bodies{{.initial_buffers = {}, .name = "RB_sorted_task"}};
   daxa::TaskBuffer task_previous_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
   daxa::TaskBuffer task_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "rigid_body_link_manifold_task"}};
@@ -123,6 +125,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_GMC;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBRSH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBSRS;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_RBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_ID;
@@ -160,7 +163,9 @@ private:
   daxa::BufferId sim_config_host_buffer[DOUBLE_BUFFERING] = {};
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
   daxa::BufferId morton_codes = {};
-  daxa::BufferId sorted_morton_codes[DOUBLE_BUFFERING] = {};
+  daxa::BufferId tmp_morton_codes = {};
+  daxa::BufferId lbvh_nodes[DOUBLE_BUFFERING] = {};
+  daxa::BufferId lbvh_construction_info = {};
   daxa::BufferId global_histograms[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};
