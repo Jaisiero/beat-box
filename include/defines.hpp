@@ -99,6 +99,10 @@ const auto rigid_body_single_radix_sort_pipeline_name = "Single Radix Sort";
 const auto entry_generate_hierarchy_linear_bvh = "entry_generate_hierarchy_linear_bvh";
 const auto generate_hierarchy_linear_bvh_pipeline_name = "Generate Hierarchy Linear BVH";
 
+// build bounding boxes for linear bounding volume hierarchy
+const auto entry_build_bounding_boxes_linear_bvh = "entry_build_bounding_boxes_linear_bvh";
+const auto build_bounding_boxes_linear_bvh_pipeline_name = "Build Bounding Boxes Linear BVH";
+
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
@@ -406,6 +410,21 @@ struct RigidBodyGenerateHierarchyLinearBVHInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(RigidBodyGenerateHierarchyLinearBVHPushConstants),
       .name = generate_hierarchy_linear_bvh_pipeline_name,
+  };
+};
+
+struct RigidBodyBuildBoundingBoxesLinearBVHInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_build_bounding_boxes_linear_bvh,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyBuildBoundingBoxesLBVHPushConstants),
+      .name = build_bounding_boxes_linear_bvh_pipeline_name,
   };
 };
 

@@ -144,18 +144,25 @@ struct Aabb
     daxa_f32vec3 maximum;
 #if !defined(__cplusplus)
   daxa_f32vec3 center() {
-    return (this.minimum + this.maximum) * 0.5;
+    return (minimum + maximum) * 0.5;
   }
 
   daxa_f32vec3 size() {
-    return this.maximum - this.minimum;
+    return maximum - minimum;
   }
 
   daxa_f32vec3 get_corner(daxa_u32 index) {
     daxa_f32vec3 result;
-    result.x = (index & 1) == 0 ? this.minimum.x : this.maximum.x;
-    result.y = (index & 2) == 0 ? this.minimum.y : this.maximum.y;
-    result.z = (index & 4) == 0 ? this.minimum.z : this.maximum.z;
+    result.x = (index & 1) == 0 ? minimum.x : maximum.x;
+    result.y = (index & 2) == 0 ? minimum.y : maximum.y;
+    result.z = (index & 4) == 0 ? minimum.z : maximum.z;
+    return result;
+  }
+  
+  static Aabb merge(const Aabb a, const Aabb b) {
+    Aabb result;
+    result.minimum = MIN(a.minimum, b.minimum);
+    result.maximum = MAX(a.maximum, b.maximum);
     return result;
   }
 #endif // __cplusplus

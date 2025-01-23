@@ -7,6 +7,7 @@
 [[vk::push_constant]] RigidBodyRadixSortHistogramPushConstants RBRSH;
 [[vk::push_constant]] RigidBodySingleRadixSortPushConstants SRS;
 [[vk::push_constant]] RigidBodyGenerateHierarchyLinearBVHPushConstants GHLBVH;
+[[vk::push_constant]] RigidBodyBuildBoundingBoxesLBVHPushConstants BBBLBVH;
 [[vk::push_constant]] ResetBodyLinkPushConstants RBL;
 [[vk::push_constant]] RigidBodyDispatcherPushConstants RBD;
 [[vk::push_constant]] BroadPhasePushConstants BP;
@@ -225,7 +226,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   {
     let morton_code = morton_codes[index];
     let r = rigid_bodies[morton_code.index];
-    lbvh_nodes[leaf_offset + index] = LBVHNode(MIN_I32, MAX_I32, morton_code.index, Aabb(r.minimum + r.position, r.maximum + r.position));
+    lbvh_nodes[leaf_offset + index] = LBVHNode(-1, -1, morton_code.index, Aabb(r.minimum + r.position, r.maximum + r.position));
   }
 
   // internal nodes
@@ -240,25 +241,25 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     // Determine where to split the range.
     daxa::i32 split = LBVH.find_split(morton_codes, num_bodies, first, last);
 
-    // Select childA.
-    daxa::i32 childA = MAX_I32;
+    // Select child_a.
+    daxa::i32 child_a = MAX_I32;
     if (split == first)
-        childA = leaf_offset + split;
+        child_a = leaf_offset + split;
     else
-        childA = split;
+        child_a = split;
 
-    // Select childB.
-    daxa::i32 childB = MAX_I32;
+    // Select child_b.
+    daxa::i32 child_b = MAX_I32;
     if (split + 1 == last)
-        childB = leaf_offset + split + 1;
+        child_b = leaf_offset + split + 1;
     else
-        childB = split + 1;
+        child_b = split + 1;
 
     // Record parent-child relationships.
     // FIXME: record relative indices instead of absolute indices.
-    lbvh_nodes[index] = LBVHNode(childA, childB, MAX_U32, Aabb());
-    lbvh_construction_info[childA] = LBVHConstructionInfo(index, 0);
-    lbvh_construction_info[childB] = LBVHConstructionInfo(index, 0);
+    lbvh_nodes[index] = LBVHNode(child_a, child_b, MAX_U32, Aabb());
+    lbvh_construction_info[child_a] = LBVHConstructionInfo(index, 0);
+    lbvh_construction_info[child_b] = LBVHConstructionInfo(index, 0);
   }
 
   // root node
@@ -267,6 +268,49 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   }
 }
 
+
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_build_bounding_boxes_linear_bvh(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  var sim_config =
+      (SimConfig*)(BBBLBVH.task_head.sim_config);
+
+  var lbvh_nodes = (LBVHNode*)(BBBLBVH.task_head.lbvh_nodes);
+
+  var lbvh_construction_info = (LBVHConstructionInfo*)(BBBLBVH.task_head.lbvh_construction_info);
+
+  let num_bodies = sim_config->rigid_body_count;
+  let leaf_offset = num_bodies - 1;
+
+  let index = compute_i.x;
+  if(index >= num_bodies) {
+    return;
+  }
+
+  daxa::u32 node_index = lbvh_construction_info[leaf_offset + index].parent;
+  while(true) {
+    var visitations = 0U;
+    InterlockedAdd(lbvh_construction_info[node_index].visitation_count, 1U, visitations);
+    if(visitations < 1) {
+      // this is the first time we visit this node so it's finished
+      break;
+    }
+
+    var bvh_node = lbvh_nodes[node_index];
+    // FIXME: use relative indices instead of absolute indices
+    let child_a = lbvh_nodes[bvh_node.left];
+    let child_b = lbvh_nodes[bvh_node.right]; 
+
+    let aabb = Aabb::merge(child_a.aabb, child_b.aabb);
+    lbvh_nodes[node_index].aabb = aabb;
+    if(node_index == 0) {
+      break;
+    }
+    node_index = lbvh_construction_info[node_index].parent;
+  }
+
+}
 
 
 

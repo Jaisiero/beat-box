@@ -558,7 +558,7 @@ DAXA_DECL_BUFFER_PTR(LBVHNode)
 struct LBVHConstructionInfo 
 {
   daxa::u32 parent; // pointer to parent node
-  daxa::i32 visitation_count; // number of times the node has been visited
+  daxa::u32 visitation_count; // number of times the node has been visited
 };
 DAXA_DECL_BUFFER_PTR(LBVHConstructionInfo)
 
@@ -668,7 +668,6 @@ struct RigidBodySingleRadixSortPushConstants
   DAXA_TH_BLOB(RigidBodySingleRadixSortTaskHead, task_head)
 };
 
-
 // GENERATE HIERARCHY LBVH
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyGenerateHierarchyLinearBVHTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
@@ -683,6 +682,20 @@ struct RigidBodyGenerateHierarchyLinearBVHPushConstants
 {
   DAXA_TH_BLOB(RigidBodyGenerateHierarchyLinearBVHTaskHead, task_head)
 };
+
+// BUILD BOUNDING BOXES LBVH
+DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyBuildBoundingBoxesLinearBVHTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(LBVHNode), lbvh_nodes)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(LBVHConstructionInfo), lbvh_construction_info)
+DAXA_DECL_TASK_HEAD_END
+
+struct RigidBodyBuildBoundingBoxesLBVHPushConstants
+{
+  DAXA_TH_BLOB(RigidBodyBuildBoundingBoxesLinearBVHTaskHead, task_head)
+};
+
 
 // RESET BODY LINK
 DAXA_DECL_TASK_HEAD_BEGIN(ResetBodyLinkTaskHead)

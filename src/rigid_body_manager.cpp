@@ -15,6 +15,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_RBRSH = task_manager->create_compute(RigidBodyRadixSortHistogramInfo{}.info);
     pipeline_RBSRS = task_manager->create_compute(RigidBodySingleRadixSortInfo{}.info);
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
+    pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
     pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
     pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
@@ -340,6 +341,25 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                         daxa::attachment_view(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.lbvh_construction_info, task_lbvh_construction_info),
                    },
                    user_callback_RBLBVHGH);
+
+  // Task for Building Bounding Boxes for Linear Bounding Volume Hierarchy
+  auto user_callback_BBBLBVHGH = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_BBBLBVHGH);
+    ti.recorder.push_constant(RigidBodyBuildBoundingBoxesLBVHPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyBuildBoundingBoxesLinearBVHTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RADIX_SORT_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+  };
+
+  using TTask_BBBLBVHGH = TaskTemplate<RigidBodyBuildBoundingBoxesLinearBVHTaskHead::Task, decltype(user_callback_BBBLBVHGH)>;
+
+  // Instantiate the task using the template class
+  TTask_BBBLBVHGH task_BBBLBVHGH(std::array{
+                       daxa::attachment_view(RigidBodyBuildBoundingBoxesLinearBVHTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(RigidBodyBuildBoundingBoxesLinearBVHTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(RigidBodyBuildBoundingBoxesLinearBVHTaskHead::AT.lbvh_nodes, task_lbvh_nodes),
+                        daxa::attachment_view(RigidBodyBuildBoundingBoxesLinearBVHTaskHead::AT.lbvh_construction_info, task_lbvh_construction_info),
+                   },
+                   user_callback_BBBLBVHGH);
 
 
   // Task for reseting body links for islands
@@ -802,6 +822,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     RB_TG.add_task(task_URS);
   }
   RB_TG.add_task(task_RBLBVHGH);
+  RB_TG.add_task(task_BBBLBVHGH);
   RB_TG.add_task(task_RBL);
   RB_TG.add_task(task_BP);
   RB_TG.add_task(task_advect);
