@@ -397,7 +397,7 @@ static const daxa::f32vec3 BVH_ROOT_TINT = daxa::f32vec3(0.1, 1.0, 0.3);
   if(attr.primitive_index == 0) {
     color = BVH_ROOT_TINT;
   }
-  else if(attr.primitive_index >= instance_count) {
+  else if(attr.primitive_index >= instance_count - 1) {
     color = BVH_LEAF_TINT;
   }
   // printf("instance_index: %d, primitive_index: %d, instance_count: %d\n", attr.instance_index, attr.primitive_index, instance_count);

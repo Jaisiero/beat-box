@@ -84,7 +84,7 @@
   // printf("morton code num %d\n", sim_config->rigid_body_count);
 }
 
-// #if defined(BB_RADIX_SORT_HISTOGRAM)
+#if defined(BB_RADIX_SORT_HISTOGRAM)
 // groupshared variables
 groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
@@ -214,7 +214,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   {
     let morton_code = morton_codes[index];
     let r = rigid_bodies[morton_code.index];
-    let rb_aabb = r.get_min_max_from_OBB();
+    let rb_aabb = r.get_AABB_from_OBB();
     lbvh_nodes[leaf_offset + index] = LBVHNode(rb_aabb, -1, -1, morton_code.index);
   }
 
