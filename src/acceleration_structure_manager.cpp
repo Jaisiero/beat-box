@@ -335,7 +335,6 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
   // Increment the rigid body and primitive count
   current_rigid_body_count += rigid_body_count;
-  current_primitive_count += primitive_count;
 
   // Set Task BLAS
   task_blas.set_blas({.blas = proc_blas});
@@ -356,6 +355,7 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   };
 
   // Get the build sizes
+  // FIXME: This is not being used right now
   tlas_build_sizes = device.tlas_build_sizes(tlas_build_info);
 
   // Set the scratch offset
@@ -411,8 +411,10 @@ bool AccelerationStructureManager::update()
     blas_geometries.resize(count);
   };
 
-  // TODO: 1 for all contact points for now
+  // TODO: one BLAS for the LBVH
   clear_build_AS(1);
+
+  proc_blas_scratch_offset = 0;
 
   /// Alignments:
   auto get_aligned = [&](u32 operand, u32 granularity) -> u32
@@ -421,8 +423,75 @@ bool AccelerationStructureManager::update()
   };
 
   auto sim_config = device.buffer_host_address_as<SimConfig>(rigid_body_manager->get_sim_config_host_buffer()).value();
-
+  
   daxa_u32 total_instances = current_rigid_body_count;
+
+  // Generate LBVH BLAS
+  if(renderer_manager->is_bvh_enabled())
+  {
+    u32 lbvh_primitive_count = (2 * current_primitive_count - 1);
+
+    blas_geometries.at(0).push_back({
+        .data = device.device_address(rigid_body_manager->get_lbvh_node_buffer()).value(),
+        .stride = sizeof(LBVHNode),
+        .count = lbvh_primitive_count,
+        .flags = daxa::GeometryFlagBits::NO_DUPLICATE_ANY_HIT_INVOCATION,
+    });
+
+    // Create BLAS build info
+    blas_build_infos.push_back({
+        .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_BUILD,
+        .dst_blas = {},
+        .geometries = daxa::Span<const daxa::BlasAabbGeometryInfo>(blas_geometries.at(0).data(), blas_geometries.at(0).size()),
+        .scratch_data = {},
+    });
+    // Get the build sizes
+    blas_build_sizes.push_back(device.blas_build_sizes(blas_build_infos.back()));
+
+    auto scratch_offset = get_aligned(blas_build_sizes.back().build_scratch_size, acceleration_structure_scratch_offset_alignment);
+
+    if (proc_blas_scratch_offset + scratch_offset > AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT)
+    {
+      clear_build_AS(0);
+      return false;
+    }
+
+    // Set the scratch offset
+    blas_build_infos.back().scratch_data = device.device_address(proc_blas_scratch_buffer).value() + proc_blas_scratch_offset;
+
+    // Increment the scratch offset
+    proc_blas_scratch_offset += scratch_offset;
+
+    if(lbvh_blas[frame_index] != daxa::BlasId{})
+    {
+      device.destroy_blas(lbvh_blas[frame_index]);
+    }
+
+    // Create BLAS buffer from buffer
+    lbvh_blas[frame_index] = device.create_blas({
+        .size = blas_build_sizes.back().acceleration_structure_size,
+        .name = "lbvh_blas",
+    });
+
+    // Add the BLAS buffer to the BLAS build info
+    blas_build_infos.back().dst_blas = lbvh_blas[frame_index];
+
+    blas_instances_data[current_rigid_body_count] = {
+        .transform = daxa_f32mat3x4(daxa_f32vec4(1.0f, 0.0f, 0.0f, 0.0f),
+                                     daxa_f32vec4(0.0f, 1.0f, 0.0f, 0.0f),
+                                     daxa_f32vec4(0.0f, 0.0f, 1.0f, 0.0f)),
+        .instance_custom_index = current_rigid_body_count,
+        .mask = 0xFF,
+        .instance_shader_binding_table_record_offset = 1,
+        .flags = {},
+        .blas_device_address = device.device_address(lbvh_blas[frame_index]).value(),
+    };
+ 
+    // Set Task BLAS
+    task_blas.set_blas({.blas = std::array{lbvh_blas[frame_index]}});
+
+    ++total_instances;
+  }
 
   // Destroy TLAS
   if (!tlas[frame_index].is_empty())
@@ -451,6 +520,7 @@ bool AccelerationStructureManager::update()
   };
 
   // Get the build sizes
+  // FIXME: This is not being used right now
   tlas_build_sizes = device.tlas_build_sizes(tlas_build_info);
 
   // Set the scratch offset

@@ -138,6 +138,16 @@ struct StatusManager
     }
   }
 
+  bool is_bvh_enabled()
+  {
+    return bvh_enabled;
+  }
+
+  void switch_bvh_enabled()
+  {
+    bvh_enabled = !bvh_enabled;
+  }
+
   bool is_axis_enabled()
   {
     return axes_enabled;
@@ -254,6 +264,8 @@ private:
   bool update_sim_buffer = false;
   // flag for gui
   bool gui_enabled = false;
+  // flag for bvh
+  bool bvh_enabled = false;
   // flag for axes display
   bool axes_enabled = false;
   // flag for advection

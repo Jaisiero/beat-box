@@ -22,7 +22,7 @@ struct RayTracingPipeline
   explicit RayTracingPipeline(std::shared_ptr<daxa::RayTracingPipeline> pipeline, daxa::Device &device) : pipeline(pipeline), device(device)
   {
     // FIXME: pass the groups as an argument
-    groups = {GroupIndex::PRIMARY_RAY, GroupIndex::HIT_MISS, GroupIndex::SHADOW_MISS, GroupIndex::PROCEDURAL_HIT};
+    groups = {GroupIndex::PRIMARY_RAY, GroupIndex::HIT_MISS, GroupIndex::SHADOW_MISS, GroupIndex::PROCEDURAL_HIT, GroupIndex::LBVH_HIT};
     usize sbt_size = 0;
     pipeline->create_sbt({groups}, &region_count, nullptr, &sbt_size, nullptr);
     regions.clear();

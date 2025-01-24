@@ -53,6 +53,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
             .current_frame_index = status_manager->get_frame_count(),
             .frame_count = accumulating ? status_manager->get_accumulation_count() : 0,
             .light_count = scene_manager->get_light_count(),
+            .instance_count = rigid_body_manager->get_sim_config_reference().rigid_body_count,
         };
 
         ti.recorder.copy_buffer_to_buffer({
@@ -89,6 +90,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
                   daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies,
                                         rigid_body_manager->task_rigid_bodies),
                   daxa::attachment_view(RayTracingTaskHead::AT.aabbs, accel_struct_mngr->task_aabb_buffer),
+                  daxa::attachment_view(RayTracingTaskHead::AT.lbvh_nodes, rigid_body_manager->task_lbvh_nodes),
                   daxa::attachment_view(RayTracingTaskHead::AT.lights, scene_manager->task_lights_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.materials, scene_manager->task_material_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.islands, rigid_body_manager->task_islands),
@@ -122,7 +124,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   });
   
 
-  std::array<daxa::TaskBuffer, 12> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer,  gui_manager->task_vertex_buffer,
+  std::array<daxa::TaskBuffer, 13> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer, rigid_body_manager->task_lbvh_nodes, gui_manager->task_vertex_buffer,
   gui_manager->task_line_vertex_buffer, gui_manager->task_axes_vertex_buffer,
   scene_manager->task_material_buffer, task_ray_tracing_config, task_ray_tracing_config_host, scene_manager->task_lights_buffer, 
   rigid_body_manager->task_islands, rigid_body_manager->task_contact_islands};

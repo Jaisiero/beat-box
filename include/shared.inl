@@ -222,6 +222,7 @@ struct RayTracingConfig {
   daxa_u64 current_frame_index;
   daxa_u64 frame_count;
   daxa_u32 light_count;
+  daxa_u32 instance_count;
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 
   [mutating] bool has_flag(RayTracingFlag flag)
@@ -320,7 +321,7 @@ struct RigidBody
   }
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
-  Aabb get_aabb_by_index(daxa_u32 index, Ptr<Aabb> aabbs)
+  Aabb get_aabb_by_index(daxa_u32 index, Aabb* aabbs)
   {
     return aabbs[primitive_offset + index];
   }
@@ -386,7 +387,8 @@ DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_WRITE_ONLY, REGULAR_2D, swapchain)
 DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_READ_ONLY, REGULAR_2D, accumulation_buffer)
 DAXA_TH_TLAS_ID(RAY_TRACING_SHADER_READ, tlas)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rigid_bodies)
-DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(Aabb), aabbs)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
+DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Aabb), lbvh_nodes)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Light), lights)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Material), materials)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(Island), islands)
@@ -546,11 +548,12 @@ DAXA_DECL_BUFFER_PTR(MortonCode)
 
 struct LBVHNode 
 {
+  Aabb aabb;
   daxa::i32 left; // left child or invalid index in case of leaf
   daxa::i32 right; // right child or invalid node in case of leaf
   // FIXME: Can we use a union here?
   daxa::u32 primitive_idx; // custom value copied from morton code or 0 in case of inner node
-  Aabb aabb;
+  daxa::u32 pad;
 };
 DAXA_DECL_BUFFER_PTR(LBVHNode)
 
@@ -1022,12 +1025,14 @@ static const daxa_u32 MAX_BOUNCES = 3;
 struct HitPayload {
     daxa_f32vec3 position;    // Hit position
     daxa_f32vec3 normal;      // Surface normal at hit point
-    daxa_f32vec3 albedo;      // Surface albedo (color)
-    daxa_f32vec3 emission;    // Surface emission (light)
+    // daxa_f32vec3 albedo;      // Surface albedo (color)
+    // daxa_f32vec3 emission;    // Surface emission (light)
     daxa_u32 instance_index;  // Instance index
     daxa_u32 primitive_index; // Primitive index
-    daxa_b32 hit;             // Flag to indicate a hit
-    daxa_u32 seed;            // Random seed for NEE
+    // daxa_b32 hit;             // Flag to indicate a hit
+    // daxa_u32 seed;            // Random seed for NEE
+    daxa_f32vec3 throughput; // Accumulated throughput
+    daxa_f32vec3 radiance;   // Accumulated radiance
 };
 
 struct ShadowPayload
@@ -1037,8 +1042,9 @@ struct ShadowPayload
 
 struct MyAttributes
 {
-  daxa_f32vec3 normal;
-  daxa_f32vec3 position;
+  daxa_u32 instance_index;
+  daxa_u32 primitive_index;
+  daxa_f32 factor;
 };
 
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG

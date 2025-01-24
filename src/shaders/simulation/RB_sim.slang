@@ -84,36 +84,26 @@
   // printf("morton code num %d\n", sim_config->rigid_body_count);
 }
 
-#if defined(BB_RADIX_SORT_HISTOGRAM)
+// #if defined(BB_RADIX_SORT_HISTOGRAM)
 // groupshared variables
 groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 // Entry point with HLSL semantics
-[numthreads(RADIX_SORT_WORKGROUP_SIZE, 1, 1)] void entry_radix_sort_histogram(daxa_u32vec3 compute_i : SV_DispatchThreadID,
-                                                                                                     daxa_u32vec3 GroupThreadID : SV_GroupThreadID,
-                                                                                                                                  daxa_u32vec3 GroupID : SV_GroupID)
+[numthreads(RADIX_SORT_WORKGROUP_SIZE, 1, 1)] void entry_radix_sort_histogram(daxa::u32vec3 compute_i : SV_DispatchThreadID, daxa::u32vec3 GroupThreadID : SV_GroupThreadID, daxa::u32vec3 GroupID : SV_GroupID)
 {
-  daxa_u32 lID = GroupThreadID.x;
-  daxa_u32 wID = GroupID.x;
+  let lID = GroupThreadID.x;
+  let wID = GroupID.x;
 
-  DispatchBuffer* dispatch_buffer =
-      (DispatchBuffer*)(RBRSH.task_head.dispatch_buffer);
-
-  // if (wID >= dispatch_buffer->radix_sort_rigid_body_dispatch.x)
-  // {
-  //   return;
-  // }
-
-  daxa::u32* global_histograms =
+  var global_histograms =
       (daxa::u32*)(RBRSH.task_head.global_histograms);
 
-  MortonCode* morton_codes =
+  var morton_codes =
       (MortonCode*)(RBRSH.task_head.morton_codes);
 
-  SimConfig* sim_config =
+  let sim_config =
       (SimConfig*)(RBRSH.task_head.sim_config);
 
-  daxa_u32 shift = sim_config->radix_shift;
+  let shift = sim_config->radix_shift;
 
   // Initialize histogram
   if (lID < RADIX_SORT_BINS)
@@ -125,11 +115,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   // Compute histogram
   for (daxa_u32 index = 0; index < NUM_BLOCKS_PER_WORKGROUP; index++)
   {
-    daxa_u32 element_id = wID * NUM_BLOCKS_PER_WORKGROUP * RADIX_SORT_WORKGROUP_SIZE + index * RADIX_SORT_WORKGROUP_SIZE + lID;
+    let element_id = wID * NUM_BLOCKS_PER_WORKGROUP * RADIX_SORT_WORKGROUP_SIZE + index * RADIX_SORT_WORKGROUP_SIZE + lID;
     if (element_id < sim_config->rigid_body_count)
     {
-      daxa_u32 val = morton_codes[element_id].morton_code;
-      daxa_u32 bin = (val >> shift) & (RADIX_SORT_BINS - 1);
+      let val = morton_codes[element_id].morton_code;
+      let bin = (val >> shift) & (RADIX_SORT_BINS - 1);
       histogram[bin].add(1U);
     }
   }
@@ -138,7 +128,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   // Write histogram to global memory
   if (lID < RADIX_SORT_BINS)
   {
-    daxa::u32 value = histogram[lID].load();
+    let value = histogram[lID].load();
     global_histograms[RADIX_SORT_BINS * wID + lID] = value;
 #if defined(BB_DEBUG)
       // if(value > 0)
@@ -146,9 +136,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
       //   printf("Histogram shift %d, histogram: %u\n", 0, value);
       // }
 #endif // BB_DEBUG
-  }
-
-  
+  } 
 }
 #endif // BB_RADIX_SORT_HISTOGRAM
 
@@ -226,7 +214,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   {
     let morton_code = morton_codes[index];
     let r = rigid_bodies[morton_code.index];
-    lbvh_nodes[leaf_offset + index] = LBVHNode(-1, -1, morton_code.index, Aabb(r.minimum + r.position, r.maximum + r.position));
+    let rb_aabb = r.get_min_max_from_OBB();
+    lbvh_nodes[leaf_offset + index] = LBVHNode(rb_aabb, -1, -1, morton_code.index);
   }
 
   // internal nodes
@@ -257,7 +246,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
     // Record parent-child relationships.
     // FIXME: record relative indices instead of absolute indices.
-    lbvh_nodes[index] = LBVHNode(child_a, child_b, MAX_U32, Aabb());
+    lbvh_nodes[index] = LBVHNode(Aabb(), child_a, child_b, MAX_U32);
     lbvh_construction_info[child_a] = LBVHConstructionInfo(index, 0);
     lbvh_construction_info[child_b] = LBVHConstructionInfo(index, 0);
   }

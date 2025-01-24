@@ -61,6 +61,7 @@ struct RigidBodyManager{
   }
 
   daxa::BufferId get_sim_config_host_buffer();
+  daxa::BufferId get_lbvh_node_buffer();
 
   bool is_dirty();
   void clean_dirty();

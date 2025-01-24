@@ -83,6 +83,15 @@ daxa_f32vec3 random_point_on_sphere(inout daxa_u32 seed)
     return daxa_f32vec3(x, y, z);
 }
 
+daxa::f32vec3 compute_cube_normal(daxa::f32vec3 normal) {
+    // Cube normal calculation
+    daxa_f32vec3 abs_normal = abs(normal);
+    daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
+    return (max_component == abs_normal.x) ? daxa_f32vec3(sign(normal.x), 0, 0) :
+             (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) :
+                                               daxa_f32vec3(0, 0, sign(normal.z));
+}
+
 // Function to compute the normal at the hit point
 daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, RigidBody* r, daxa_u32 prim_index, Ptr<Aabb> aabbs)
 {
@@ -95,13 +104,22 @@ daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, RigidBody* r, daxa_u32 pr
     normal = r->rotate_vector_inverse(normal);
 
     // Cube normal calculation
-    daxa_f32vec3 abs_normal = abs(normal);
-    daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
-    normal = (max_component == abs_normal.x) ? daxa_f32vec3(sign(normal.x), 0, 0) :
-             (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) :
-                                               daxa_f32vec3(0, 0, sign(normal.z));
+    normal = compute_cube_normal(normal);
 
     normal = r->rotate_vector(normal);
+    return normal;
+}
+
+// Function to compute the normal at the hit point
+daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, Aabb aabb)
+{
+    daxa_f32vec3 center = aabb.center();
+
+    daxa_f32vec3 normal = normalize(hit_location - center);
+
+    // Cube normal calculation
+    normal = compute_cube_normal(normal);
+
     return normal;
 }
 

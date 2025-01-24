@@ -40,6 +40,8 @@ enum StageIndex : u32
   MISS2,
   CLOSE_HIT,
   INTERSECTION,
+    ANY_HIT_LBVH,
+    INTERSECTION_LBVH,
   STAGES_COUNT,
 };
 
@@ -49,6 +51,7 @@ enum GroupIndex : u32
   HIT_MISS,
   SHADOW_MISS,
   PROCEDURAL_HIT,
+  LBVH_HIT,
   GROUPS_COUNT,
 };
 
@@ -66,6 +69,10 @@ FORCE_INLINE std::string to_string(StageIndex index)
     return "closest_hit";
   case INTERSECTION:
     return "intersection";
+  case ANY_HIT_LBVH:
+    return "any_hit_LBVH";
+    case INTERSECTION_LBVH:
+    return "intersection_LBVH";
   default:
     return "unknown";
   }
@@ -250,6 +257,20 @@ struct MainRayTracingPipeline
       },
   };
 
+  daxa::ShaderCompileInfo rt_any_hit_lbvh_shader_file_string = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RT_shader_file_string},
+      .compile_options = {
+          .entry_point = to_string(ANY_HIT_LBVH),
+      },
+  };
+
+  daxa::ShaderCompileInfo rt_intersection_lbvh_shader_file_string = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RT_shader_file_string},
+      .compile_options = {
+          .entry_point = to_string(INTERSECTION_LBVH),
+      },
+  };
+
   std::vector<daxa::RayTracingShaderCompileInfo> stages;
 
   std::vector<daxa::RayTracingShaderGroupInfo> groups;
@@ -286,6 +307,16 @@ struct MainRayTracingPipeline
         .type = daxa::RayTracingShaderType::INTERSECTION,
     };
 
+    stages[ANY_HIT_LBVH] = daxa::RayTracingShaderCompileInfo{
+        .shader_info = rt_any_hit_lbvh_shader_file_string,
+        .type = daxa::RayTracingShaderType::ANY_HIT,
+    };
+
+    stages[INTERSECTION_LBVH] = daxa::RayTracingShaderCompileInfo{
+        .shader_info = rt_intersection_lbvh_shader_file_string,
+        .type = daxa::RayTracingShaderType::INTERSECTION,
+    };
+
     groups[PRIMARY_RAY] = daxa::RayTracingShaderGroupInfo{
         .type = daxa::ExtendedShaderGroupType::RAYGEN,
         .general_shader_index = StageIndex::RAYGEN,
@@ -305,6 +336,13 @@ struct MainRayTracingPipeline
         .type = daxa::ExtendedShaderGroupType::PROCEDURAL_HIT_GROUP,
         .closest_hit_shader_index = StageIndex::CLOSE_HIT,
         .intersection_shader_index = StageIndex::INTERSECTION,
+    };
+
+    groups[LBVH_HIT] = daxa::RayTracingShaderGroupInfo{
+        .type = daxa::ExtendedShaderGroupType::PROCEDURAL_HIT_GROUP,
+        // .closest_hit_shader_index = StageIndex::CLOSE_HIT_LBVH,
+        .any_hit_shader_index = StageIndex::ANY_HIT_LBVH,
+        .intersection_shader_index = StageIndex::INTERSECTION_LBVH,
     };
 
     info = daxa::RayTracingPipelineCompileInfo{
