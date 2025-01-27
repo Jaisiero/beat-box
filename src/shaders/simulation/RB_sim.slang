@@ -1144,6 +1144,6 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   RB_update.task_head.rigid_bodies_update[index] = r_copy;
 
 #if defined(BB_DEBUG)
-  // printf("Updating rigid body %d sim frame: %lu c frame: %lu p frame: %lu\n", index, sim_config->frame_count, r.frame_count, r_copy.frame_count);
+  // printf("Updating rigid body %d sim frame: %lu c frame: %lu\n", index, r.frame_count, r_copy.frame_count);
 #endif // BB_DEBUG
 }

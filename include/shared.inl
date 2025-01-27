@@ -253,7 +253,6 @@ struct RigidBody
   daxa_u32 material_index;
 #if defined(BB_DEBUG)
   daxa_u32 face_collided;
-  daxa_u64 frame_count;
 #endif // BB_DEBUG
   daxa_u32 primitive_count;
   daxa_u32 primitive_offset;
@@ -265,8 +264,6 @@ struct RigidBody
   daxa_f32 inv_mass;
   daxa_f32vec3 velocity;
   daxa_f32vec3 omega;
-  daxa_f32vec3 tmp_velocity;
-  daxa_f32vec3 tmp_omega;
   daxa_f32mat3x3 inv_inertia;
   daxa_f32 restitution;
   daxa_f32 friction;

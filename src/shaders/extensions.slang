@@ -4,18 +4,10 @@ extension RigidBody
 {
   [mutating] void advect(Ptr<SimConfig> sim_config)
   {
-    // apply_temporal_velocity();
     if(has_flag(RigidBodyFlag::GRAVITY)){
       apply_impulse(daxa_f32vec3(0, sim_config->gravity, 0) *       sim_config->dt, this.position);
     }
     advance(sim_config->dt, LINEAR_DAMPING, ANGULAR_DAMPING);
-    reset_state();
-  }
-
-  [mutating] void apply_temporal_velocity()
-  {
-    this.velocity += this.tmp_velocity;
-    this.omega += this.tmp_omega;
   }
 
   [mutating] void advance(daxa_f32 dt, daxa_f32 linear_damping, daxa_f32 angular_damping)
@@ -60,12 +52,6 @@ extension RigidBody
     daxa_f32vec3 torque = cross(r, impulse);
     daxa_f32vec3 angular_velocity = mul(torque, this.inv_inertia);
     this.omega += angular_velocity;
-  }
-
-  [mutating] void reset_state()
-  {
-    this.tmp_velocity = daxa_f32vec3(0, 0, 0);
-    this.tmp_omega = daxa_f32vec3(0, 0, 0);
   }
 
   daxa_f32vec3 get_velocity_at(daxa_f32vec3 point)
