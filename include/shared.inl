@@ -500,6 +500,7 @@ static const daxa_u32 ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET = 2;
 static const daxa_u32 COLLISION_DISPATCH_COUNT_OFFSET = 3;
 static const daxa_u32 CONTACT_ISLAND_DISPATCH_COUNT_OFFSET = 4;
 static const daxa_u32 RADIX_SORT_RIGID_BODY_DISPATCH_COUNT_OFFSET = 5;
+static const daxa_u32 NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET = 6;
 
 struct DispatchBuffer
 {
@@ -509,6 +510,7 @@ struct DispatchBuffer
   daxa_u32vec3 collision_dispatch;
   daxa_u32vec3 contact_island_dispatch;
   daxa_u32vec3 radix_sort_rigid_body_dispatch;
+  daxa_u32vec3 narrow_phase_dispatch;
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
@@ -743,11 +745,10 @@ struct ResetBodyLinkPushConstants
   DAXA_TH_BLOB(ResetBodyLinkTaskHead, task_head)
 };
 
-
 // BROAD PHASE
 DAXA_DECL_TASK_HEAD_BEGIN(BroadPhaseTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(ActiveRigidBody), active_rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(LBVHNode), lbvh_nodes)
@@ -759,12 +760,23 @@ struct BroadPhasePushConstants
   DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
 };
 
+// NARROW PHASE DISPATCHER
+DAXA_DECL_TASK_HEAD_BEGIN(NarrowPhaseDispatcherTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_DECL_TASK_HEAD_END
+
+struct NarrowPhaseDispatcherPushConstants
+{
+  DAXA_TH_BLOB(NarrowPhaseDispatcherTaskHead, task_head)
+};
 
 // NARROW PHASE
 DAXA_DECL_TASK_HEAD_BEGIN(NarrowPhaseTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), previous_sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(BroadPhaseCollision), broad_phase_collisions)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(ManifoldNode), rigid_body_link_manifolds)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)

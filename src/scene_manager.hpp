@@ -359,8 +359,8 @@ public:
     std::random_device rd; // obtain a random number from hardware
     gen = std::mt19937(rd()); // seed the generator
   
-    scene_1();
-    // scene_2();
+    // scene_1();
+    scene_2();
     // scene_3();
 
     std::uniform_int_distribution<> distr(1, materials.size()-1); // define the range

@@ -17,6 +17,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
     pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
+    pipeline_NPD = task_manager->create_compute(NarrowPhaseDispatcherInfo{}.info);
     pipeline_NP = task_manager->create_compute(NarrowPhaseInfo{}.info);
     pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
     pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
@@ -398,7 +399,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_BP);
     ti.recorder.push_constant(BroadPhasePushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(BroadPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(BroadPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_BP = TaskTemplate<BroadPhaseTaskHead::Task, decltype(user_callback_BP)>;
@@ -414,11 +415,28 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_BP);
 
+  // Calculate first dispatch count for 
+  auto user_callback_NPD = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_NPD);
+    ti.recorder.push_constant(NarrowPhaseDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+
+  using TTask_NPD = TaskTemplate<NarrowPhaseDispatcherTaskHead::Task, decltype(user_callback_NPD)>;
+
+  // Instantiate the task using the template class
+  TTask_NPD task_NPD(std::array{
+                         daxa::attachment_view(NarrowPhaseDispatcherTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                         daxa::attachment_view(NarrowPhaseDispatcherTaskHead::AT.sim_config, task_sim_config),
+                     },
+                     user_callback_NPD);
+
   auto user_callback_NP = [this](daxa::TaskInterface ti, auto &self)
   {
     ti.recorder.set_pipeline(*pipeline_NP);
     ti.recorder.push_constant(NarrowPhasePushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(NarrowPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(NarrowPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_NP = TaskTemplate<NarrowPhaseTaskHead::Task, decltype(user_callback_NP)>;
@@ -428,6 +446,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.sim_config, task_sim_config),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.previous_sim_config, task_old_sim_config),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.broad_phase_collisions, task_broad_phase_collisions),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_body_link_manifolds, task_rigid_body_link_manifolds),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.collisions, task_collisions),
@@ -858,6 +877,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_BBBLBVHGH);
   RB_TG.add_task(task_RBL);
   RB_TG.add_task(task_BP);
+  RB_TG.add_task(task_NPD);
   RB_TG.add_task(task_NP);
   RB_TG.add_task(task_advect);
   RB_TG.add_task(task_IC);

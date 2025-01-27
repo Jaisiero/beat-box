@@ -886,111 +886,193 @@ struct BodyLinkManifold {
 };
 
 
-func narrow_phase(const daxa_u32 rigid_body_index, RigidBody* rigid_bodies,
-                 Ptr<SimConfig> sim_config, SimConfig previous_sim_config, 
-                 Ptr<ManifoldNode> manifold_nodes,
-                 Ptr<Manifold> collisions,
-                 RigidBody* previous_rigid_bodies,
-                 Ptr<ManifoldNode> previous_manifold_nodes,
-                 Ptr<Manifold> old_collisions,
-                 Ptr<BodyLink> body_links) -> void
+// func narrow_phase(const daxa_u32 rigid_body_index, RigidBody* rigid_bodies,
+//                  Ptr<SimConfig> sim_config, SimConfig previous_sim_config, 
+//                  Ptr<ManifoldNode> manifold_nodes,
+//                  Ptr<Manifold> collisions,
+//                  RigidBody* previous_rigid_bodies,
+//                  Ptr<ManifoldNode> previous_manifold_nodes,
+//                  Ptr<Manifold> old_collisions,
+//                  Ptr<BodyLink> body_links) -> void
+// {
+//    RigidBody* r = (RigidBody*)(&rigid_bodies[rigid_body_index]);
+// #if defined(BB_DEBUG)
+//   r->clear_flag(RigidBodyFlag::COLLIDING);
+//   r->face_collided = 0u;
+//   r->frame_count = sim_config.frame_count;
+// #endif // BB_DEBUG
+
+//   IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count, body_links);
+ 
+//   for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
+//   {
+//     RigidBody* r2 = (RigidBody*)(&rigid_bodies[i]);
+
+//     Manifold manifold;
+
+//     var obb1_faces = 0u;
+//     var obb2_faces = 0u;
+
+//     let collision = OBBvsOBBCollision.collision_detection(r, r2, manifold, obb1_faces, obb2_faces);
+    
+//     manifold.obb1_index = rigid_body_index;
+//     manifold.obb2_index = i;
+//     manifold.anchor_a = r->position;
+//     manifold.anchor_b = r2->position;
+// #if defined(BB_DEBUG)
+//     manifold.frame_count = sim_config.frame_count;
+// #endif // BB_DEBUG
+
+//     // 
+//     if (collision)
+//     {
+// #if defined(BB_DEBUG)
+//       // printf("Collision detected rigid body a:%d rigid_body b: %d\n", rigid_body_index, i);
+//       // printf("Collision detected rigid body %u (mat: %d) and %u (mat: %d), axis: %d, error: %d normal: %f %f %f\n", rigid_body_index, r.material_index, i, r2.material_index,  manifold.key, manifold.error, manifold.normal.x, manifold.normal.y, manifold.normal.z);
+//       // printf("Collision detected rigid body %u (rotation: %f %f %f %f) and %u (rotation: %f %f %f %f)\n", rigid_body_index, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w, i, r2.rotation.v.x, r2.rotation.v.y, r2.rotation.v.z, r2.rotation.w);
+// #endif // BB_DEBUG
+//       daxa_u32 index = 0;
+//       InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
+//       manifold.compute_basis();
+
+//       BodyLinkManifold::body_link_manifold(index, rigid_body_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
+
+//       BodyLinkManifold::body_link_manifold(index, i, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
+
+//       daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
+//       if(warm_starting) {
+//         Manifold old_manifold;
+//         daxa_u32 old_index = 0;
+        
+// #if defined(BB_SIM_DEBUG)
+//         if(find_old_collision(rigid_body_index, i, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
+//         {
+// #else
+//         if(BodyLinkManifold::find_old_collision(rigid_body_index, i, previous_rigid_bodies[rigid_body_index].manifold_node_index, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
+// #endif
+//           // printf("Found index %d old index %d collision %d %d new cpc: %d old cpc: %d old cc %d\n", index, old_index, rigid_body_index, i, manifold.contact_count, old_manifold.contact_count, previous_sim_config.g_c_info.collision_count);
+//           manifold.update(old_manifold);
+//         } 
+//         // else {
+//         //   printf("Not found index %d collision %d %d new cpc: %d\n", index, old_index, rigid_body_index, i, manifold.contact_count);
+//         // }
+//       }
+
+//       // Add collision to buffer
+//       collisions[index] = manifold;
+
+// #if !defined(BB_SIM_DEBUG)
+//       // ISLAND BUILDER
+//       // Get active rigid body indices
+//       daxa_u32 in_first = r->has_flag(RigidBodyFlag::DYNAMIC) ? r->active_index : MAX_U32;
+//       daxa_u32 in_second = r2->has_flag(RigidBodyFlag::DYNAMIC) ? r2->active_index : MAX_U32;
+
+//       // Link the bodies
+//       island_builder.link_bodies(in_first, in_second);
+//       // ISLAND BUILDER
+// #endif // BB_SIM_DEBUG
+
+
+// #if defined(BB_DEBUG)
+//       var old_obb1_faces = 0u;
+//       var old_obb2_faces = 0u;
+//       if(obb1_faces != 0) {
+//         InterlockedOr(r->face_collided, obb1_faces, old_obb1_faces);
+//         r->flags |= RigidBodyFlag::COLLIDING;
+//       }
+//       if(obb2_faces != 0) {
+//         InterlockedOr(r2->face_collided, obb2_faces, old_obb2_faces);
+//         r2->flags |= RigidBodyFlag::COLLIDING;
+//       }
+// #endif // BB_DEBUG
+//     } 
+//   }
+// }
+
+
+func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, Manifold* collisions, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, Manifold* old_collisions, BodyLink* body_links) -> void
 {
-   RigidBody* r = (RigidBody*)(&rigid_bodies[rigid_body_index]);
+  daxa::u32 rba_index = broad_phase_collision.body_a_index;
+  daxa::u32 rbb_index = broad_phase_collision.body_b_index;
+
+  RigidBody* r = (RigidBody*)(&rigid_bodies[rba_index]);
+  // FIXME: refactor this clear flag to another compute pass
 #if defined(BB_DEBUG)
   r->clear_flag(RigidBodyFlag::COLLIDING);
   r->face_collided = 0u;
   r->frame_count = sim_config.frame_count;
 #endif // BB_DEBUG
+  RigidBody* r2 = (RigidBody*)(&rigid_bodies[rbb_index]);
 
   IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count, body_links);
- 
-  for (daxa_u32 i = rigid_body_index + 1; i < sim_config->rigid_body_count; i++)
+
+  Manifold manifold;
+
+  var obb1_faces = 0u;
+  var obb2_faces = 0u;
+
+  let collision = OBBvsOBBCollision.collision_detection(r, r2, manifold, obb1_faces, obb2_faces);
+  
+  manifold.obb1_index = rba_index;
+  manifold.obb2_index = rbb_index;
+  manifold.anchor_a = r->position;
+  manifold.anchor_b = r2->position;
+#if defined(BB_DEBUG)
+  manifold.frame_count = sim_config.frame_count;
+#endif // BB_DEBUG
+
+  // 
+  if (collision)
   {
-    RigidBody* r2 = (RigidBody*)(&rigid_bodies[i]);
+    daxa_u32 index = 0;
+    InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
+    manifold.compute_basis();
 
-    Manifold manifold;
+    BodyLinkManifold::body_link_manifold(index, rba_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
 
-    var obb1_faces = 0u;
-    var obb2_faces = 0u;
+    BodyLinkManifold::body_link_manifold(index, rbb_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
 
-    let collision = OBBvsOBBCollision.collision_detection(r, r2, manifold, obb1_faces, obb2_faces);
-    
-    manifold.obb1_index = rigid_body_index;
-    manifold.obb2_index = i;
-    manifold.anchor_a = r->position;
-    manifold.anchor_b = r2->position;
-#if defined(BB_DEBUG)
-    manifold.frame_count = sim_config.frame_count;
-#endif // BB_DEBUG
-
-    // 
-    if (collision)
-    {
-#if defined(BB_DEBUG)
-      // printf("Collision detected rigid body a:%d rigid_body b: %d\n", rigid_body_index, i);
-      // printf("Collision detected rigid body %u (mat: %d) and %u (mat: %d), axis: %d, error: %d normal: %f %f %f\n", rigid_body_index, r.material_index, i, r2.material_index,  manifold.key, manifold.error, manifold.normal.x, manifold.normal.y, manifold.normal.z);
-      // printf("Collision detected rigid body %u (rotation: %f %f %f %f) and %u (rotation: %f %f %f %f)\n", rigid_body_index, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w, i, r2.rotation.v.x, r2.rotation.v.y, r2.rotation.v.z, r2.rotation.w);
-#endif // BB_DEBUG
-      daxa_u32 index = 0;
-      InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
-      manifold.compute_basis();
-
-      BodyLinkManifold.body_link_manifold(index, rigid_body_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
-
-      BodyLinkManifold.body_link_manifold(index, i, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
-
-      daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
-      if(warm_starting) {
-        Manifold old_manifold;
-        daxa_u32 old_index = 0;
-        
+    daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
+    if(warm_starting) {
+      Manifold old_manifold;
+      daxa_u32 old_index = 0;
+      
 #if defined(BB_SIM_DEBUG)
-        if(find_old_collision(rigid_body_index, i, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
-        {
+      if(find_old_collision(rba_index, rbb_index, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
+      {
 #else
-        if(BodyLinkManifold.find_old_collision(rigid_body_index, i, previous_rigid_bodies[rigid_body_index].manifold_node_index, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
+      if(BodyLinkManifold::find_old_collision(rba_index, rbb_index, previous_rigid_bodies[rba_index].manifold_node_index, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
 #endif
-          // printf("Found index %d old index %d collision %d %d new cpc: %d old cpc: %d old cc %d\n", index, old_index, rigid_body_index, i, manifold.contact_count, old_manifold.contact_count, previous_sim_config.g_c_info.collision_count);
-          manifold.update(old_manifold);
-        } 
-        // else {
-        //   printf("Not found index %d collision %d %d new cpc: %d\n", index, old_index, rigid_body_index, i, manifold.contact_count);
-        // }
-      }
+        manifold.update(old_manifold);
+      } 
+    }
 
-      // Add collision to buffer
-      collisions[index] = manifold;
+    // Add collision to buffer
+    collisions[index] = manifold;
 
 #if !defined(BB_SIM_DEBUG)
-      // ISLAND BUILDER
-      // Get active rigid body indices
-      daxa_u32 in_first = r->has_flag(RigidBodyFlag::DYNAMIC) ? r->active_index : MAX_U32;
-      daxa_u32 in_second = r2->has_flag(RigidBodyFlag::DYNAMIC) ? r2->active_index : MAX_U32;
+    // ISLAND BUILDER
+    // Get active rigid body indices
+    daxa_u32 in_first = r->has_flag(RigidBodyFlag::DYNAMIC) ? r->active_index : MAX_U32;
+    daxa_u32 in_second = r2->has_flag(RigidBodyFlag::DYNAMIC) ? r2->active_index : MAX_U32;
 
-      // Link the bodies
-      island_builder.link_bodies(in_first, in_second);
-      // ISLAND BUILDER
+    // Link the bodies
+    island_builder.link_bodies(in_first, in_second);
+    // ISLAND BUILDER
 #endif // BB_SIM_DEBUG
 
 
 #if defined(BB_DEBUG)
-      var old_obb1_faces = 0u;
-      var old_obb2_faces = 0u;
-      if(obb1_faces != 0) {
-        InterlockedOr(r->face_collided, obb1_faces, old_obb1_faces);
-        r->flags |= RigidBodyFlag::COLLIDING;
-      }
-      if(obb2_faces != 0) {
-        InterlockedOr(r2->face_collided, obb2_faces, old_obb2_faces);
-        r2->flags |= RigidBodyFlag::COLLIDING;
-      }
-#endif // BB_DEBUG
-    } 
-#if defined(BB_DEBUG)
-    else {
-      // printf("Collision detection failed rigid body %u (mat: %d) and %u (mat: %d), axis: %d, error: %d\n", rigid_body_index, r.material_index, i, r2.material_index,  manifold.key, manifold.error);
-      // printf("Collision detection failed rigid body %u (rotation: %f %f %f %f) and %u (rotation: %f %f %f %f)\n", rigid_body_index, r.rotation.v.x, r.rotation.v.y, r.rotation.v.z, r.rotation.w, i, r2.rotation.v.x, r2.rotation.v.y, r2.rotation.v.z, r2.rotation.w);
+    var old_obb1_faces = 0u;
+    var old_obb2_faces = 0u;
+    if(obb1_faces != 0) {
+      InterlockedOr(r->face_collided, obb1_faces, old_obb1_faces);
+      r->flags |= RigidBodyFlag::COLLIDING;
+    }
+    if(obb2_faces != 0) {
+      InterlockedOr(r2->face_collided, obb2_faces, old_obb2_faces);
+      r2->flags |= RigidBodyFlag::COLLIDING;
     }
 #endif // BB_DEBUG
-  }
+  } 
 }
