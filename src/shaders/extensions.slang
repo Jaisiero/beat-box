@@ -79,21 +79,26 @@ extension RigidBody
     return mul(rotation_matrix, mul(inv_inertia, transpose(rotation_matrix)));
   }
 
-  Aabb get_min_max_from_OBB()
+  Aabb get_AABB()
   {
-    Aabb aabb = Aabb(this.minimum, this.maximum);
+    return Aabb(minimum, maximum);
+  }
 
-    daxa_f32vec3 minimum = daxa_f32vec3(FLT_MAX, FLT_MAX, FLT_MAX);
-    daxa_f32vec3 maximum = daxa_f32vec3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+  Aabb get_AABB_from_OBB()
+  {
+    Aabb aabb = get_AABB();
+
+    daxa_f32vec3 _minimum = daxa_f32vec3(FLT_MAX, FLT_MAX, FLT_MAX);
+    daxa_f32vec3 _maximum = daxa_f32vec3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
 
     for(daxa_u32 i = 0u; i < AABB_CORNER_COUNT; ++i) {
         daxa_f32vec3 corner = aabb.get_corner(i);
         corner = object_to_world(corner);
-        minimum = min(minimum, corner);
-        maximum = max(maximum, corner);
+        _minimum = min(_minimum, corner);
+        _maximum = max(_maximum, corner);
     }
 
-    return Aabb(minimum, maximum);
+    return Aabb(_minimum, _maximum);
   }
 };
 

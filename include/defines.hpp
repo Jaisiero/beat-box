@@ -40,6 +40,8 @@ enum StageIndex : u32
   MISS2,
   CLOSE_HIT,
   INTERSECTION,
+    ANY_HIT_LBVH,
+    INTERSECTION_LBVH,
   STAGES_COUNT,
 };
 
@@ -49,6 +51,7 @@ enum GroupIndex : u32
   HIT_MISS,
   SHADOW_MISS,
   PROCEDURAL_HIT,
+  LBVH_HIT,
   GROUPS_COUNT,
 };
 
@@ -66,6 +69,10 @@ FORCE_INLINE std::string to_string(StageIndex index)
     return "closest_hit";
   case INTERSECTION:
     return "intersection";
+  case ANY_HIT_LBVH:
+    return "any_hit_LBVH";
+    case INTERSECTION_LBVH:
+    return "intersection_LBVH";
   default:
     return "unknown";
   }
@@ -83,9 +90,37 @@ const auto reset_body_links_pipeline_name = "Reset Body Links";
 const auto entry_rigid_body_dispatcher = "entry_rigid_body_dispatcher";
 const auto rigid_body_dispatcher_pipeline_name = "Rigid Body Dispatcher";
 
+// generate morton codes
+const auto entry_generate_morton_codes = "entry_generate_morton_codes";
+const auto generate_morton_codes_pipeline_name = "Generate Morton Codes";
+
+// radix sort histogram
+const auto entry_radix_sort_histogram = "entry_radix_sort_histogram";
+const auto radix_sort_histogram_pipeline_name = "Radix Sort Histogram";
+
+// single radix sort
+const auto entry_rigid_body_single_radix_sort = "entry_single_radix_sort";
+const auto rigid_body_single_radix_sort_pipeline_name = "Single Radix Sort";
+
+// generate hierarchy for linear bounding volume hierarchy
+const auto entry_generate_hierarchy_linear_bvh = "entry_generate_hierarchy_linear_bvh";
+const auto generate_hierarchy_linear_bvh_pipeline_name = "Generate Hierarchy Linear BVH";
+
+// build bounding boxes for linear bounding volume hierarchy
+const auto entry_build_bounding_boxes_linear_bvh = "entry_build_bounding_boxes_linear_bvh";
+const auto build_bounding_boxes_linear_bvh_pipeline_name = "Build Bounding Boxes Linear BVH";
+
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
+
+// narrow phase dispatcher
+const auto entry_narrow_phase_dispatcher = "entry_narrow_phase_dispatcher";
+const auto narrow_phase_dispatcher_pipeline_name = "Narrow Phase Dispatcher";
+
+// narrow phase
+const auto entry_narrow_phase_sim = "entry_narrow_phase";
+const auto narrow_phase_sim_pipeline_name = "narrow phase Simulation";
 
 // collision solver dispatcher
 const auto entry_collision_solver_dispatcher = "entry_collision_solver_dispatcher";
@@ -230,6 +265,20 @@ struct MainRayTracingPipeline
       },
   };
 
+  daxa::ShaderCompileInfo rt_any_hit_lbvh_shader_file_string = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RT_shader_file_string},
+      .compile_options = {
+          .entry_point = to_string(ANY_HIT_LBVH),
+      },
+  };
+
+  daxa::ShaderCompileInfo rt_intersection_lbvh_shader_file_string = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RT_shader_file_string},
+      .compile_options = {
+          .entry_point = to_string(INTERSECTION_LBVH),
+      },
+  };
+
   std::vector<daxa::RayTracingShaderCompileInfo> stages;
 
   std::vector<daxa::RayTracingShaderGroupInfo> groups;
@@ -266,6 +315,16 @@ struct MainRayTracingPipeline
         .type = daxa::RayTracingShaderType::INTERSECTION,
     };
 
+    stages[ANY_HIT_LBVH] = daxa::RayTracingShaderCompileInfo{
+        .shader_info = rt_any_hit_lbvh_shader_file_string,
+        .type = daxa::RayTracingShaderType::ANY_HIT,
+    };
+
+    stages[INTERSECTION_LBVH] = daxa::RayTracingShaderCompileInfo{
+        .shader_info = rt_intersection_lbvh_shader_file_string,
+        .type = daxa::RayTracingShaderType::INTERSECTION,
+    };
+
     groups[PRIMARY_RAY] = daxa::RayTracingShaderGroupInfo{
         .type = daxa::ExtendedShaderGroupType::RAYGEN,
         .general_shader_index = StageIndex::RAYGEN,
@@ -285,6 +344,13 @@ struct MainRayTracingPipeline
         .type = daxa::ExtendedShaderGroupType::PROCEDURAL_HIT_GROUP,
         .closest_hit_shader_index = StageIndex::CLOSE_HIT,
         .intersection_shader_index = StageIndex::INTERSECTION,
+    };
+
+    groups[LBVH_HIT] = daxa::RayTracingShaderGroupInfo{
+        .type = daxa::ExtendedShaderGroupType::PROCEDURAL_HIT_GROUP,
+        // .closest_hit_shader_index = StageIndex::CLOSE_HIT_LBVH,
+        .any_hit_shader_index = StageIndex::ANY_HIT_LBVH,
+        .intersection_shader_index = StageIndex::INTERSECTION_LBVH,
     };
 
     info = daxa::RayTracingPipelineCompileInfo{
@@ -327,6 +393,87 @@ struct RigidBodyDispatcherInfo {
   };
 };
 
+struct GenerateMortonCodesInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_generate_morton_codes,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyGenerateMortonCodePushConstants),
+      .name = generate_morton_codes_pipeline_name,
+  };
+};
+
+struct RigidBodyRadixSortHistogramInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_radix_sort_histogram,
+          .defines = {
+              {"BB_RADIX_SORT_HISTOGRAM", "1"},
+          },
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyRadixSortHistogramPushConstants),
+      .name = radix_sort_histogram_pipeline_name,
+  };
+};
+
+struct RigidBodySingleRadixSortInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_rigid_body_single_radix_sort,
+          .defines = {
+              {"BB_RADIX_SORT", "1"},
+          },
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodySingleRadixSortPushConstants),
+      .name = rigid_body_single_radix_sort_pipeline_name,
+  };
+};
+
+struct RigidBodyGenerateHierarchyLinearBVHInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_generate_hierarchy_linear_bvh,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyGenerateHierarchyLinearBVHPushConstants),
+      .name = generate_hierarchy_linear_bvh_pipeline_name,
+  };
+};
+
+struct RigidBodyBuildBoundingBoxesLinearBVHInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_build_bounding_boxes_linear_bvh,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyBuildBoundingBoxesLBVHPushConstants),
+      .name = build_bounding_boxes_linear_bvh_pipeline_name,
+  };
+};
+
 struct BroadPhaseInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
@@ -339,6 +486,36 @@ struct BroadPhaseInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(BroadPhasePushConstants),
       .name = broad_phase_sim_pipeline_name,
+  };
+};
+
+struct NarrowPhaseDispatcherInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_narrow_phase_dispatcher
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(NarrowPhaseDispatcherPushConstants),
+      .name = narrow_phase_dispatcher_pipeline_name,
+  };
+};
+
+struct NarrowPhaseInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_narrow_phase_sim
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(NarrowPhasePushConstants),
+      .name = narrow_phase_sim_pipeline_name,
   };
 };
 

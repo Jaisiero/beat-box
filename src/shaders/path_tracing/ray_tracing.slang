@@ -9,10 +9,8 @@
   const daxa::u32vec2 rt_size = DispatchRaysDimensions().xy;
 
   // Initialize variables
-  daxa::f32vec3 radiance = daxa::f32vec3(0.0, 0.0, 0.0);
-  daxa::f32vec3 throughput = daxa::f32vec3(1.0, 1.0, 1.0);
-  daxa::u32 depth = 0;
-  daxa::i32vec2 sample_shift = daxa::i32vec2(5, 7);
+  daxa_u32 depth = 0;
+  // daxa::i32vec2 sample_shift = daxa::i32vec2(5, 7);
 
   var max_bounces = p.task_head.ray_tracing_config.max_bounces;
   var frame_count = p.task_head.ray_tracing_config.frame_count;
@@ -30,13 +28,13 @@
 
   // Light setup
   daxa::u32 light_count = p.task_head.ray_tracing_config.light_count;
-  Ptr<Light> lights = Ptr<Light>(p.task_head.lights);
+  let lights = (Light*)(p.task_head.lights);
 
   // Rigid body setup
-  Ptr<RigidBody> rigid_bodies = Ptr<RigidBody>(p.task_head.rigid_bodies);
+  RigidBody* rigid_bodies = (RigidBody*)(p.task_head.rigid_bodies);
 
   // Material setup
-  Ptr<Material> materials = Ptr<Material>(p.task_head.materials);
+  let materials = (Material*)(p.task_head.materials);
 
   // Texture3D<daxa::f32vec4> bluenoise_texture = Texture3D<daxa::f32vec4>.get(p.task_head.stbn_texture);
 
@@ -45,40 +43,40 @@
 
   // Get the top-level acceleration structure
   var tlas = RaytracingAccelerationStructure::get(p.task_head.tlas);
+    
+  HitPayload payload = {daxa::f32vec3(0), daxa::f32vec3(0), MAX_U32, MAX_U32, daxa::f32vec3(1.0), daxa::f32vec3(0.0)};
 
   // **Path Tracing Loop**
   while (depth < max_bounces)
   {
-    HitPayload payload = {};
-    payload.seed = seed; // Pass the seed to the payload
+    // payload.seed = seed; // Pass the seed to the payload
+    payload.instance_index = MAX_U32;
+    payload.primitive_index = MAX_U32;
 
     TraceRay(tlas, RAY_FLAG_NONE, ~0, 0, 0, 0, ray, payload);
 
-    seed = payload.seed; // Update the seed after tracing
+    // seed = payload.seed; // Update the seed after tracing
 
-    if (!payload.hit)
+    if (payload.instance_index == MAX_U32 || payload.primitive_index == MAX_U32)
     {
       // If no hit, accumulate background color and terminate
-      radiance += throughput * daxa::f32vec3(0.95, 0.28, 0.059); // Background color
+      payload.radiance += payload.throughput * daxa_f32vec3(0.95, 0.28, 0.059); // Background color
       break;
     }
 
-    if(any(isnan(throughput))) {
-      // pink color for nan
-      radiance = daxa::f32vec3(0.0, 0.0, 0.0);
-      break;
-    }
+    Material m = materials[rigid_bodies[payload.instance_index].material_index];
 
     // Update throughput
-    daxa::f32vec3 position = payload.position;
-    daxa::f32vec3 normal = payload.normal;
-    daxa::f32vec3 albedo = payload.albedo;
-    daxa::u32 instance_index = payload.instance_index;
+    daxa_f32vec3 position = payload.position;
+    daxa_f32vec3 normal = payload.normal;
+    daxa_f32vec3 albedo = m.albedo;
+    daxa::f32vec3 emission = m.emission;
+    daxa_u32 instance_index = payload.instance_index;
 
     // **Accumulate Emission**
-    if (length(payload.emission) > 0.0f)
+    if (length(emission) > 0.0f)
     {
-      radiance += throughput * payload.emission;
+      payload.radiance += payload.throughput * emission;
     }
 
     // **Next Event Estimation with MIS**
@@ -97,7 +95,7 @@
       daxa::f32 mis_weight = (pdf_light) / (pdf_light + pdf_brdf_light);
 
       // Accumulate radiance with MIS weight
-      radiance += throughput * direct_lighting * mis_weight;
+      payload.radiance += payload.throughput * direct_lighting * mis_weight;
     }
 
     // Sample a new direction (BRDF sampling)
@@ -115,7 +113,7 @@
 
     // Update throughput for indirect lighting
     daxa::f32 cos_theta = max(0.0f, dot(normal, new_direction));
-    throughput *= (brdf * cos_theta) / pdf_brdf;
+    payload.throughput *= (brdf * cos_theta) / pdf_brdf;
 
     // Prepare the next ray
     ray.Origin = position + normal * 0.001f; // Offset to avoid self-intersection
@@ -129,7 +127,7 @@
     // Russian roulette termination after a certain depth
     if (depth > 2)
     {
-      daxa::f32 max_throughput = max(throughput.r, max(throughput.g, throughput.b));
+      daxa::f32 max_throughput = max(payload.throughput.r, max(payload.throughput.g, payload.throughput.b));
       daxa::f32 continue_probability = clamp(max_throughput, 0.1f, 1.0f);
 
       if (random_float(seed) > continue_probability)
@@ -137,7 +135,7 @@
         break; // Terminate the path
       }
 
-      throughput /= continue_probability;
+      payload.throughput /= continue_probability;
     }
   }
 
@@ -153,7 +151,7 @@
     daxa::f32vec4 accumulated_color = accumulation_buffer[thread_idx.xy];
 
     // Update the accumulated color by frame_count and add the new radiance
-    daxa::f32vec3 average_radiance = (accumulated_color.rgb * daxa::f32(frame_count) + radiance) / daxa::f32(frame_count + 1);
+    daxa::f32vec3 average_radiance = (accumulated_color.rgb * daxa::f32(frame_count) + payload.radiance) / daxa::f32(frame_count + 1);
 
     // Write the averaged color to the accumulation buffer
     accumulation_buffer[thread_idx.xy] = daxa::f32vec4(average_radiance, 1.0);
@@ -167,7 +165,7 @@
   else
   {
     // Apply gamma correction
-    daxa::f32vec3 gamma_corrected_radiance = pow(radiance, daxa::f32vec3(1.0 / 2.2));
+    daxa::f32vec3 gamma_corrected_radiance = pow(payload.radiance, daxa::f32vec3(1.0 / 2.2));
 
     // For real-time rendering without accumulation
     swapchain[thread_idx.xy] = daxa::f32vec4(gamma_corrected_radiance, 1.0);
@@ -176,7 +174,8 @@
 
     [shader("miss")] void miss(inout HitPayload payload)
 {
-  payload.hit = false;
+  payload.instance_index = MAX_U32;
+  payload.primitive_index = MAX_U32;
 }
 
 [shader("miss")] void miss_shadows(inout ShadowPayload payload)
@@ -289,8 +288,8 @@ daxa::f32vec3 get_color_by_island_index(daxa::u32 island_index)
   daxa::u32 instance_index = InstanceID();
   daxa::u32 prim_index = PrimitiveIndex();
 
-  Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
-  Material m = p.task_head.materials[r->material_index];
+  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[instance_index]);
+  // Material m = p.task_head.materials[r->material_index];
 
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
 
@@ -300,75 +299,74 @@ daxa::f32vec3 get_color_by_island_index(daxa::u32 island_index)
   // Set the payload
   payload.position = hit_location;
   payload.normal = normalize(normal);
-  var ray_tracing_config = p.task_head.ray_tracing_config;
+  // FIXME: Move this to the ray generation shader
+  // let ray_tracing_config = p.task_head.ray_tracing_config;
 
-  if (ray_tracing_config.has_flag(RayTracingFlag::RT_SHOW_NORMALS))
-  {
-    // get face by normal
-    BoxFace face = get_face_by_normal(normal);
-    if (r->has_flag(RigidBodyFlag::COLLIDING))
-    {
-      if (r->is_face_colliding(face))
-      {
-        payload.albedo = collision_material_color;
-      }
-      else
-      {
-        payload.albedo = get_face_color(face);
-      }
-    }
-    else
-    {
-      payload.albedo = get_face_color(face);
-    }
-  }
-  else if (ray_tracing_config.has_flag(RayTracingFlag::RT_SHOW_ISLANDS))
-  {
-    if (r->island_index != MAX_U32)
-    {
-      daxa::u32 island_index = r->island_index;
-      if (island_index != MAX_U32)
-      {
-        let contact_island_index = p.task_head.islands[island_index].contact_island_index;
-        if (contact_island_index != MAX_U32)
-        {
-          // if(contact_island_index < 229) {
-          let key = p.task_head.contact_islands[contact_island_index].key;
-          if (key != MAX_U32)
-          {
-            payload.albedo = get_color_by_island_index(key);
-          }
-          else
-          {
-            payload.albedo = m.albedo;
-          }
-        }
-        else
-        {
-          payload.albedo = m.albedo;
-        }
-      }
-      else
-      {
-        payload.albedo = m.albedo;
-      }
-    }
-    else
-    {
-      payload.albedo = m.albedo;
-    }
-  }
-  else
-  {
-    payload.albedo = m.albedo;
-  }
+  // if (ray_tracing_config.has_flag(RayTracingFlag::RT_SHOW_NORMALS))
+  // {
+  //   // get face by normal
+  //   BoxFace face = get_face_by_normal(normal);
+  //   if (r->has_flag(RigidBodyFlag::COLLIDING))
+  //   {
+  //     if (r->is_face_colliding(face))
+  //     {
+  //       payload.albedo = collision_material_color;
+  //     }
+  //     else
+  //     {
+  //       payload.albedo = get_face_color(face);
+  //     }
+  //   }
+  //   else
+  //   {
+  //     payload.albedo = get_face_color(face);
+  //   }
+  // }
+  // else if (ray_tracing_config.has_flag(RayTracingFlag::RT_SHOW_ISLANDS))
+  // {
+  //   if (r->island_index != MAX_U32)
+  //   {
+  //     daxa_u32 island_index = r->island_index;
+  //     if (island_index != MAX_U32)
+  //     {
+  //       let contact_island_index = p.task_head.islands[island_index].contact_island_index;
+  //       if (contact_island_index != MAX_U32)
+  //       {
+  //         // if(contact_island_index < 229) {
+  //         let key = p.task_head.contact_islands[contact_island_index].key;
+  //         if (key != MAX_U32)
+  //         {
+  //           payload.albedo = get_color_by_island_index(key);
+  //         }
+  //         else
+  //         {
+  //           payload.albedo = m.albedo;
+  //         }
+  //       }
+  //       else
+  //       {
+  //         payload.albedo = m.albedo;
+  //       }
+  //     }
+  //     else
+  //     {
+  //       payload.albedo = m.albedo;
+  //     }
+  //   }
+  //   else
+  //   {
+  //     payload.albedo = m.albedo;
+  //   }
+  // }
+  // else
+  // {
+  //   payload.albedo = m.albedo;
+  // }
   payload.instance_index = instance_index;
   payload.primitive_index = prim_index;
-  payload.emission = m.emission; // Add emission to the payload
+  // payload.emission = m.emission; // Add emission to the payload
 
   // No need to update the seed here
-
-  payload.hit = true;
 }
 
     [shader("intersection")] void intersection()
@@ -379,7 +377,7 @@ daxa::f32vec3 get_color_by_island_index(daxa::u32 island_index)
   daxa::u32 instance_index = InstanceID();
   daxa::u32 prim_index = PrimitiveIndex();
 
-  Ptr<RigidBody> r = Ptr<RigidBody>(&p.task_head.rigid_bodies[instance_index]);
+  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[instance_index]);
 
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
   Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);
@@ -392,6 +390,78 @@ daxa::f32vec3 get_color_by_island_index(daxa::u32 island_index)
 
   if (THit > 0.0)
   {
+    ReportHit(THit, /*hitKind*/ 0, params);
+  }
+}
+
+static const daxa::f32vec3 BVH_TINT = daxa::f32vec3(0.1, 0.3, 1.0);
+static const daxa::f32vec3 BVH_LEAF_TINT = daxa::f32vec3(1.0, 0.3, 0.1);
+static const daxa::f32vec3 BVH_ROOT_TINT = daxa::f32vec3(0.1, 1.0, 0.3);
+
+[shader("anyhit")] void any_hit_LBVH(inout HitPayload payload, in MyAttributes attr)
+{
+  let instance_count = p.task_head.ray_tracing_config.instance_count;
+
+  var color = BVH_TINT;
+  if(attr.primitive_index == 0) {
+    color = BVH_ROOT_TINT;
+  }
+  else if(attr.primitive_index >= instance_count - 1) {
+    color = BVH_LEAF_TINT;
+  }
+  // printf("instance_index: %d, primitive_index: %d, instance_count: %d\n", attr.instance_index, attr.primitive_index, instance_count);
+
+  payload.throughput *= 0.95f;
+  payload.radiance += payload.throughput * color * attr.factor;
+
+  IgnoreHit();
+}
+
+daxa::f32 get_opaque_factor(daxa::f32vec3 hit_pos, Aabb aabb)
+{
+    daxa::f32 factor = 0.0f;
+    // find how close we are to each face
+    daxa::f32 dist_x_min = abs(hit_pos.x - aabb.minimum.x);
+    daxa::f32 dist_x_max = abs(aabb.maximum.x - hit_pos.x);
+    daxa::f32 dist_y_min = abs(hit_pos.y - aabb.minimum.y);
+    daxa::f32 dist_y_max = abs(aabb.maximum.y - hit_pos.y);
+    daxa::f32 dist_z_min = abs(hit_pos.z - aabb.minimum.z);
+    daxa::f32 dist_z_max = abs(aabb.maximum.z - hit_pos.z);
+
+    daxa::u32 boundary_count = 0;
+    daxa::f32 epsilon = 0.01f;
+    if (dist_x_min < epsilon || dist_x_max < epsilon) boundary_count++;
+    if (dist_y_min < epsilon || dist_y_max < epsilon) boundary_count++;
+    if (dist_z_min < epsilon || dist_z_max < epsilon) boundary_count++;
+
+    // Then pick a factor based on boundary_count (1=face, 2=edge, 3=corner).
+    if (boundary_count == 1) factor = 0.05f;
+    if (boundary_count == 2) factor = 0.35f;
+    if (boundary_count == 3) factor = 0.5f;
+
+    return factor;
+}
+
+[shader("intersection")] void intersection_LBVH()
+{
+  daxa_f32 THit = RayTCurrent();
+  MyAttributes params = {InstanceID(), PrimitiveIndex()};
+  // printf("instance_index: %d, primitive_index: %d\n", InstanceID(), PrimitiveIndex());
+
+  let lbvh_nodes = (LBVHNode*)(p.task_head.lbvh_nodes);
+  Aabb aabb = lbvh_nodes[params.primitive_index].aabb;
+
+  Ray ray = {WorldRayOrigin(), WorldRayDirection()};
+  // ray.origin = r->world_to_object(ray.origin);
+  // ray.direction = normalize(r->rotate_vector_inverse(ray.direction));
+
+  THit = hitAabb(aabb, ray);
+
+  if (THit > 0.0)
+  {
+    daxa::f32vec3 hit_pos = ObjectRayOrigin() + ObjectRayDirection() * THit;
+    params.factor = get_opaque_factor(hit_pos, aabb);
+
     ReportHit(THit, /*hitKind*/ 0, params);
   }
 }

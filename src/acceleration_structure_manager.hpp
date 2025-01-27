@@ -106,6 +106,9 @@ private:
   // Sub-allocated buffer for the BLAS
   std::vector<daxa::BlasId> proc_blas = {};
 
+  // Buffer for the LBVH BLAS
+  daxa::BlasId lbvh_blas[DOUBLE_BUFFERING] = {};
+
   // Buffer for the TLAS
   daxa::BufferId proc_tlas_buffer = {};
   // Scratch buffer for the TLAS

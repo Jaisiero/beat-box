@@ -69,6 +69,9 @@ struct RendererManager
   bool is_gui_enabled() {
     return status_manager->is_gui_enabled();
   }
+  bool is_bvh_enabled() {
+    return status_manager->is_bvh_enabled();
+  }
   daxa_u64 get_frame_count() {
     return status_manager->get_frame_count();
   }

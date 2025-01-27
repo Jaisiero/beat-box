@@ -60,7 +60,7 @@ int main(int argc, char const *argv[])
   // Create task graph
   renderer->create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->build_SBT());
   // Create rigid body simulator
-  rigid_body_manager->create("Rigid Body Manager", renderer, gui_manager, 10);
+  rigid_body_manager->create("Rigid Body Manager", renderer, gui_manager);
   // Create acceleration structure manager
   accel_struct_mngr->create(renderer, rigid_body_manager, gui_manager);
   // Create status manager

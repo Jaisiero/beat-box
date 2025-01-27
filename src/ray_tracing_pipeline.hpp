@@ -10,13 +10,24 @@ struct RayTracingPipeline
   // Daxa device
   daxa::Device& device;
   // Shader Binding Table
-  daxa::RayTracingPipeline::SbtPair sbt_pair;
+  daxa::BufferId sbt_buffer;
+  // Region count
+  u32 region_count = 0;
+  // Shader Binding Table
+  std::vector<daxa::GroupRegionInfo> regions = {};
   // flag for initialization
   bool initialized = false;
+  std::vector<u32> groups = {};
 
   explicit RayTracingPipeline(std::shared_ptr<daxa::RayTracingPipeline> pipeline, daxa::Device &device) : pipeline(pipeline), device(device)
   {
-    sbt_pair = pipeline->create_default_sbt();
+    // FIXME: pass the groups as an argument
+    groups = {GroupIndex::PRIMARY_RAY, GroupIndex::HIT_MISS, GroupIndex::SHADOW_MISS, GroupIndex::PROCEDURAL_HIT, GroupIndex::LBVH_HIT};
+    usize sbt_size = 0;
+    pipeline->create_sbt({groups}, &region_count, nullptr, &sbt_size, nullptr);
+    regions.clear();
+    regions.resize(region_count);
+    pipeline->create_sbt({groups}, &region_count, regions.data(), nullptr, &sbt_buffer);
     initialized = true;
   };
 
@@ -27,19 +38,15 @@ struct RayTracingPipeline
     free_SBT();
   };
 
-  auto free_SBT(daxa::RayTracingPipeline::SbtPair &sbt) -> void
+  auto free_SBT(daxa::BufferId buffer) -> void
   {
     if(!initialized) return;
 
     if(device.is_valid())
     {
-      if(!sbt.buffer.is_empty())
+      if(!buffer.is_empty())
       {
-        device.destroy_buffer(sbt.buffer);
-      }
-      if(!sbt.entries.buffer.is_empty())
-      {
-        device.destroy_buffer(sbt.entries.buffer);
+        device.destroy_buffer(buffer);
       }
     }
     initialized = false;
@@ -47,11 +54,7 @@ struct RayTracingPipeline
 
   [[nodiscard]] auto rebuild_SBT() -> daxa::RayTracingShaderBindingTable
   {
-    if (!sbt_pair.buffer.is_empty())
-    {
-      free_SBT();
-    }
-    sbt_pair = pipeline->create_default_sbt();
+    pipeline->create_sbt({groups}, &region_count, regions.data(), nullptr, &sbt_buffer);
     initialized = true;
     return build_SBT();
   }
@@ -64,9 +67,9 @@ struct RayTracingPipeline
     }
 
     return {
-        .raygen_region = sbt_pair.entries.group_regions.at(0).region,
-        .miss_region = sbt_pair.entries.group_regions.at(1).region,
-        .hit_region = sbt_pair.entries.group_regions.at(2).region,
+        .raygen_region = regions.at(0).region,
+        .miss_region = regions.at(1).region,
+        .hit_region = regions.at(2).region,
         .callable_region = {},
     };
   };
@@ -74,7 +77,7 @@ private:
 
   auto free_SBT() -> void
   {
-    free_SBT(sbt_pair);
+    free_SBT(sbt_buffer);
   };
 };
 

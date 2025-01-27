@@ -61,27 +61,35 @@ struct RigidBodyManager{
   }
 
   daxa::BufferId get_sim_config_host_buffer();
+  daxa::BufferId get_lbvh_node_buffer();
 
   bool is_dirty();
   void clean_dirty();
 
   // Task graph information for rigid body simulation
-  daxa::TaskBuffer task_sim_config_host{{.initial_buffers = {}, .name = "RB_sim_config_host"}};
-  daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config"}};
-  daxa::TaskBuffer task_old_sim_config{{.initial_buffers = {}, .name = "RB_old_sim_config"}};
+  daxa::TaskBuffer task_sim_config_host{{.initial_buffers = {}, .name = "RB_sim_config_host_task"}};
+  daxa::TaskBuffer task_sim_config{{.initial_buffers = {}, .name = "RB_sim_config_task"}};
+  daxa::TaskBuffer task_old_sim_config{{.initial_buffers = {}, .name = "RB_old_sim_config_task"}};
+  daxa::TaskBuffer task_morton_codes{{.initial_buffers = {}, .name = "RB_morton_code_task"}};
+  daxa::TaskBuffer task_tmp_morton_codes{{.initial_buffers = {}, .name = "RB_sorted_morton_code_task"}};
+  daxa::TaskBuffer task_radix_sort_histograms{{.initial_buffers = {}, .name = "RB_radix_sort_histogram_task"}};
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
+  daxa::TaskBuffer task_lbvh_nodes{{.initial_buffers = {}, .name = "RB_lbvh_node_task"}};
+  daxa::TaskBuffer task_lbvh_construction_info{{.initial_buffers = {}, .name = "RB_lbvh_construction_info_task"}};
+  daxa::TaskBuffer task_broad_phase_collisions{{.initial_buffers = {}, .name = "RB_broad_phase_collision_task"}};
+  daxa::TaskBuffer task_sorted_rigid_bodies{{.initial_buffers = {}, .name = "RB_sorted_task"}};
   daxa::TaskBuffer task_previous_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
-  daxa::TaskBuffer task_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "rigid_body_link_manifold"}};
-  daxa::TaskBuffer task_previous_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "previous_rigid_body_link_manifold"}};
+  daxa::TaskBuffer task_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "rigid_body_link_manifold_task"}};
+  daxa::TaskBuffer task_previous_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "previous_rigid_body_link_manifold_task"}};
   daxa::TaskBuffer task_next_rigid_bodies{{.initial_buffers = {}, .name = "RB_next_task"}};
-  daxa::TaskBuffer task_collisions{{.initial_buffers = {}, .name = "RB_collisions"}};
-  daxa::TaskBuffer task_old_collisions{{.initial_buffers = {}, .name = "RB_old_collisions"}};
-  daxa::TaskBuffer task_active_rigid_bodies{{.initial_buffers = {}, .name = "RB_active_rigid_bodies"}};
-  daxa::TaskBuffer task_scratch_body_links{{.initial_buffers = {}, .name = "RB_scratch_body_links"}};
-  daxa::TaskBuffer task_body_links{{.initial_buffers = {}, .name = "RB_body_links"}};
-  daxa::TaskBuffer task_manifold_links{{.initial_buffers = {}, .name = "RB_manifold_links"}};
-  daxa::TaskBuffer task_islands{{.initial_buffers = {}, .name = "RB_islands"}};
-  daxa::TaskBuffer task_contact_islands{{.initial_buffers = {}, .name = "RB_contact_islands"}};
+  daxa::TaskBuffer task_collisions{{.initial_buffers = {}, .name = "RB_collision_task"}};
+  daxa::TaskBuffer task_old_collisions{{.initial_buffers = {}, .name = "RB_old_collision_task"}};
+  daxa::TaskBuffer task_active_rigid_bodies{{.initial_buffers = {}, .name = "RB_active_rigid_body_task"}};
+  daxa::TaskBuffer task_scratch_body_links{{.initial_buffers = {}, .name = "RB_scratch_body_link_task"}};
+  daxa::TaskBuffer task_body_links{{.initial_buffers = {}, .name = "RB_body_link_task"}};
+  daxa::TaskBuffer task_manifold_links{{.initial_buffers = {}, .name = "RB_manifold_link_task"}};
+  daxa::TaskBuffer task_islands{{.initial_buffers = {}, .name = "RB_island_task"}};
+  daxa::TaskBuffer task_contact_islands{{.initial_buffers = {}, .name = "RB_contact_island_task"}};
 
 private: 
   void record_read_back_sim_config_tasks(TaskGraph &readback_SC_TG);
@@ -116,7 +124,14 @@ private:
   // Compute pipeline reference
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBL;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBD;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GMC;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_RBRSH;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_RBSRS;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_RBLBVHGH;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_BBBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_NPD;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_NP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_ID;
   std::shared_ptr<daxa::ComputePipeline> pipeline_IC;
@@ -152,6 +167,12 @@ private:
 
   daxa::BufferId sim_config_host_buffer[DOUBLE_BUFFERING] = {};
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
+  daxa::BufferId morton_codes = {};
+  daxa::BufferId tmp_morton_codes = {};
+  daxa::BufferId lbvh_nodes[DOUBLE_BUFFERING] = {};
+  daxa::BufferId lbvh_construction_info = {};
+  daxa::BufferId broad_phase_collisions[DOUBLE_BUFFERING] = {};
+  daxa::BufferId global_histograms[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};
   daxa::BufferId rigid_body_link_manifolds[DOUBLE_BUFFERING] = {};
@@ -163,6 +184,8 @@ private:
 
   // Simulation configuration
   SimSolverType solver_type = SimSolverType::PGS_SOFT;
+
+  daxa_u32 shift = 0;
 };
 
 BB_NAMESPACE_END

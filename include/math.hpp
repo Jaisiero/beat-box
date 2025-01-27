@@ -34,6 +34,8 @@
 #define MIN std::min
 #define MAX_U32 std::numeric_limits<daxa_u32>::max()
 #define MAX_U64 std::numeric_limits<daxa_u64>::max()
+#define MIN_I32 std::numeric_limits<daxa_i32>::min()
+#define MAX_I32 std::numeric_limits<daxa_i32>::max()
 
 FORCE_INLINE daxa_f32vec3 operator-(const daxa_f32vec3& a, const daxa_f32vec3& b)
 {
@@ -165,10 +167,12 @@ FORCE_INLINE const interval interval::universe = interval(-infinity, +infinity);
 #define MAX max
 #define MIN min
 
-static const daxa_f32 FLT_MAX = 3.402823466e+38F;
 static const daxa_f32 FLT_MIN = 1.175494351e-38F;
+static const daxa_f32 FLT_MAX = 3.402823466e+38F;
 static const daxa_f32 EPSILON = 1.192092896e-07F;
 static const daxa_u32 MAX_U32 = 0xFFFFFFFF;
+static const daxa::i32 MIN_I32 = 0x80000000;
+static const daxa::i32 MAX_I32 = 0x7FFFFFFF;
 static const daxa_u64 MAX_U64 = 0xFFFFFFFFFFFFFFFF;
 static const daxa_f32 GOLDEN_RATIO = 1.61803398875F;
 #endif // __cplusplus
@@ -179,19 +183,32 @@ struct Aabb
     daxa_f32vec3 maximum;
 #if !defined(__cplusplus)
   daxa_f32vec3 center() {
-    return (this.minimum + this.maximum) * 0.5;
+    return (minimum + maximum) * 0.5;
   }
 
   daxa_f32vec3 size() {
-    return this.maximum - this.minimum;
+    return maximum - minimum;
   }
 
   daxa_f32vec3 get_corner(daxa_u32 index) {
     daxa_f32vec3 result;
-    result.x = (index & 1) == 0 ? this.minimum.x : this.maximum.x;
-    result.y = (index & 2) == 0 ? this.minimum.y : this.maximum.y;
-    result.z = (index & 4) == 0 ? this.minimum.z : this.maximum.z;
+    result.x = (index & 1) == 0 ? minimum.x : maximum.x;
+    result.y = (index & 2) == 0 ? minimum.y : maximum.y;
+    result.z = (index & 4) == 0 ? minimum.z : maximum.z;
     return result;
+  }
+  
+  static Aabb merge(const Aabb a, const Aabb b) {
+    Aabb result;
+    result.minimum = MIN(a.minimum, b.minimum);
+    result.maximum = MAX(a.maximum, b.maximum);
+    return result;
+  }
+
+  static bool overlap(const Aabb a, const Aabb b) {
+    return a.minimum.x <= b.maximum.x && a.maximum.x >= b.minimum.x &&
+           a.minimum.y <= b.maximum.y && a.maximum.y >= b.minimum.y &&
+           a.minimum.z <= b.maximum.z && a.maximum.z >= b.minimum.z;
   }
 #endif // __cplusplus
 };

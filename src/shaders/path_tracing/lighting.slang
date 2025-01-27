@@ -97,8 +97,17 @@ daxa_f32vec3 random_point_on_sphere(inout daxa_u32 seed)
     return daxa_f32vec3(x, y, z);
 }
 
+daxa::f32vec3 compute_cube_normal(daxa::f32vec3 normal) {
+    // Cube normal calculation
+    daxa_f32vec3 abs_normal = abs(normal);
+    daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
+    return (max_component == abs_normal.x) ? daxa_f32vec3(sign(normal.x), 0, 0) :
+             (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) :
+                                               daxa_f32vec3(0, 0, sign(normal.z));
+}
+
 // Function to compute the normal at the hit point
-daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, Ptr<RigidBody> r, daxa_u32 prim_index, Ptr<Aabb> aabbs)
+daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, RigidBody* r, daxa_u32 prim_index, Ptr<Aabb> aabbs)
 {
     Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);
 
@@ -109,13 +118,22 @@ daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, Ptr<RigidBody> r, daxa_u3
     normal = r->rotate_vector_inverse(normal);
 
     // Cube normal calculation
-    daxa_f32vec3 abs_normal = abs(normal);
-    daxa_f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
-    normal = (max_component == abs_normal.x) ? daxa_f32vec3(sign(normal.x), 0, 0) :
-             (max_component == abs_normal.y) ? daxa_f32vec3(0, sign(normal.y), 0) :
-                                               daxa_f32vec3(0, 0, sign(normal.z));
+    normal = compute_cube_normal(normal);
 
     normal = r->rotate_vector(normal);
+    return normal;
+}
+
+// Function to compute the normal at the hit point
+daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, Aabb aabb)
+{
+    daxa_f32vec3 center = aabb.center();
+
+    daxa_f32vec3 normal = normalize(hit_location - center);
+
+    // Cube normal calculation
+    normal = compute_cube_normal(normal);
+
     return normal;
 }
 
@@ -289,10 +307,10 @@ daxa_u32 select_random_light(inout daxa_u32 seed, daxa_u32 light_count, daxa_u32
 // to the view vector get picked more often.
 daxa_f32vec3 cosine_weighted_sample_on_cube(
     inout daxa_u32 seed,
-    Ptr<RigidBody>    r,
-    daxa_f32vec3      shading_position,
-    out daxa_f32vec3  light_normal,
-    daxa_f32          half_size)
+    RigidBody* r,
+    daxa_f32vec3 shading_position,
+    out daxa_f32vec3 light_normal,
+    daxa_f32 half_size)
 {
     // 1) Define the 6 faces of the unit cube in local space
     const daxa_u32 FACE_COUNT = 6u;
@@ -442,7 +460,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     daxa_u32 light_count,
     Ptr<Light> lights,
     daxa_u32 instance_index,
-    Ptr<RigidBody> rigid_bodies,
+    RigidBody* rigid_bodies,
     Ptr<Material> materials,
     RaytracingAccelerationStructure tlas,
     daxa_f32vec3 position, // world space position
@@ -472,8 +490,8 @@ daxa_f32vec3 compute_direct_lighting_cubes(
 
     daxa_u32 rigid_body_index = lights[selected_light_index].rigid_body_index;
     
-    // Retrieve rigid body properties (position, rotation, material index)rigid_bodies
-    Ptr<RigidBody> r = Ptr<RigidBody>(&rigid_bodies[rigid_body_index]);
+    // Step 2: Retrieve rigid body properties (position, rotation, material index)rigid_bodies
+    RigidBody* r = (RigidBody*)(&rigid_bodies[rigid_body_index]);
     Material m = materials[r->material_index];
 
     if(all(m.emission <= 0.0f))
