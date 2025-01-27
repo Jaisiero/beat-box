@@ -114,6 +114,10 @@ const auto build_bounding_boxes_linear_bvh_pipeline_name = "Build Bounding Boxes
 const auto entry_broad_phase_sim = "entry_broad_phase";
 const auto broad_phase_sim_pipeline_name = "broad phase Simulation";
 
+// narrow phase
+const auto entry_narrow_phase_sim = "entry_narrow_phase";
+const auto narrow_phase_sim_pipeline_name = "narrow phase Simulation";
+
 // collision solver dispatcher
 const auto entry_collision_solver_dispatcher = "entry_collision_solver_dispatcher";
 const auto collision_solver_dispatcher_pipeline_name = "Collision Solver Dispatcher";
@@ -466,7 +470,6 @@ struct RigidBodyBuildBoundingBoxesLinearBVHInfo {
   };
 };
 
-
 struct BroadPhaseInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
@@ -479,6 +482,21 @@ struct BroadPhaseInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(BroadPhasePushConstants),
       .name = broad_phase_sim_pipeline_name,
+  };
+};
+
+struct NarrowPhaseInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_narrow_phase_sim
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(NarrowPhasePushConstants),
+      .name = narrow_phase_sim_pipeline_name,
   };
 };
 

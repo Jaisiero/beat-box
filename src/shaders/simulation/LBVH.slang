@@ -214,4 +214,172 @@ struct LBVH {
 
         return split;
     }
+
+
+    // static void broad_phase(SimConfig* sim_config, daxa::u32 query_primitive_idx, Aabb query_aabb, LBVHNode* lbvh_nodes, BroadPhaseCollision* bp_collisions) {
+        
+    //     // Allocate stack for traversal
+    //     daxa::u32 stack[64];
+    //     daxa::u32 stack_ptr = 0;
+
+    //     // Push a sentinel to mark the end
+    //     const daxa::u32 NULL_NODE = 0xffffffff;
+    //     stack[stack_ptr++] = NULL_NODE;
+
+    //     // Start at the root
+    //     daxa::u32 node_i = 0;
+
+    //     while (true)
+    //     {
+    //         // If node_i == -1 (NULL_NODE), we are done
+    //         if (node_i == NULL_NODE)
+    //         {
+    //             // done
+    //             break;
+    //         }
+
+    //         // Access the node
+    //         LBVHNode* node = &lbvh_nodes[node_i];
+
+    //         // Overlap test
+    //         bool overlap = Aabb::overlap(query_aabb, node->aabb);
+    //         if (!overlap)
+    //         {
+    //             // pop the next node and continue
+    //             node_i = stack[--stack_ptr];
+    //             continue;
+    //         }
+
+    //         // If leaf => check collision
+    //         if (node->is_leaf())
+    //         {
+    //             // e.g. skip self-collision
+    //             if (node->check_index(query_primitive_idx))
+    //             {
+    //                 daxa_u32 out_index = 0;
+    //                 InterlockedAdd(sim_config->broad_phase_collision_count, 1u, out_index);
+    //                 bp_collisions[out_index] = BroadPhaseCollision(query_primitive_idx, node->get_index());
+    //             }
+    //             // pop
+    //             node_i = stack[--stack_ptr];
+    //         }
+    //         else
+    //         {
+    //             // It's an internal node => check children
+    //             daxa_u32 left_i  = node->left;
+    //             daxa_u32 right_i = node->right;
+
+    //             LBVHNode* left_node  = &lbvh_nodes[left_i];
+    //             LBVHNode* right_node = &lbvh_nodes[right_i];
+
+    //             bool overlap_left  = Aabb::overlap(query_aabb, left_node->aabb);
+    //             bool overlap_right = Aabb::overlap(query_aabb, right_node->aabb);
+
+    //             bool traverse_left  = overlap_left  && !left_node->is_leaf();
+    //             bool traverse_right = overlap_right && !right_node->is_leaf();
+
+    //             // If we do not need to traverse either child, pop
+    //             if (!traverse_left && !traverse_right)
+    //             {
+    //                 // But if overlap_left and left is leaf => record
+    //                 if (overlap_left && left_node->is_leaf())
+    //                 {
+    //                     if (left_node->check_index(query_primitive_idx))
+    //                     {
+    //                         daxa_u32 out_index = 0;
+    //                         InterlockedAdd(sim_config->broad_phase_collision_count, 1u, out_index);
+    //                         bp_collisions[out_index] =
+    //                             BroadPhaseCollision(query_primitive_idx, left_node->get_index());
+    //                     }
+    //                 }
+    //                 if (overlap_right && right_node->is_leaf())
+    //                 {
+    //                     if (right_node->check_index(query_primitive_idx))
+    //                     {
+    //                         daxa_u32 out_index = 0;
+    //                         InterlockedAdd(sim_config->broad_phase_collision_count, 1u, out_index);
+    //                         bp_collisions[out_index] =
+    //                             BroadPhaseCollision(query_primitive_idx, right_node->get_index());
+    //                     }
+    //                 }
+
+    //                 // pop
+    //                 node_i = stack[--stack_ptr];
+    //             }
+    //             else
+    //             {
+    //                 // We choose one child to go down immediately
+    //                 node_i = (traverse_left) ? left_i : right_i;
+
+    //                 // If we must also traverse the other child, push it
+    //                 if (traverse_left && traverse_right)
+    //                 {
+    //                     // push the *other sibling*, not the child's child
+    //                     daxa_u32 sibling_i = (traverse_left) ? right_i : left_i;
+    //                     stack[stack_ptr++] = sibling_i;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+
+    static void broad_phase(SimConfig* sim_config, daxa::u32 primitive_index, Aabb query_aabb, LBVHNode* lbvh_nodes, BroadPhaseCollision* bp_collisions) {
+        
+        // Allocate stack for traversal
+        daxa::u32 stack[64];
+        daxa::u32 stack_size = 0;
+        stack[stack_size++] = 0;
+
+        daxa::u32 bp_collision_index = 0;
+
+        // Traverse nodes starting from the root
+        LBVHNode* node = &lbvh_nodes[0];
+        do {
+
+            // Check each child node for overlap
+            LBVHNode* child_left = &lbvh_nodes[node->left];
+            LBVHNode* child_right = &lbvh_nodes[node->right];
+
+            bool overlap_left = Aabb::overlap(query_aabb, child_left->aabb);
+            bool overlap_right = Aabb::overlap(query_aabb, child_right->aabb);
+
+            // Query overlaps with left child
+            if(overlap_left && child_left.is_leaf()) {
+                if(child_left.check_index(primitive_index) ) {
+                    InterlockedAdd(sim_config->broad_phase_collision_count, 1U, bp_collision_index);
+                    bp_collisions[bp_collision_index] = BroadPhaseCollision(primitive_index, child_left.get_index());
+                }
+            }
+
+            // Query overlaps with right child
+            if(overlap_right && child_right.is_leaf()) {
+                if(child_right.check_index(primitive_index) ) {
+                    InterlockedAdd(sim_config->broad_phase_collision_count, 1U, bp_collision_index);
+                    bp_collisions[bp_collision_index] = BroadPhaseCollision(primitive_index, child_right.get_index());
+                }
+            }
+
+            // Query overlaps an internal node
+            bool traverse_left = overlap_left && !child_left.is_leaf();
+            bool traverse_right = overlap_right && !child_right.is_leaf();
+
+            if(!traverse_left && !traverse_right) {
+                // Pop the stack
+                stack_size--;
+                if(stack_size == 0) {
+                    break;
+                }
+                node = &lbvh_nodes[stack[stack_size]];
+            } else {
+                // Push the other child node to the stack
+                if(traverse_left && traverse_right) {
+                    stack[stack_size++] = node->right;
+                }
+                // Traverse the child node
+                node = traverse_left ? child_left : child_right;
+
+            }
+
+        } while (stack_size > 0);
+    }
 };

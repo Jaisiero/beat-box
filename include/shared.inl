@@ -468,6 +468,7 @@ struct SimConfig
   daxa_u32 island_count; // atomic add
   daxa_u32 contact_island_count; // atomic add
   daxa_u32 manifold_node_count; // atomic add
+  daxa_u32 broad_phase_collision_count; // atomic add
   daxa_u32 radix_shift;
   daxa_f32 dt;
   daxa_f32 gravity;
@@ -554,9 +555,29 @@ struct LBVHNode
   // FIXME: Can we use a union here?
   daxa::u32 primitive_idx; // custom value copied from morton code or 0 in case of inner node
   daxa::u32 pad;
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+  bool is_leaf()
+  {
+    return primitive_idx != MAX_U32;
+  }
+
+  daxa::u32 get_index()
+  {
+    return primitive_idx;
+  }
+
+  bool is_match_index(daxa::u32 idx)
+  {
+    return primitive_idx == idx;
+  }
+
+  bool check_index(daxa::u32 idx)
+  {
+    return !is_match_index(idx) && idx < primitive_idx;
+  }
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 };
 DAXA_DECL_BUFFER_PTR(LBVHNode)
-
 
 struct LBVHConstructionInfo 
 {
@@ -564,6 +585,14 @@ struct LBVHConstructionInfo
   daxa::u32 visitation_count; // number of times the node has been visited
 };
 DAXA_DECL_BUFFER_PTR(LBVHConstructionInfo)
+
+struct BroadPhaseCollision
+{
+  daxa_u32 body_a_index;
+  daxa_u32 body_b_index;
+};
+DAXA_DECL_BUFFER_PTR(BroadPhaseCollision)
+
 
 struct ManifoldNode {
     daxa_u32 manifold_index;       // Index in collisions[]
@@ -717,6 +746,22 @@ struct ResetBodyLinkPushConstants
 
 // BROAD PHASE
 DAXA_DECL_TASK_HEAD_BEGIN(BroadPhaseTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(ActiveRigidBody), active_rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(LBVHNode), lbvh_nodes)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(BroadPhaseCollision), broad_phase_collisions)
+DAXA_DECL_TASK_HEAD_END
+
+struct BroadPhasePushConstants
+{
+  DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
+};
+
+
+// NARROW PHASE
+DAXA_DECL_TASK_HEAD_BEGIN(NarrowPhaseTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), previous_sim_config)
@@ -729,9 +774,9 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Manifold), old_collisions
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(BodyLink), scratch_body_links)
 DAXA_DECL_TASK_HEAD_END
 
-struct BroadPhasePushConstants
+struct NarrowPhasePushConstants
 {
-  DAXA_TH_BLOB(BroadPhaseTaskHead, task_head)
+  DAXA_TH_BLOB(NarrowPhaseTaskHead, task_head)
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverDispatcherTaskHead)

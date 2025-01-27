@@ -17,6 +17,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
     pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
+    pipeline_NP = task_manager->create_compute(NarrowPhaseInfo{}.info);
     pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
     pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
     pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
@@ -108,6 +109,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .size = sizeof(LBVHNode) * MAX_RIGID_BODY_COUNT,
         .name = "lbvh_nodes" + std::to_string(i),
     });
+    broad_phase_collisions[i] = device.create_buffer({
+        .size = sizeof(BroadPhaseCollision) * MAX_COLLISION_COUNT,
+        .name = "broad_phase_collisions" + std::to_string(i),
+    });
     collisions[i] = device.create_buffer({
         .size = sizeof(Manifold) * MAX_COLLISION_COUNT,
         .name = "collisions" + std::to_string(i),
@@ -145,6 +150,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .rigid_body_count = 0,
         .active_rigid_body_count = 0,
         .island_count = 0,
+        .contact_island_count = 0,
+        .manifold_node_count = 0,
+        .broad_phase_collision_count = 0,
         .dt = TIME_STEP,
         .gravity = -GRAVITY,
         .flags = sim_flags,
@@ -194,8 +202,12 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         auto manifold_node_count_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 4;
         allocate_fill_copy(ti, manifold_node_count, ti.get(task_sim_config), manifold_node_count_offset);
 
+        auto broad_phase_collision_count = 0;
+        auto broad_phase_collision_count_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 5;
+        allocate_fill_copy(ti, broad_phase_collision_count, ti.get(task_sim_config), broad_phase_collision_count_offset);
+
         shift = 0;
-        auto radix_shift_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 5;
+        auto radix_shift_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 6;
         allocate_fill_copy(ti, shift, ti.get(task_sim_config), radix_shift_offset);
 
         auto frame_count = renderer_manager->get_frame_count();
@@ -315,7 +327,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .task = [this](daxa::TaskInterface const &ti)
       {
         shift += BIT_SHIFT;
-        auto radix_shift_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 5;
+        auto radix_shift_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 6;
         allocate_fill_copy(ti, shift, ti.get(task_sim_config), radix_shift_offset);
       },
       .name = "update radix shift",
@@ -386,7 +398,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_BP);
     ti.recorder.push_constant(BroadPhasePushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(BroadPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(BroadPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_BP = TaskTemplate<BroadPhaseTaskHead::Task, decltype(user_callback_BP)>;
@@ -395,16 +407,36 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_BP task_BP(std::array{
                        daxa::attachment_view(BroadPhaseTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(BroadPhaseTaskHead::AT.sim_config, task_sim_config),
-                       daxa::attachment_view(BroadPhaseTaskHead::AT.previous_sim_config, task_old_sim_config),
                        daxa::attachment_view(BroadPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
-                       daxa::attachment_view(BroadPhaseTaskHead::AT.rigid_body_link_manifolds, task_rigid_body_link_manifolds),
-                       daxa::attachment_view(BroadPhaseTaskHead::AT.collisions, task_collisions),
-                       daxa::attachment_view(BroadPhaseTaskHead::AT.previous_rigid_bodies, task_previous_rigid_bodies),
-                       daxa::attachment_view(BroadPhaseTaskHead::AT.previous_rigid_body_link_manifolds, task_previous_rigid_body_link_manifolds),
-                       daxa::attachment_view(BroadPhaseTaskHead::AT.old_collisions, task_old_collisions),
-                       daxa::attachment_view(BroadPhaseTaskHead::AT.scratch_body_links, task_scratch_body_links),
+                        daxa::attachment_view(BroadPhaseTaskHead::AT.active_rigid_bodies, task_active_rigid_bodies),
+                        daxa::attachment_view(BroadPhaseTaskHead::AT.lbvh_nodes, task_lbvh_nodes),
+                        daxa::attachment_view(BroadPhaseTaskHead::AT.broad_phase_collisions, task_broad_phase_collisions),
                    },
                    user_callback_BP);
+
+  auto user_callback_NP = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_NP);
+    ti.recorder.push_constant(NarrowPhasePushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(NarrowPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+  };
+
+  using TTask_NP = TaskTemplate<NarrowPhaseTaskHead::Task, decltype(user_callback_NP)>;
+
+  // Instantiate the task using the template class
+  TTask_NP task_NP(std::array{
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.sim_config, task_sim_config),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.previous_sim_config, task_old_sim_config),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_body_link_manifolds, task_rigid_body_link_manifolds),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.collisions, task_collisions),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.previous_rigid_bodies, task_previous_rigid_bodies),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.previous_rigid_body_link_manifolds, task_previous_rigid_body_link_manifolds),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.old_collisions, task_old_collisions),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.scratch_body_links, task_scratch_body_links),
+                   },
+                   user_callback_NP);
 
   auto user_callback_advect = [this](daxa::TaskInterface ti, auto &self)
   {
@@ -779,7 +811,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 26> buffers = {
+  std::array<daxa::TaskBuffer, 27> buffers = {
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -789,6 +821,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_lbvh_nodes,
       task_lbvh_construction_info,
       task_active_rigid_bodies,
+      task_broad_phase_collisions,
       task_scratch_body_links,
       task_body_links,
       task_manifold_links,
@@ -825,6 +858,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_BBBLBVHGH);
   RB_TG.add_task(task_RBL);
   RB_TG.add_task(task_BP);
+  RB_TG.add_task(task_NP);
   RB_TG.add_task(task_advect);
   RB_TG.add_task(task_IC);
   RB_TG.add_task(task_CS_dispatcher);
@@ -938,6 +972,7 @@ void RigidBodyManager::destroy()
     device.destroy_buffer(sim_config_host_buffer[i]);
     device.destroy_buffer(sim_config[i]);
     device.destroy_buffer(lbvh_nodes[i]);
+    device.destroy_buffer(broad_phase_collisions[i]);
     device.destroy_buffer(collisions[i]);
     device.destroy_buffer(active_rigid_bodies[i]);
     device.destroy_buffer(scratch_body_links[i]);
@@ -1073,6 +1108,7 @@ void RigidBodyManager::update_buffers()
   task_next_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_next_rigid_body_buffer()}});
   task_lbvh_nodes.set_buffers({.buffers = std::array{lbvh_nodes[current_frame]}});
   task_lbvh_construction_info.set_buffers({.buffers = std::array{lbvh_construction_info}});
+  task_broad_phase_collisions.set_buffers({.buffers = std::array{broad_phase_collisions[current_frame]}});
   // WARN: we need a third buffer for this
   task_sorted_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_next_rigid_body_buffer()}});
   task_rigid_body_link_manifolds.set_buffers({.buffers = std::array{rigid_body_link_manifolds[current_frame]}});

@@ -76,6 +76,7 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
   daxa::TaskBuffer task_lbvh_nodes{{.initial_buffers = {}, .name = "RB_lbvh_node_task"}};
   daxa::TaskBuffer task_lbvh_construction_info{{.initial_buffers = {}, .name = "RB_lbvh_construction_info_task"}};
+  daxa::TaskBuffer task_broad_phase_collisions{{.initial_buffers = {}, .name = "RB_broad_phase_collision_task"}};
   daxa::TaskBuffer task_sorted_rigid_bodies{{.initial_buffers = {}, .name = "RB_sorted_task"}};
   daxa::TaskBuffer task_previous_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
   daxa::TaskBuffer task_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "rigid_body_link_manifold_task"}};
@@ -129,6 +130,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BBBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_NP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_ID;
   std::shared_ptr<daxa::ComputePipeline> pipeline_IC;
@@ -168,6 +170,7 @@ private:
   daxa::BufferId tmp_morton_codes = {};
   daxa::BufferId lbvh_nodes[DOUBLE_BUFFERING] = {};
   daxa::BufferId lbvh_construction_info = {};
+  daxa::BufferId broad_phase_collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId global_histograms[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};

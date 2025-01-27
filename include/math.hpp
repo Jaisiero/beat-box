@@ -165,6 +165,12 @@ struct Aabb
     result.maximum = MAX(a.maximum, b.maximum);
     return result;
   }
+
+  static bool overlap(const Aabb a, const Aabb b) {
+    return a.minimum.x <= b.maximum.x && a.maximum.x >= b.minimum.x &&
+           a.minimum.y <= b.maximum.y && a.maximum.y >= b.minimum.y &&
+           a.minimum.z <= b.maximum.z && a.maximum.z >= b.minimum.z;
+  }
 #endif // __cplusplus
 };
 

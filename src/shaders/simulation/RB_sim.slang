@@ -11,6 +11,7 @@
 [[vk::push_constant]] ResetBodyLinkPushConstants RBL;
 [[vk::push_constant]] RigidBodyDispatcherPushConstants RBD;
 [[vk::push_constant]] BroadPhasePushConstants BP;
+[[vk::push_constant]] NarrowPhasePushConstants NP;
 [[vk::push_constant]] CollisionSolverDispatcherPushConstants CSD;
 [[vk::push_constant]] IslandDispatcherPushConstants ID;
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
@@ -301,38 +302,37 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
 }
 
-
-
-[shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
-    entry_reset_body_links(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
-      SimConfig* sim_config =
-          (SimConfig*)(RBL.task_head.sim_config);
-
-      daxa_u32 index = compute_i.x;
-      if (index >= sim_config->active_rigid_body_count)
-      {
-        return;
-      }
-
-      ActiveRigidBody active_rigid_body = RBL.task_head.active_rigid_bodies[index];
-
-      RigidBody* rigid_bodies =
-          (RigidBody*)(RBL.task_head.rigid_bodies);
-
-      rigid_bodies[active_rigid_body.rigid_body_index].active_index = index;
-
-#if defined(BB_DEBUG)
-  // printf("RBL index %d, rigid_body_index %d\n", index, active_rigid_body.rigid_body_index);
-#endif // BB_DEBUG
-
-      RBL.task_head.scratch_body_links[index] = BodyLink(index, MAX_U32);
-    }
-
-[shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_broad_phase(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+[shader("compute")] 
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_reset_body_links(daxa_u32vec3 compute_i : SV_DispatchThreadID) 
 {
   SimConfig* sim_config =
+      (SimConfig*)(RBL.task_head.sim_config);
+
+  daxa_u32 index = compute_i.x;
+  if (index >= sim_config->active_rigid_body_count)
+  {
+    return;
+  }
+
+  ActiveRigidBody active_rigid_body = RBL.task_head.active_rigid_bodies[index];
+
+  RigidBody* rigid_bodies =
+      (RigidBody*)(RBL.task_head.rigid_bodies);
+
+  rigid_bodies[active_rigid_body.rigid_body_index].active_index = index;
+
+#if defined(BB_DEBUG)
+// printf("RBL index %d, rigid_body_index %d\n", index, active_rigid_body.rigid_body_index);
+#endif // BB_DEBUG
+
+  RBL.task_head.scratch_body_links[index] = BodyLink(index, MAX_U32);
+}
+
+
+[shader("compute")] 
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_broad_phase(daxa_u32vec3 compute_i : SV_DispatchThreadID) 
+{
+  var sim_config =
       (SimConfig*)(BP.task_head.sim_config);
 
   daxa_u32 index = compute_i.x;
@@ -341,31 +341,64 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
+  // let active_rigid_body = BP.task_head.active_rigid_bodies[index];
+  // let rb_index = active_rigid_body.rigid_body_index;
+  // let rigid_body = BP.task_head.rigid_bodies[rb_index];
+  let rigid_body = BP.task_head.rigid_bodies[index];
+  let lbvh_nodes = (LBVHNode*)(BP.task_head.lbvh_nodes);
+  var bp_collisions =
+      (BroadPhaseCollision*)(BP.task_head.broad_phase_collisions);
+  
+  Aabb aabb = rigid_body.get_AABB_from_OBB();
+  // aabb.minimum -= daxa::f32vec3(0.1);
+  // aabb.maximum += daxa::f32vec3(0.1);
+
+  LBVH::broad_phase(sim_config, index, aabb, lbvh_nodes, bp_collisions);
+
+#if defined(BB_DEBUG)
+// printf("RBL index %d, rigid_body_index %d\n", index, active_rigid_body.rigid_body_index);
+#endif // BB_DEBUG
+
+}
+
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_narrow_phase(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config =
+      (SimConfig*)(NP.task_head.sim_config);
+
+  daxa_u32 index = compute_i.x;
+  if (index >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+
   let previous_sim_config =
-      *BP.task_head.previous_sim_config;
+      *NP.task_head.previous_sim_config;
 
   RigidBody* rigid_bodies =
-      (RigidBody*)(BP.task_head.rigid_bodies);
+      (RigidBody*)(NP.task_head.rigid_bodies);
 
   RigidBody* previous_rigid_bodies =
-      (RigidBody*)(BP.task_head.previous_rigid_bodies);
+      (RigidBody*)(NP.task_head.previous_rigid_bodies);
 
   ManifoldNode* rigid_body_link_manifolds =
-      (ManifoldNode*)(BP.task_head.rigid_body_link_manifolds);
+      (ManifoldNode*)(NP.task_head.rigid_body_link_manifolds);
 
   Manifold* collisions =
-      (Manifold*)(BP.task_head.collisions);
+      (Manifold*)(NP.task_head.collisions);
 
   ManifoldNode* previous_rigid_body_link_manifolds =
-      (ManifoldNode*)(BP.task_head.previous_rigid_body_link_manifolds);
+      (ManifoldNode*)(NP.task_head.previous_rigid_body_link_manifolds);
 
   Manifold* old_collisions =
-      (Manifold*)(BP.task_head.old_collisions);
+      (Manifold*)(NP.task_head.old_collisions);
 
   BodyLink* body_links =
-      (BodyLink*)(BP.task_head.scratch_body_links);
+      (BodyLink*)(NP.task_head.scratch_body_links);
 
-  broad_phase(index, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collisions, previous_rigid_bodies, previous_rigid_body_link_manifolds, old_collisions, body_links);
+  narrow_phase(index, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collisions, previous_rigid_bodies, previous_rigid_body_link_manifolds, old_collisions, body_links);
 
 #if defined(BB_DEBUG)
   // if(index == 0)

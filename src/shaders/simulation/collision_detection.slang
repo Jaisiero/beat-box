@@ -886,7 +886,7 @@ struct BodyLinkManifold {
 };
 
 
-func broad_phase(const daxa_u32 rigid_body_index, RigidBody* rigid_bodies,
+func narrow_phase(const daxa_u32 rigid_body_index, RigidBody* rigid_bodies,
                  Ptr<SimConfig> sim_config, SimConfig previous_sim_config, 
                  Ptr<ManifoldNode> manifold_nodes,
                  Ptr<Manifold> collisions,
