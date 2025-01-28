@@ -9,6 +9,7 @@
 [[vk::push_constant]] RigidBodySingleRadixSortPushConstants SRS;
 [[vk::push_constant]] RigidBodyGenerateHierarchyLinearBVHPushConstants GHLBVH;
 [[vk::push_constant]] RigidBodyBuildBoundingBoxesLBVHPushConstants BBBLBVH;
+[[vk::push_constant]] RigidBodyReorderingPushConstants RBR;
 [[vk::push_constant]] ResetBodyLinkPushConstants RBL;
 [[vk::push_constant]] BroadPhasePushConstants BP;
 [[vk::push_constant]] NarrowPhaseDispatcherPushConstants NPD;
@@ -82,8 +83,6 @@
   let morton_code = MortonCodeGenerator.morton3D(rigid_bodies[index].position);
 
   morton_codes[index] = MortonCode(morton_code, index);
-
-  // printf("morton code num %d\n", sim_config->rigid_body_count);
 }
 
 #if defined(BB_RADIX_SORT_HISTOGRAM)
@@ -132,12 +131,6 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   {
     let value = histogram[lID].load();
     global_histograms[RADIX_SORT_BINS * wID + lID] = value;
-#if defined(BB_DEBUG)
-      // if(value > 0)
-      // {
-      //   printf("Histogram shift %d, histogram: %u\n", 0, value);
-      // }
-#endif // BB_DEBUG
   } 
 }
 #endif // BB_RADIX_SORT_HISTOGRAM
@@ -159,11 +152,6 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
   DispatchBuffer* dispatch_buffer =
       (DispatchBuffer*)(SRS.task_head.dispatch_buffer);
-
-  // if (wID >= dispatch_buffer->radix_sort_rigid_body_dispatch.x)
-  // {
-  //   return;
-  // }
 
   daxa::u32* global_histograms =
       (daxa::u32*)(SRS.task_head.global_histograms);
@@ -300,7 +288,44 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     }
     node_index = lbvh_construction_info[node_index].parent;
   }
+}
 
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_rigid_body_reordering(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config =
+      (SimConfig*)(RBR.task_head.sim_config);
+
+  daxa::u32 index = compute_i.x;
+  daxa::u32 rb_count = sim_config->rigid_body_count;
+  if (index >= rb_count)
+  {
+    return;
+  }
+
+  let rigid_bodies =
+      (RigidBody*)(RBR.task_head.rigid_bodies);
+  var lbvh_nodes = (LBVHNode*)(RBR.task_head.lbvh_nodes);
+  let morton_codes =
+      (MortonCode*)(RBR.task_head.morton_codes);
+  var active_rigid_bodies =
+      (ActiveRigidBody*)(RBR.task_head.active_rigid_bodies);
+  var rigid_body_map =
+      (RigidBodyEntry*)(RBR.task_head.rigid_body_map);
+  var sorted_rigid_bodies = (RigidBody*)(RBR.task_head.rigid_body_sorted);
+
+  // get the morton code rigid body index
+  let rb_index = morton_codes[index].index;
+  // get the rigid body id
+  let rb_id = rigid_bodies[rb_index].id;
+
+  rigid_body_map[rb_id] = RigidBodyEntry(index);
+  
+  // // put the rigid body in the sorted array by morton codes
+  sorted_rigid_bodies[index] = rigid_bodies[rb_index];
+  // // update the lbvh node
+  // lbvh_nodes[rb_count - 1 + index].rigid_body_index = index;
+  // printf("RBR index %d, id: %d\n", index, rb_id);
 }
 
 [shader("compute")] 
@@ -322,13 +347,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
   rigid_bodies[active_rigid_body.rigid_body_index].active_index = index;
 
-#if defined(BB_DEBUG)
-// printf("RBL index %d, rigid_body_index %d\n", index, active_rigid_body.rigid_body_index);
-#endif // BB_DEBUG
-
   RBL.task_head.scratch_body_links[index] = BodyLink(index, MAX_U32);
 }
-
 
 [shader("compute")] 
 [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_broad_phase(daxa_u32vec3 compute_i : SV_DispatchThreadID) 
@@ -351,14 +371,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
       (BroadPhaseCollision*)(BP.task_head.broad_phase_collisions);
   
   Aabb aabb = rigid_body.get_AABB_from_OBB();
-  // aabb.minimum -= daxa::f32vec3(0.1);
-  // aabb.maximum += daxa::f32vec3(0.1);
 
   LBVH::broad_phase(sim_config, index, aabb, lbvh_nodes, bp_collisions);
-
-#if defined(BB_DEBUG)
-// printf("RBL index %d, rigid_body_index %d\n", index, active_rigid_body.rigid_body_index);
-#endif // BB_DEBUG
 }
 
 [shader("compute")]

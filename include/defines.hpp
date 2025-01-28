@@ -82,9 +82,6 @@ const auto RT_shader_file_string = "ray_tracing.slang";
 const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
 
 const auto RB_sim_shader_file_string = "RB_sim.slang";
-// reset body links
-const auto entry_reset_body_links = "entry_reset_body_links";
-const auto reset_body_links_pipeline_name = "Reset Body Links";
 
 // rigid body dispatcher
 const auto entry_rigid_body_dispatcher = "entry_rigid_body_dispatcher";
@@ -109,6 +106,14 @@ const auto generate_hierarchy_linear_bvh_pipeline_name = "Generate Hierarchy Lin
 // build bounding boxes for linear bounding volume hierarchy
 const auto entry_build_bounding_boxes_linear_bvh = "entry_build_bounding_boxes_linear_bvh";
 const auto build_bounding_boxes_linear_bvh_pipeline_name = "Build Bounding Boxes Linear BVH";
+
+// reorder rigid bodies
+const auto entry_rigid_body_reordering = "entry_rigid_body_reordering";
+const auto rigid_body_reordering_pipeline_name = "Rigid Body Reordering";
+
+// reset body links
+const auto entry_reset_body_links = "entry_reset_body_links";
+const auto reset_body_links_pipeline_name = "Reset Body Links";
 
 // broad phase
 const auto entry_broad_phase_sim = "entry_broad_phase";
@@ -363,21 +368,6 @@ struct MainRayTracingPipeline
   }
 };
 
-struct ResetBodyLinksInfo {
-  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
-      .compile_options = {
-          .entry_point = entry_reset_body_links,
-      },
-  };
-
-  daxa::ComputePipelineCompileInfo info = {
-      .shader_info = compute_shader,
-      .push_constant_size = sizeof(ResetBodyLinkPushConstants),
-      .name = reset_body_links_pipeline_name,
-  };
-};
-
 struct RigidBodyDispatcherInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{RB_sim_shader_file_string},
@@ -471,6 +461,36 @@ struct RigidBodyBuildBoundingBoxesLinearBVHInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(RigidBodyBuildBoundingBoxesLBVHPushConstants),
       .name = build_bounding_boxes_linear_bvh_pipeline_name,
+  };
+};
+
+struct RigidBodyReorderingInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_rigid_body_reordering,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyReorderingPushConstants),
+      .name = rigid_body_reordering_pipeline_name,
+  };
+};
+
+struct ResetBodyLinksInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_reset_body_links,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(ResetBodyLinkPushConstants),
+      .name = reset_body_links_pipeline_name,
   };
 };
 

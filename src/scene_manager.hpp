@@ -370,6 +370,7 @@ public:
     daxa_u32 i = 0;
     for(auto &rigid_body : rigid_bodies)
     {
+      rigid_body.id = i;
       rigid_body.island_index = MAX_U32;
       rigid_body.manifold_node_index = MAX_U32;
       rigid_body.active_index = MAX_U32;

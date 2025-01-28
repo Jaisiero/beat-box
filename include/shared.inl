@@ -246,6 +246,7 @@ DAXA_DECL_BUFFER_PTR(RayTracingConfig)
 
 struct RigidBody
 {
+  daxa_u32 id;
   RigidBodyFlag flags;
   daxa_u32 island_index;
   daxa_u32 active_index;
@@ -728,6 +729,29 @@ struct RigidBodyBuildBoundingBoxesLBVHPushConstants
   DAXA_TH_BLOB(RigidBodyBuildBoundingBoxesLinearBVHTaskHead, task_head)
 };
 
+struct RigidBodyEntry
+{
+  daxa_u32 index;
+};
+DAXA_DECL_BUFFER_PTR(RigidBodyEntry)
+
+// REORDER RIGID BODIES
+DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyReorderingTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBodyEntry), rigid_body_map)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(ActiveRigidBody), active_rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(MortonCode), morton_codes)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(LBVHNode), lbvh_nodes)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_body_sorted)
+DAXA_DECL_TASK_HEAD_END
+
+struct RigidBodyReorderingPushConstants
+{
+  DAXA_TH_BLOB(RigidBodyReorderingTaskHead, task_head)
+};
+
 
 // RESET BODY LINK
 DAXA_DECL_TASK_HEAD_BEGIN(ResetBodyLinkTaskHead)
@@ -742,6 +766,7 @@ struct ResetBodyLinkPushConstants
 {
   DAXA_TH_BLOB(ResetBodyLinkTaskHead, task_head)
 };
+
 
 // BROAD PHASE
 DAXA_DECL_TASK_HEAD_BEGIN(BroadPhaseTaskHead)

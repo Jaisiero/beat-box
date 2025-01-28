@@ -76,8 +76,9 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_rigid_bodies{{.initial_buffers = {}, .name = "RB_task"}};
   daxa::TaskBuffer task_lbvh_nodes{{.initial_buffers = {}, .name = "RB_lbvh_node_task"}};
   daxa::TaskBuffer task_lbvh_construction_info{{.initial_buffers = {}, .name = "RB_lbvh_construction_info_task"}};
+  daxa::TaskBuffer task_rigid_body_entries{{.initial_buffers = {}, .name = "RB_rigid_body_entry_task"}};
   daxa::TaskBuffer task_broad_phase_collisions{{.initial_buffers = {}, .name = "RB_broad_phase_collision_task"}};
-  daxa::TaskBuffer task_sorted_rigid_bodies{{.initial_buffers = {}, .name = "RB_sorted_task"}};
+  daxa::TaskBuffer task_rigid_body_sorted{{.initial_buffers = {}, .name = "RB_sorted_task"}};
   daxa::TaskBuffer task_previous_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
   daxa::TaskBuffer task_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "rigid_body_link_manifold_task"}};
   daxa::TaskBuffer task_previous_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "previous_rigid_body_link_manifold_task"}};
@@ -122,13 +123,14 @@ private:
   bool sim_flag_dirty[DOUBLE_BUFFERING] = {};
 
   // Compute pipeline reference
-  std::shared_ptr<daxa::ComputePipeline> pipeline_RBL;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBD;
   std::shared_ptr<daxa::ComputePipeline> pipeline_GMC;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBRSH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBSRS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BBBLBVHGH;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_RBL;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_RBR;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_NPD;
   std::shared_ptr<daxa::ComputePipeline> pipeline_NP;
@@ -174,6 +176,8 @@ private:
   daxa::BufferId broad_phase_collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId global_histograms[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
+  daxa::BufferId rigid_body_entries[DOUBLE_BUFFERING] = {};
+  daxa::BufferId rigid_body_sorted = {};
   daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};
   daxa::BufferId rigid_body_link_manifolds[DOUBLE_BUFFERING] = {};
   daxa::BufferId body_links[DOUBLE_BUFFERING] = {};

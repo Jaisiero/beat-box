@@ -9,13 +9,14 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
 {
   if (device.is_valid())
   {
-    pipeline_RBL = task_manager->create_compute(ResetBodyLinksInfo{}.info);
     pipeline_RBD = task_manager->create_compute(RigidBodyDispatcherInfo{}.info);
     pipeline_GMC = task_manager->create_compute(GenerateMortonCodesInfo{}.info);
     pipeline_RBRSH = task_manager->create_compute(RigidBodyRadixSortHistogramInfo{}.info);
     pipeline_RBSRS = task_manager->create_compute(RigidBodySingleRadixSortInfo{}.info);
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
     pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
+    pipeline_RBR = task_manager->create_compute(RigidBodyReorderingInfo{}.info);
+    pipeline_RBL = task_manager->create_compute(ResetBodyLinksInfo{}.info);
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
     pipeline_NPD = task_manager->create_compute(NarrowPhaseDispatcherInfo{}.info);
     pipeline_NP = task_manager->create_compute(NarrowPhaseInfo{}.info);
@@ -118,6 +119,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .size = sizeof(Manifold) * MAX_COLLISION_COUNT,
         .name = "collisions" + std::to_string(i),
     });
+    rigid_body_entries[i] = device.create_buffer({
+        .size = sizeof(RigidBodyEntry) * MAX_RIGID_BODY_COUNT,
+        .name = "rigid_body_map" + std::to_string(i),
+    });
     active_rigid_bodies[i] = device.create_buffer({
         .size = sizeof(ActiveRigidBody) * MAX_RIGID_BODY_COUNT,
         .name = "active_rigid_bodies" + std::to_string(i),
@@ -174,6 +179,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   lbvh_construction_info = device.create_buffer({
       .size = sizeof(LBVHConstructionInfo) * MAX_RIGID_BODY_COUNT,
       .name = "lbvh_construction_info",
+  });
+  rigid_body_sorted = device.create_buffer({
+      .size = sizeof(RigidBody) * MAX_RIGID_BODY_COUNT,
+      .name = "rigid_body_sorted",
   });
 
   daxa::InlineTaskInfo task_RC({
@@ -373,6 +382,29 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                         daxa::attachment_view(RigidBodyBuildBoundingBoxesLinearBVHTaskHead::AT.lbvh_construction_info, task_lbvh_construction_info),
                    },
                    user_callback_BBBLBVHGH);
+
+  // Task for Reordering Rigid Bodies
+  auto user_callback_RBR = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_RBR);
+    ti.recorder.push_constant(RigidBodyReorderingPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyReorderingTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+  };
+
+  using TTask_RBR = TaskTemplate<RigidBodyReorderingTaskHead::Task, decltype(user_callback_RBR)>;
+
+  // Instantiate the task using the template class
+  TTask_RBR task_RBR(std::array{
+                         daxa::attachment_view(RigidBodyReorderingTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                         daxa::attachment_view(RigidBodyReorderingTaskHead::AT.sim_config, task_sim_config),
+                         daxa::attachment_view(RigidBodyReorderingTaskHead::AT.rigid_body_map, task_rigid_body_entries),
+                         daxa::attachment_view(RigidBodyReorderingTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                         daxa::attachment_view(RigidBodyReorderingTaskHead::AT.active_rigid_bodies, task_active_rigid_bodies),
+                          daxa::attachment_view(RigidBodyReorderingTaskHead::AT.morton_codes, task_morton_codes),
+                          daxa::attachment_view(RigidBodyReorderingTaskHead::AT.lbvh_nodes, task_lbvh_nodes),
+                          daxa::attachment_view(RigidBodyReorderingTaskHead::AT.rigid_body_sorted, task_rigid_body_sorted),
+                     },
+                     user_callback_RBR);
 
 
   // Task for reseting body links for islands
@@ -830,7 +862,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 27> buffers = {
+  std::array<daxa::TaskBuffer, 28> buffers = {
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -839,6 +871,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_radix_sort_histograms,
       task_lbvh_nodes,
       task_lbvh_construction_info,
+      task_rigid_body_entries,
       task_active_rigid_bodies,
       task_broad_phase_collisions,
       task_scratch_body_links,
@@ -849,7 +882,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_previous_rigid_bodies,
       task_rigid_bodies,
       task_next_rigid_bodies,
-      task_sorted_rigid_bodies,
+      task_rigid_body_sorted,
       accel_struct_mngr->task_aabb_buffer,
       task_rigid_body_link_manifolds,
       task_collisions,
@@ -875,6 +908,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   }
   RB_TG.add_task(task_RBLBVHGH);
   RB_TG.add_task(task_BBBLBVHGH);
+  RB_TG.add_task(task_RBR);
   RB_TG.add_task(task_RBL);
   RB_TG.add_task(task_BP);
   RB_TG.add_task(task_NPD);
@@ -995,6 +1029,7 @@ void RigidBodyManager::destroy()
     device.destroy_buffer(broad_phase_collisions[i]);
     device.destroy_buffer(collisions[i]);
     device.destroy_buffer(active_rigid_bodies[i]);
+    device.destroy_buffer(rigid_body_entries[i]);
     device.destroy_buffer(scratch_body_links[i]);
     device.destroy_buffer(body_links[i]);
     device.destroy_buffer(manifold_links[i]);
@@ -1006,6 +1041,7 @@ void RigidBodyManager::destroy()
   device.destroy_buffer(tmp_morton_codes);
   device.destroy_buffer(morton_codes);
   device.destroy_buffer(lbvh_construction_info);
+  device.destroy_buffer(rigid_body_sorted);
 
   initialized = false;
 }
@@ -1128,9 +1164,10 @@ void RigidBodyManager::update_buffers()
   task_next_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_next_rigid_body_buffer()}});
   task_lbvh_nodes.set_buffers({.buffers = std::array{lbvh_nodes[current_frame]}});
   task_lbvh_construction_info.set_buffers({.buffers = std::array{lbvh_construction_info}});
+  task_active_rigid_bodies.set_buffers({.buffers = std::array{active_rigid_bodies[current_frame]}});
+  task_rigid_body_entries.set_buffers({.buffers = std::array{rigid_body_entries[current_frame]}});
   task_broad_phase_collisions.set_buffers({.buffers = std::array{broad_phase_collisions[current_frame]}});
-  // WARN: we need a third buffer for this
-  task_sorted_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_next_rigid_body_buffer()}});
+  task_rigid_body_sorted.set_buffers({.buffers = std::array{rigid_body_sorted}});
   task_rigid_body_link_manifolds.set_buffers({.buffers = std::array{rigid_body_link_manifolds[current_frame]}});
   task_collisions.set_buffers({.buffers = std::array{collisions[current_frame]}});
   task_previous_rigid_body_link_manifolds.set_buffers({.buffers = std::array{rigid_body_link_manifolds[previous_frame]}});
@@ -1140,7 +1177,6 @@ void RigidBodyManager::update_buffers()
   task_manifold_links.set_buffers({.buffers = std::array{manifold_links[current_frame]}});
   task_islands.set_buffers({.buffers = std::array{island_buffer[current_frame]}});
   task_contact_islands.set_buffers({.buffers = std::array{contact_island_buffer[current_frame]}});
-  task_active_rigid_bodies.set_buffers({.buffers = std::array{active_rigid_bodies[current_frame]}});
 }
 
 BB_NAMESPACE_END
