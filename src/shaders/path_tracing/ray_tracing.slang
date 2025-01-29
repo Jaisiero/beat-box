@@ -30,8 +30,11 @@
   daxa::u32 light_count = p.task_head.ray_tracing_config.light_count;
   let lights = (Light*)(p.task_head.lights);
 
+  // Rigid body entries setup
+  let rigid_body_map = (RigidBodyEntry*)(p.task_head.rigid_body_map);
+
   // Rigid body setup
-  RigidBody* rigid_bodies = (RigidBody*)(p.task_head.rigid_bodies);
+  let rigid_bodies = (RigidBody*)(p.task_head.rigid_bodies);
 
   // Material setup
   let materials = (Material*)(p.task_head.materials);
@@ -83,7 +86,7 @@
     daxa::f32 pdf_light;
     daxa::f32vec3 light_dir;
 
-    daxa::f32vec3 direct_lighting = compute_direct_lighting_cubes(light_count, lights, instance_index, rigid_bodies, materials, tlas, position, normal, albedo, seed, pdf_light, light_dir);
+    daxa::f32vec3 direct_lighting = compute_direct_lighting_cubes(light_count, lights, instance_index, rigid_body_map, rigid_bodies, materials, tlas, position, normal, albedo, seed, pdf_light, light_dir);
 
     if (pdf_light > 0.0f)
     {

@@ -460,6 +460,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     daxa_u32 light_count,
     Ptr<Light> lights,
     daxa_u32 instance_index,
+    RigidBodyEntry* rigid_body_map,
     RigidBody* rigid_bodies,
     Ptr<Material> materials,
     RaytracingAccelerationStructure tlas,
@@ -483,12 +484,13 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     daxa_u32 selected_light_index = select_random_light(seed, light_count, instance_index);
     if(selected_light_index == MAX_U32)
     {
-        printf("No valid light found. Instance Index: %u, Light Count: %u\n", instance_index, light_count);
+        // printf("No valid light found. Instance Index: %u, Light Count: %u\n", instance_index, light_count);
         pdf_light = 0.0f;
         return light_radiance;
     }
 
-    daxa_u32 rigid_body_index = lights[selected_light_index].rigid_body_index;
+    daxa_u32 rigid_body_id = lights[selected_light_index].rigid_body_id;
+    daxa::u32 rigid_body_index = rigid_body_map[rigid_body_id].index;
     
     // Step 2: Retrieve rigid body properties (position, rotation, material index)rigid_bodies
     RigidBody* r = (RigidBody*)(&rigid_bodies[rigid_body_index]);

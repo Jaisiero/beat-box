@@ -308,8 +308,6 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   var lbvh_nodes = (LBVHNode*)(RBR.task_head.lbvh_nodes);
   let morton_codes =
       (MortonCode*)(RBR.task_head.morton_codes);
-  var active_rigid_bodies =
-      (ActiveRigidBody*)(RBR.task_head.active_rigid_bodies);
   var rigid_body_map =
       (RigidBodyEntry*)(RBR.task_head.rigid_body_map);
   var sorted_rigid_bodies = (RigidBody*)(RBR.task_head.rigid_body_sorted);
@@ -319,9 +317,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   // get the rigid body id
   let rb_id = rigid_bodies[rb_index].id;
 
-  rigid_body_map[rb_id] = RigidBodyEntry(index);
+  // FIXME: we need to update the lbvh node and swtich sorted_rigid_bodies with rigid_bodies
+  // rigid_body_map[rb_id] = RigidBodyEntry(index);
+  rigid_body_map[index] = RigidBodyEntry(index);
   
-  // // put the rigid body in the sorted array by morton codes
+  // put the rigid body in the sorted array by morton codes
   sorted_rigid_bodies[index] = rigid_bodies[rb_index];
   // // update the lbvh node
   // lbvh_nodes[rb_count - 1 + index].rigid_body_index = index;
@@ -340,12 +340,19 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
-  ActiveRigidBody active_rigid_body = RBL.task_head.active_rigid_bodies[index];
+  let active_rb = RBL.task_head.active_rigid_bodies[index];
 
   RigidBody* rigid_bodies =
       (RigidBody*)(RBL.task_head.rigid_bodies);
 
-  rigid_bodies[active_rigid_body.rigid_body_index].active_index = index;
+  let rb_map = (RigidBodyEntry*)(RBL.task_head.rigid_body_map);
+  let rb_map_prev = (RigidBodyEntry*)(RBL.task_head.rigid_body_map_prev);
+
+  rigid_bodies[rb_map[active_rb.rigid_body_id].index].active_index = index;
+
+  if(rb_map_prev[active_rb.rigid_body_id].index == MAX_U32) {
+    printf("RBL index %d, active rigid_body_id %u, rb_map_prev index %u\n", index, active_rb.rigid_body_id, rb_map_prev[active_rb.rigid_body_id].index);
+  }
 
   RBL.task_head.scratch_body_links[index] = BodyLink(index, MAX_U32);
 }
@@ -362,9 +369,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
-  // let active_rigid_body = BP.task_head.active_rigid_bodies[index];
-  // let rb_index = active_rigid_body.rigid_body_index;
-  // let rigid_body = BP.task_head.rigid_bodies[rb_index];
+  // FIXME: split between static and dynamic objects
   let rigid_body = BP.task_head.rigid_bodies[index];
   let lbvh_nodes = (LBVHNode*)(BP.task_head.lbvh_nodes);
   var bp_collisions =
@@ -410,8 +415,14 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   let previous_sim_config =
       *NP.task_head.previous_sim_config;
 
+  var rigid_body_map =
+      (RigidBodyEntry*)(NP.task_head.rigid_body_map);
+
   var rigid_bodies =
       (RigidBody*)(NP.task_head.rigid_bodies);
+
+  var previous_rigid_body_map =
+      (RigidBodyEntry*)(NP.task_head.rigid_body_map_prev);
 
   var previous_rigid_bodies =
       (RigidBody*)(NP.task_head.previous_rigid_bodies);
@@ -434,7 +445,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   var bp_collision =
       (BroadPhaseCollision)(NP.task_head.broad_phase_collisions[index]);
 
-  narrow_phase(bp_collision, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collisions, previous_rigid_bodies, previous_rigid_body_link_manifolds, old_collisions, body_links);
+  narrow_phase(bp_collision, rigid_body_map, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collisions, previous_rigid_body_map, previous_rigid_bodies, previous_rigid_body_link_manifolds, old_collisions, body_links);
 
 }
 
@@ -453,6 +464,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
       RigidBody* r =
           (RigidBody*)(&RB_sim.task_head.rigid_bodies[index]);
 
+      // TODO: remove this?
       RigidBody* p_r =
           (RigidBody*)(&RB_sim.task_head.previous_rigid_bodies[index]);
 
@@ -461,7 +473,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
         r->advect(sim_config);
       }
 
-      p_r->manifold_node_index = MAX_U32;
+      // p_r->manifold_node_index = MAX_U32;
     }
 
 [shader("compute")]
@@ -540,19 +552,21 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
         return;
       }
 
-      BodyLink* body_links =
+      let body_links =
           (BodyLink*)(IB.task_head.scratch_body_links);
 
-      Island* islands =
+      let islands =
           (Island*)(IB.task_head.islands);
 
-      ActiveRigidBody* active_rigid_bodies =
+      let active_rigid_bodies =
           (ActiveRigidBody*)(IB.task_head.active_rigid_bodies);
 
-      RigidBody* rigid_bodies =
+      var rigid_bodies =
           (RigidBody*)(IB.task_head.rigid_bodies);
 
-      IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, active_rigid_bodies, sim_config->island_count, islands, sim_config->rigid_body_count, rigid_bodies);
+      let rb_map = (RigidBodyEntry*)(IB.task_head.rigid_body_map);
+
+      IslandBuilder builder = IslandBuilder(sim_config->active_rigid_body_count, body_links, active_rigid_bodies, sim_config->island_count, islands, sim_config->rigid_body_count, rigid_bodies, rb_map);
 
       builder.expand_island(index);
     }
@@ -984,6 +998,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
       daxa_u32 index = compute_i.x;
 
+      // FIXME: split between static and dynamic objects
       RigidBody* r =
           (RigidBody*)(&RB_integrate.task_head.rigid_bodies[index]);
 
@@ -1121,19 +1136,13 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
 
   daxa_u32 index = compute_i.x;
 
+  // FIXME: split between static and dynamic objects?
   RigidBody r = RB_update.task_head.rigid_bodies[index];
-  RigidBody r_copy = RB_update.task_head.rigid_bodies_update[index];
 
+  RigidBody r_copy = r;
   r_copy.island_index = MAX_U32;
   r_copy.active_index = MAX_U32;
-  r_copy.position = r.position;
-  r_copy.rotation = r.rotation;
-  r_copy.velocity = r.velocity;
-  r_copy.omega = r.omega;
-  r_copy.flags = r.flags;
-#if defined(BB_DEBUG)
-  r_copy.face_collided = r.face_collided;
-#endif // BB_DEBUG
+  r_copy.manifold_node_index = MAX_U32;
 
   if (sim_config->has_flag(SimFlag::DEBUG_INFO))
   {

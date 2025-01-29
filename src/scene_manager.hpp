@@ -367,10 +367,9 @@ public:
 
     aabb.clear();
     aabb.reserve(rigid_bodies.size());
-    daxa_u32 i = 0;
     for(auto &rigid_body : rigid_bodies)
     {
-      rigid_body.id = i;
+      rigid_body.id = id_generator;
       rigid_body.island_index = MAX_U32;
       rigid_body.manifold_node_index = MAX_U32;
       rigid_body.active_index = MAX_U32;
@@ -381,14 +380,14 @@ public:
       rigid_body.material_index = rigid_body.inv_mass == 0 ? 0 : distr(gen);
       if(materials.at(rigid_body.material_index).emission != daxa_f32vec3(0.0, 0.0, 0.0))
       {
-        lights.push_back(Light(i));
+        lights.push_back(Light(rigid_body.id));
       }
-      ++i;
 
       if(rigid_body.flags & RigidBodyFlag::DYNAMIC)
       {
-        rigid_body_map[rigid_body_active_count++] = rigid_body_count;
+        rigid_body_map[rigid_body_active_count++] = rigid_body.id;
       }
+      ++id_generator;
       ++rigid_body_count;
     }
 
@@ -430,7 +429,7 @@ public:
     active_rigid_bodies.reserve(rigid_body_active_count);
     for(auto &pair : rigid_body_map)
     {
-      active_rigid_bodies.push_back(ActiveRigidBody{.rigid_body_index = pair.second});
+      active_rigid_bodies.push_back(ActiveRigidBody{.rigid_body_id = pair.second});
     }
     return active_rigid_bodies;
   }
@@ -449,6 +448,8 @@ private:
   // Initialization flag
   bool initialized = false;
 
+  
+  daxa_u32 id_generator = 0;
   daxa_u32 rigid_body_count = 0;
   daxa_u32 rigid_body_active_count = 0;
   // TODO: Fill in scene data from file?

@@ -87,6 +87,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
                   daxa::attachment_view(RayTracingTaskHead::AT.swapchain, task_swapchain_image),
                   daxa::attachment_view(RayTracingTaskHead::AT.accumulation_buffer, task_accumulation_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.tlas, accel_struct_mngr->task_tlas),
+                  daxa::attachment_view(RayTracingTaskHead::AT.rigid_body_map, rigid_body_manager->task_rigid_body_entries),
                   daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies,
                                         rigid_body_manager->task_rigid_bodies),
                   daxa::attachment_view(RayTracingTaskHead::AT.aabbs, accel_struct_mngr->task_aabb_buffer),
@@ -123,10 +124,21 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
 
   
 
-  std::array<daxa::TaskBuffer, 13> buffers = {task_camera_buffer, rigid_body_manager->task_rigid_bodies, accel_struct_mngr->task_aabb_buffer, rigid_body_manager->task_lbvh_nodes, gui_manager->task_vertex_buffer,
-  gui_manager->task_line_vertex_buffer, gui_manager->task_axes_vertex_buffer,
-  scene_manager->task_material_buffer, task_ray_tracing_config, task_ray_tracing_config_host, scene_manager->task_lights_buffer, 
-  rigid_body_manager->task_islands, rigid_body_manager->task_contact_islands};
+  std::array<daxa::TaskBuffer, 14> buffers = {
+    task_camera_buffer, 
+    rigid_body_manager->task_rigid_body_entries,
+    rigid_body_manager->task_rigid_bodies,
+    accel_struct_mngr->task_aabb_buffer, 
+    rigid_body_manager->task_lbvh_nodes, 
+    gui_manager->task_vertex_buffer,
+    gui_manager->task_line_vertex_buffer, 
+    gui_manager->task_axes_vertex_buffer,
+    scene_manager->task_material_buffer, 
+    task_ray_tracing_config, 
+    task_ray_tracing_config_host, 
+    scene_manager->task_lights_buffer, 
+    rigid_body_manager->task_islands, 
+    rigid_body_manager->task_contact_islands};
 
   std::array<daxa::TaskImage, 3> images = {task_swapchain_image, task_accumulation_buffer, task_stbn_texture};
 

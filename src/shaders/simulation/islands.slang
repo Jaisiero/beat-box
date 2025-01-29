@@ -24,6 +24,8 @@ private
   Ptr<ActiveRigidBody> active_rigid_bodies;
 private
   Ptr<RigidBody> rigid_bodies;
+private
+  RigidBodyEntry* rigid_body_map;
 
   __init(Ptr<BodyLink> links, Ptr<Island> island_storage)
   {
@@ -94,7 +96,8 @@ private
     manifold_indices = indices;
   }
 
-  __init(daxa_u32 active_body_count, Ptr<BodyLink> links, Ptr<ActiveRigidBody> active_rigid_body_storage, daxa_u32 island_num, Ptr<Island> island_storage, daxa_u32 rigid_body_count, Ptr<RigidBody> rigid_body_storage)
+  __init(daxa_u32 active_body_count, Ptr<BodyLink> links, Ptr<ActiveRigidBody> active_rigid_body_storage, daxa_u32 island_num, Ptr<Island> island_storage, daxa_u32 rigid_body_count, Ptr<RigidBody> rigid_body_storage, 
+  RigidBodyEntry* rigid_body_entries)
   {
     max_active_bodies = active_body_count;
     island_count = island_num;
@@ -104,6 +107,7 @@ private
     islands = island_storage;
     active_rigid_bodies = active_rigid_body_storage;
     rigid_bodies = rigid_body_storage;
+    rigid_body_map = rigid_body_entries;
   }
 
   __init(daxa_u32 island_num, Ptr<Island> island_storage, daxa_u32 manifold_count, Ptr<ManifoldLinkIsland> indices)
@@ -263,10 +267,10 @@ private
       daxa_u32 old_count = 0;
       InterlockedAdd(islands[island_index].max_count, 1, old_count);
 
-      daxa_u32 rigid_body_index = active_rigid_bodies[index].rigid_body_index;
-      if(rigid_body_index < max_rigid_bodies)
+      daxa_u32 rigid_body_id = active_rigid_bodies[index].rigid_body_id;
+      if(rigid_body_id < max_rigid_bodies)
       {
-        rigid_bodies[rigid_body_index].island_index = island_index;
+        rigid_bodies[rigid_body_map[rigid_body_id].index].island_index = island_index;
       }
     }
   }

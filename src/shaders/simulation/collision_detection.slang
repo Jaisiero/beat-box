@@ -886,7 +886,7 @@ struct BodyLinkManifold {
 };
 
 
-func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, Manifold* collisions, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, Manifold* old_collisions, BodyLink* body_links) -> void
+func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rigid_boy_map, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, Manifold* collisions, RigidBodyEntry* previous_rigid_body_map, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, Manifold* old_collisions, BodyLink* body_links) -> void
 {
   daxa::u32 rba_index = broad_phase_collision.body_a_index;
   daxa::u32 rbb_index = broad_phase_collision.body_b_index;
@@ -927,13 +927,18 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBody* rigid_bo
 
     BodyLinkManifold::body_link_manifold(index, rbb_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
 
+    daxa::u32 rba_prev_index = previous_rigid_body_map[r->id].index;
+    bool rba_prev_exists = rba_prev_index != MAX_U32;
+    daxa::u32 rbb_prev_index = previous_rigid_body_map[r2->id].index;
+    bool rbb_prev_exists = rbb_prev_index != MAX_U32;
+
     daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
-    if(warm_starting) {
+    if(warm_starting && rba_prev_exists && rbb_prev_exists) {
       Manifold old_manifold;
       daxa_u32 old_index = 0;
       
 #if defined(BB_SIM_DEBUG)
-      if(find_old_collision(rba_index, rbb_index, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
+      if(find_old_collision(rba_prev_index, rbb_prev_index, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
       {
 #else
       if(BodyLinkManifold::find_old_collision(rba_index, rbb_index, previous_rigid_bodies[rba_index].manifold_node_index, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
