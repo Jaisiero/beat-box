@@ -941,7 +941,7 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       if(find_old_collision(rba_prev_index, rbb_prev_index, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
       {
 #else
-      if(BodyLinkManifold::find_old_collision(rba_index, rbb_index, previous_rigid_bodies[rba_index].manifold_node_index, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
+      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, previous_rigid_bodies[rba_prev_index].manifold_node_index, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
 #endif
         manifold.update(old_manifold);
       } 

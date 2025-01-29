@@ -512,7 +512,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                               daxa::attachment_view(RigidBodySimTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                               daxa::attachment_view(RigidBodySimTaskHead::AT.sim_config, task_sim_config),
                               daxa::attachment_view(RigidBodySimTaskHead::AT.rigid_bodies, task_rigid_bodies),
-                              daxa::attachment_view(RigidBodySimTaskHead::AT.previous_rigid_bodies, task_previous_rigid_bodies),
                               daxa::attachment_view(RigidBodySimTaskHead::AT.previous_rigid_body_link_manifolds, task_previous_rigid_body_link_manifolds),
                           },
                           user_callback_advect);

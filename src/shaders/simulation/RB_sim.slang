@@ -464,10 +464,6 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
       RigidBody* r =
           (RigidBody*)(&RB_sim.task_head.rigid_bodies[index]);
 
-      // TODO: remove this?
-      RigidBody* p_r =
-          (RigidBody*)(&RB_sim.task_head.previous_rigid_bodies[index]);
-
       if (sim_config->has_flag(SimFlag::ADVECTION))
       {
         r->advect(sim_config);
