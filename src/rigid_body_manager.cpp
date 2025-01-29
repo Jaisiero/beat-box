@@ -114,7 +114,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .name = "global_histograms" + std::to_string(i),
     });
     lbvh_nodes[i] = device.create_buffer({
-        .size = sizeof(LBVHNode) * MAX_RIGID_BODY_COUNT,
+        .size = sizeof(LBVHNode) * MAX_LBVH_NODE_COUNT,
         .name = "lbvh_nodes" + std::to_string(i),
     });
     broad_phase_collisions[i] = device.create_buffer({
@@ -183,7 +183,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .name = "morton_codes",
   });
   lbvh_construction_info = device.create_buffer({
-      .size = sizeof(LBVHConstructionInfo) * MAX_RIGID_BODY_COUNT,
+      .size = sizeof(LBVHConstructionInfo) * MAX_LBVH_NODE_COUNT,
       .name = "lbvh_construction_info",
   });
   rigid_body_scratch = device.create_buffer({
