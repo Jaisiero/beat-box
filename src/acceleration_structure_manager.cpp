@@ -662,6 +662,7 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
                       daxa::attachment_view(UpdateInstancesTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
                       daxa::attachment_view(UpdateInstancesTaskHead::AT.sim_config, rigid_body_manager->task_sim_config),
                       daxa::attachment_view(UpdateInstancesTaskHead::AT.blas_instance_data, task_blas_instance_data),
+                      daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_body_map, rigid_body_manager->task_rigid_body_entries),
                       daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_bodies, rigid_body_manager->task_rigid_bodies),
                       daxa::attachment_view(UpdateInstancesTaskHead::AT.aabbs, task_aabb_buffer),
                   },
@@ -702,10 +703,11 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
       .name = "tlas update",
   });
 
-  std::array<daxa::TaskBuffer, 5> buffers = {
+  std::array<daxa::TaskBuffer, 6> buffers = {
       task_dispatch_buffer,
       rigid_body_manager->task_sim_config,
       task_blas_instance_data,
+      rigid_body_manager->task_rigid_body_entries,
       rigid_body_manager->task_rigid_bodies,
       task_aabb_buffer,
   };

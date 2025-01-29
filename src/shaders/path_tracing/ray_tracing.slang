@@ -67,7 +67,7 @@
       break;
     }
 
-    Material m = materials[rigid_bodies[payload.instance_index].material_index];
+    Material m = materials[rigid_bodies[rigid_body_map[payload.instance_index].index].material_index];
 
     // Update throughput
     daxa_f32vec3 position = payload.position;
@@ -291,7 +291,9 @@ daxa::f32vec3 get_color_by_island_index(daxa::u32 island_index)
   daxa::u32 instance_index = InstanceID();
   daxa::u32 prim_index = PrimitiveIndex();
 
-  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[instance_index]);
+  RigidBodyEntry* rigid_body_map = (RigidBodyEntry*)(p.task_head.rigid_body_map);
+
+  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[rigid_body_map[instance_index].index]);
   // Material m = p.task_head.materials[r->material_index];
 
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
@@ -380,7 +382,9 @@ daxa::f32vec3 get_color_by_island_index(daxa::u32 island_index)
   daxa::u32 instance_index = InstanceID();
   daxa::u32 prim_index = PrimitiveIndex();
 
-  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[instance_index]);
+  RigidBodyEntry* rigid_body_map = (RigidBodyEntry*)(p.task_head.rigid_body_map);
+
+  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[rigid_body_map[instance_index].index]);
 
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
   Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);

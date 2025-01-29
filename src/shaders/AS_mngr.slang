@@ -16,12 +16,15 @@
     return;
   }
 
+  RigidBodyEntry re =
+      UI.task_head.rigid_body_map[index];
+
   RigidBody r =
-      UI.task_head.rigid_bodies[index];
+      UI.task_head.rigid_bodies[re.index];
 
-  daxa_BlasInstanceData* instance = (daxa_BlasInstanceData*)(&UI.task_head.blas_instance_data[index]);
+  daxa_BlasInstanceData* instance = (daxa_BlasInstanceData*)(&UI.task_head.blas_instance_data[r.id]);
 
-  instance->instance_custom_index = index;
+  instance->instance_custom_index = r.id;
   instance->mask = 0xFF;
   instance->instance_shader_binding_table_record_offset = 0;
   instance->flags = 0;

@@ -79,7 +79,7 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_rigid_body_entries{{.initial_buffers = {}, .name = "RB_rigid_body_entry_task"}};
   daxa::TaskBuffer task_previous_rigid_body_entries{{.initial_buffers = {}, .name = "RB_previous_rigid_body_entry_task"}};
   daxa::TaskBuffer task_broad_phase_collisions{{.initial_buffers = {}, .name = "RB_broad_phase_collision_task"}};
-  daxa::TaskBuffer task_rigid_body_sorted{{.initial_buffers = {}, .name = "RB_sorted_task"}};
+  daxa::TaskBuffer task_rigid_body_scratch{{.initial_buffers = {}, .name = "RB_sorted_task"}};
   daxa::TaskBuffer task_previous_rigid_bodies{{.initial_buffers = {}, .name = "RB_previous_task"}};
   daxa::TaskBuffer task_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "rigid_body_link_manifold_task"}};
   daxa::TaskBuffer task_previous_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "previous_rigid_body_link_manifold_task"}};
@@ -178,7 +178,7 @@ private:
   daxa::BufferId global_histograms[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId rigid_body_entries[DOUBLE_BUFFERING] = {};
-  daxa::BufferId rigid_body_sorted = {};
+  daxa::BufferId rigid_body_scratch = {};
   daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};
   daxa::BufferId rigid_body_link_manifolds[DOUBLE_BUFFERING] = {};
   daxa::BufferId body_links[DOUBLE_BUFFERING] = {};

@@ -186,9 +186,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .size = sizeof(LBVHConstructionInfo) * MAX_RIGID_BODY_COUNT,
       .name = "lbvh_construction_info",
   });
-  rigid_body_sorted = device.create_buffer({
+  rigid_body_scratch = device.create_buffer({
       .size = sizeof(RigidBody) * MAX_RIGID_BODY_COUNT,
-      .name = "rigid_body_sorted",
+      .name = "rigid_body_scratch",
   });
 
   daxa::InlineTaskInfo task_RC({
@@ -240,6 +240,18 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .name = "reset sim config",
   });
 
+  daxa::InlineTaskInfo task_CRB({
+      .attachments = {
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_rigid_bodies),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_rigid_body_scratch),
+      },
+      .task = [this](daxa::TaskInterface const &ti)
+      {
+        ti.recorder.copy_buffer_to_buffer({.src_buffer = ti.get(task_rigid_bodies).ids[0], .dst_buffer = ti.get(task_rigid_body_scratch).ids[0], .size = sizeof(RigidBody) * renderer_manager->get_rigid_body_count()});
+      },
+      .name = "copy rigid bodies",
+  });
+
   
   // Calculate first dispatch count for rigid body dispatcher
   auto user_callback_RBD = [this](daxa::TaskInterface ti, auto &self)
@@ -271,7 +283,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_GMC task_GMC(std::array{
                        daxa::attachment_view(RigidBodyGenerateMortonCodeTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(RigidBodyGenerateMortonCodeTaskHead::AT.sim_config, task_sim_config),
-                        daxa::attachment_view(RigidBodyGenerateMortonCodeTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                        daxa::attachment_view(RigidBodyGenerateMortonCodeTaskHead::AT.rigid_bodies, task_rigid_body_scratch),
                         daxa::attachment_view(RigidBodyGenerateMortonCodeTaskHead::AT.morton_codes, task_morton_codes),
                    },
                    user_callback_GMC);
@@ -364,7 +376,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        daxa::attachment_view(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.sim_config, task_sim_config),
                         daxa::attachment_view(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.morton_codes, task_morton_codes),
-                        daxa::attachment_view(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                        daxa::attachment_view(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.rigid_bodies, task_rigid_body_scratch),
                         daxa::attachment_view(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.lbvh_nodes, task_lbvh_nodes),
                         daxa::attachment_view(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.lbvh_construction_info, task_lbvh_construction_info),
                    },
@@ -404,10 +416,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                          daxa::attachment_view(RigidBodyReorderingTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                          daxa::attachment_view(RigidBodyReorderingTaskHead::AT.sim_config, task_sim_config),
                          daxa::attachment_view(RigidBodyReorderingTaskHead::AT.rigid_body_map, task_rigid_body_entries),
-                         daxa::attachment_view(RigidBodyReorderingTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                         daxa::attachment_view(RigidBodyReorderingTaskHead::AT.rigid_bodies, task_rigid_body_scratch),
                           daxa::attachment_view(RigidBodyReorderingTaskHead::AT.morton_codes, task_morton_codes),
                           daxa::attachment_view(RigidBodyReorderingTaskHead::AT.lbvh_nodes, task_lbvh_nodes),
-                          daxa::attachment_view(RigidBodyReorderingTaskHead::AT.rigid_body_sorted, task_rigid_body_sorted),
+                          daxa::attachment_view(RigidBodyReorderingTaskHead::AT.rigid_body_sorted, task_rigid_bodies),
                      },
                      user_callback_RBR);
 
@@ -892,7 +904,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_previous_rigid_bodies,
       task_rigid_bodies,
       task_next_rigid_bodies,
-      task_rigid_body_sorted,
+      task_rigid_body_scratch,
       accel_struct_mngr->task_aabb_buffer,
       task_rigid_body_link_manifolds,
       task_collisions,
@@ -906,6 +918,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
 
   RB_TG.add_task(task_RC);
+  RB_TG.add_task(task_CRB);
   RB_TG.add_task(task_RBD);
   RB_TG.add_task(task_GMC);
   for(auto i = 0u; i < ITERATIONS/2; ++i) {
@@ -1051,7 +1064,7 @@ void RigidBodyManager::destroy()
   device.destroy_buffer(tmp_morton_codes);
   device.destroy_buffer(morton_codes);
   device.destroy_buffer(lbvh_construction_info);
-  device.destroy_buffer(rigid_body_sorted);
+  device.destroy_buffer(rigid_body_scratch);
 
   initialized = false;
 }
@@ -1178,7 +1191,7 @@ void RigidBodyManager::update_buffers()
   task_rigid_body_entries.set_buffers({.buffers = std::array{rigid_body_entries[current_frame]}});
   task_previous_rigid_body_entries.set_buffers({.buffers = std::array{rigid_body_entries[previous_frame]}});
   task_broad_phase_collisions.set_buffers({.buffers = std::array{broad_phase_collisions[current_frame]}});
-  task_rigid_body_sorted.set_buffers({.buffers = std::array{rigid_body_sorted}});
+  task_rigid_body_scratch.set_buffers({.buffers = std::array{rigid_body_scratch}});
   task_rigid_body_link_manifolds.set_buffers({.buffers = std::array{rigid_body_link_manifolds[current_frame]}});
   task_collisions.set_buffers({.buffers = std::array{collisions[current_frame]}});
   task_previous_rigid_body_link_manifolds.set_buffers({.buffers = std::array{rigid_body_link_manifolds[previous_frame]}});

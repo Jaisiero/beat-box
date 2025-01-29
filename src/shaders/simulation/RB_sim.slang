@@ -317,15 +317,12 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   // get the rigid body id
   let rb_id = rigid_bodies[rb_index].id;
 
-  // FIXME: we need to update the lbvh node and swtich sorted_rigid_bodies with rigid_bodies
-  // rigid_body_map[rb_id] = RigidBodyEntry(index);
-  rigid_body_map[index] = RigidBodyEntry(index);
-  
+  // update the rigid body map
+  rigid_body_map[rb_id] = RigidBodyEntry(index);
   // put the rigid body in the sorted array by morton codes
   sorted_rigid_bodies[index] = rigid_bodies[rb_index];
-  // // update the lbvh node
-  // lbvh_nodes[rb_count - 1 + index].rigid_body_index = index;
-  // printf("RBR index %d, id: %d\n", index, rb_id);
+  // update the lbvh node
+  lbvh_nodes[rb_count - 1 + index].primitive_idx = index;
 }
 
 [shader("compute")] 
