@@ -347,10 +347,6 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
   rigid_bodies[rb_map[active_rb.rigid_body_id].index].active_index = index;
 
-  if(rb_map_prev[active_rb.rigid_body_id].index == MAX_U32) {
-    printf("RBL index %d, active rigid_body_id %u, rb_map_prev index %u\n", index, active_rb.rigid_body_id, rb_map_prev[active_rb.rigid_body_id].index);
-  }
-
   RBL.task_head.scratch_body_links[index] = BodyLink(index, MAX_U32);
 }
 
