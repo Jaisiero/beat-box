@@ -632,7 +632,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
   IslandBuilder builder = IslandBuilder(sim_config->island_count, islands, sim_config->active_rigid_body_count, body_link_island);
 
-  builder.sort_body_links_in_island(index);
+//   builder.sort_body_links_in_island(index);
 }
 
 [shader("compute")]
@@ -836,7 +836,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
   ContactIslandBuilder builder = ContactIslandBuilder(&sim_config->contact_island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
 
-  // builder.sort_manifold_links_in_island(index);
+//   builder.sort_manifold_links_in_island(index);
 }
 
 [shader("compute")]

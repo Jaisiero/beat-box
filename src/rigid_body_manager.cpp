@@ -960,13 +960,15 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_IB);
   RB_TG.add_task(task_IPS);
   RB_TG.add_task(task_IBL);
-  RB_TG.add_task(task_SBLI);
+  // FIXME: that's a really expensive sort
+  // RB_TG.add_task(task_SBLI);
   RB_TG.add_task(task_MIB);
   RB_TG.add_task(task_CGI);
   RB_TG.add_task(task_CID);
   RB_TG.add_task(task_MIPS);
   RB_TG.add_task(task_IML);
-  RB_TG.add_task(task_SMLI);
+  // FIXME: that's a really expensive sort too
+  // RB_TG.add_task(task_SMLI);
   RB_TG.add_task(task_CPS);
   for (auto i = 0u; i < iteration_count; ++i)
     RB_TG.add_task(task_CS);
