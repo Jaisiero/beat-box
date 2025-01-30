@@ -849,14 +849,14 @@ struct OBBvsOBBCollision {
 
 
 struct BodyLinkManifold {
-  static void body_link_manifold(daxa_u32 manifold_index, daxa_u32 body_index, Ptr<daxa_u32> manifold_node_count, RigidBody* rigid_bodies, Ptr<ManifoldNode> manifold_nodes)
+  static void body_link_manifold(daxa_u32 manifold_id, daxa_u32 body_index, Ptr<daxa_u32> manifold_node_count, RigidBody* rigid_bodies, ManifoldNode* manifold_nodes)
   {
     // Add manifold to buffer
     daxa_u32 node_index = 0;
     InterlockedAdd(*manifold_node_count, 1u, node_index);
 
     // Fill the node
-    manifold_nodes[node_index].manifold_index = manifold_index;
+    manifold_nodes[node_index].manifold_id = manifold_id;
     manifold_nodes[node_index].next = -1;
 
     // Insert at head using atomic operations:
@@ -870,10 +870,11 @@ struct BodyLinkManifold {
     }
   }
 
-  static daxa_b32 find_old_collision(daxa_u32 a, daxa_u32 b, daxa_u32 first_manifold_node_index, Ptr<ManifoldNode> manifold_nodes, Ptr<Manifold> old_collisions, out Manifold collision_found, out daxa_u32 old_index) {
+  static daxa_b32 find_old_collision(daxa_u32 a, daxa_u32 b, daxa_u32 first_manifold_node_index, CollisionEntry* collision_map, ManifoldNode* manifold_nodes, Ptr<Manifold> old_collisions, out Manifold collision_found, out daxa_u32 old_index) {
     daxa_u32 current = first_manifold_node_index;
     while (current != MAX_U32) {
-      daxa_u32 index = manifold_nodes[current].manifold_index;
+      daxa_u32 id = manifold_nodes[current].manifold_id;
+      daxa::u32 index = collision_map[id].index;
       if (old_collisions[index].obb1_index == a && old_collisions[index].obb2_index == b) {
         old_index = index;
         collision_found = old_collisions[index];
@@ -886,7 +887,7 @@ struct BodyLinkManifold {
 };
 
 
-func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rigid_boy_map, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, Manifold* collisions, RigidBodyEntry* previous_rigid_body_map, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, Manifold* old_collisions, BodyLink* body_links) -> void
+func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rigid_boy_map, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, CollisionEntry* collision_map, Manifold* collisions, RigidBodyEntry* previous_rigid_body_map, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, CollisionEntry* collision_map_prev, Manifold* old_collisions, BodyLink* body_links) -> void
 {
   daxa::u32 rba_index = broad_phase_collision.body_a_index;
   daxa::u32 rbb_index = broad_phase_collision.body_b_index;
@@ -923,6 +924,9 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
     manifold.compute_basis();
 
+    // Add collision to collision map
+    collision_map[index].index = index;
+
     BodyLinkManifold::body_link_manifold(index, rba_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
 
     BodyLinkManifold::body_link_manifold(index, rbb_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
@@ -941,7 +945,7 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       if(find_old_collision(rba_prev_index, rbb_prev_index, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
       {
 #else
-      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, previous_rigid_bodies[rba_prev_index].manifold_node_index, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
+      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, previous_rigid_bodies[rba_prev_index].manifold_node_index, collision_map_prev, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
 #endif
         manifold.update(old_manifold);
       } 

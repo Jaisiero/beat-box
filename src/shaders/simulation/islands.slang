@@ -478,13 +478,15 @@ private
     return collision_count;
   }
 
-  void manifold_link_to_island(daxa_u32 manifold_index, daxa_u32 body_a_index,
+  daxa::u32 manifold_link_to_island(daxa_u32 manifold_index, daxa_u32 body_a_index,
                                daxa_u32 body_b_index)
   {
     daxa_u32 min_index = min(body_a_index, body_b_index);
 
+    daxa::u32 manifold_link_index = MAX_U32;
+
     if (min_index >= max_active_bodies)
-      return;
+      return manifold_link_index;
 
     BodyLink b_link = body_links[min_index];
 
@@ -495,18 +497,20 @@ private
       daxa_u32 contact_island_index = islands[island_index].contact_island_index;
 
       if(contact_island_index >= *contact_island_count)
-        return;
+        return manifold_link_index;
       
       daxa_u32 old_count = 0;
       InterlockedAdd(contact_islands[contact_island_index].count, 1, old_count);
       // write body link inside range in atomic counter from island
-      daxa_u32 manifold_link_index = contact_islands[contact_island_index].start_index + old_count;
+      manifold_link_index = contact_islands[contact_island_index].start_index + old_count;
       if (manifold_index < max_manifold_count)
       {
         daxa_u32 max_index = max(body_a_index, body_b_index);
         manifold_indices[manifold_link_index] = ManifoldLinkIsland(manifold_index, min_index, max_index);
       }
     }
+
+    return manifold_link_index;
   }
 
   internal bool compare_manifold_link(ManifoldLinkIsland a, ManifoldLinkIsland b)

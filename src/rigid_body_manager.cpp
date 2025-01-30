@@ -121,6 +121,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .size = sizeof(BroadPhaseCollision) * MAX_COLLISION_COUNT,
         .name = "broad_phase_collisions" + std::to_string(i),
     });
+    collision_entries[i] = device.create_buffer({
+        .size = sizeof(CollisionEntry) * MAX_COLLISION_COUNT,
+        .name = "collision_entries" + std::to_string(i),
+    });
     collisions[i] = device.create_buffer({
         .size = sizeof(Manifold) * MAX_COLLISION_COUNT,
         .name = "collisions" + std::to_string(i),
@@ -189,6 +193,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   rigid_body_scratch = device.create_buffer({
       .size = sizeof(RigidBody) * MAX_RIGID_BODY_COUNT,
       .name = "rigid_body_scratch",
+  });
+  collision_scratch = device.create_buffer({
+      .size = sizeof(Manifold) * MAX_COLLISION_COUNT,
+      .name = "collision_scratch",
   });
 
   daxa::InlineTaskInfo task_RC({
@@ -501,10 +509,12 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_body_map, task_rigid_body_entries),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_body_link_manifolds, task_rigid_body_link_manifolds),
-                       daxa::attachment_view(NarrowPhaseTaskHead::AT.collisions, task_collisions),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.collision_map, task_collision_entries),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.collisions, task_collision_scratch),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_body_map_prev, task_previous_rigid_body_entries),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.previous_rigid_bodies, task_previous_rigid_bodies),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.previous_rigid_body_link_manifolds, task_previous_rigid_body_link_manifolds),
+                       daxa::attachment_view(NarrowPhaseTaskHead::AT.collision_map_prev, task_collision_entries_previous),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.old_collisions, task_old_collisions),
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.scratch_body_links, task_scratch_body_links),
                    },
@@ -524,7 +534,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                               daxa::attachment_view(RigidBodySimTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                               daxa::attachment_view(RigidBodySimTaskHead::AT.sim_config, task_sim_config),
                               daxa::attachment_view(RigidBodySimTaskHead::AT.rigid_bodies, task_rigid_bodies),
-                              daxa::attachment_view(RigidBodySimTaskHead::AT.previous_rigid_body_link_manifolds, task_previous_rigid_body_link_manifolds),
                           },
                           user_callback_advect);
 
@@ -666,7 +675,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                          daxa::attachment_view(ManifoldIslandBuilderTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                          daxa::attachment_view(ManifoldIslandBuilderTaskHead::AT.sim_config, task_sim_config),
                          daxa::attachment_view(ManifoldIslandBuilderTaskHead::AT.scratch_body_links, task_scratch_body_links),
-                         daxa::attachment_view(ManifoldIslandBuilderTaskHead::AT.collisions, task_collisions),
+                         daxa::attachment_view(ManifoldIslandBuilderTaskHead::AT.collisions, task_collision_scratch),
                          daxa::attachment_view(ManifoldIslandBuilderTaskHead::AT.rigid_bodies, task_rigid_bodies),
                          daxa::attachment_view(ManifoldIslandBuilderTaskHead::AT.islands, task_islands),
                      },
@@ -737,11 +746,13 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                          daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                          daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.sim_config, task_sim_config),
                          daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.scratch_body_links, task_scratch_body_links),
-                         daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.collisions, task_collisions),
+                         daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.collision_map, task_collision_entries),
+                         daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.collisions, task_collision_scratch),
                          daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.rigid_bodies, task_rigid_bodies),
                          daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.islands, task_islands),
                          daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.contact_islands, task_contact_islands),
                          daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.manifold_links, task_manifold_links),
+                         daxa::attachment_view(IslandBuilderManifoldLink2IslandTaskHead::AT.collision_sorted, task_collisions),
                      },
                      user_callback_IML);
 
@@ -776,6 +787,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_CPS task_CPS(std::array{
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.sim_config, task_sim_config),
+                         daxa::attachment_view(CollisionPreSolverTaskHead::AT.collision_map, task_collision_entries),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.collisions, task_collisions),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.contact_islands, task_contact_islands),
@@ -796,6 +808,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_CS task_CS(std::array{
                        daxa::attachment_view(CollisionSolverTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.sim_config, task_sim_config),
+                       daxa::attachment_view(CollisionSolverTaskHead::AT.collision_map, task_collision_entries),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.collisions, task_collisions),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.contact_islands, task_contact_islands),
@@ -836,6 +849,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_CSR task_CSR(std::array{
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.sim_config, task_sim_config),
+                         daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.collision_map, task_collision_entries),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.rigid_bodies, task_rigid_bodies),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.collisions, task_collisions),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.contact_islands, task_contact_islands),
@@ -883,7 +897,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 29> buffers = {
+  std::array<daxa::TaskBuffer, 32> buffers = {
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -907,8 +921,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_rigid_body_scratch,
       accel_struct_mngr->task_aabb_buffer,
       task_rigid_body_link_manifolds,
+      task_collision_entries,
+      task_collision_scratch,
       task_collisions,
       task_previous_rigid_body_link_manifolds,
+      task_collision_entries_previous,
       task_old_collisions,
       gui->task_vertex_buffer,
       gui->task_line_vertex_buffer,
@@ -1050,6 +1067,7 @@ void RigidBodyManager::destroy()
     device.destroy_buffer(sim_config[i]);
     device.destroy_buffer(lbvh_nodes[i]);
     device.destroy_buffer(broad_phase_collisions[i]);
+    device.destroy_buffer(collision_entries[i]);
     device.destroy_buffer(collisions[i]);
     device.destroy_buffer(active_rigid_bodies[i]);
     device.destroy_buffer(rigid_body_entries[i]);
@@ -1065,6 +1083,7 @@ void RigidBodyManager::destroy()
   device.destroy_buffer(morton_codes);
   device.destroy_buffer(lbvh_construction_info);
   device.destroy_buffer(rigid_body_scratch);
+  device.destroy_buffer(collision_scratch);
 
   initialized = false;
 }
@@ -1193,8 +1212,11 @@ void RigidBodyManager::update_buffers()
   task_broad_phase_collisions.set_buffers({.buffers = std::array{broad_phase_collisions[current_frame]}});
   task_rigid_body_scratch.set_buffers({.buffers = std::array{rigid_body_scratch}});
   task_rigid_body_link_manifolds.set_buffers({.buffers = std::array{rigid_body_link_manifolds[current_frame]}});
+  task_collision_entries.set_buffers({.buffers = std::array{collision_entries[current_frame]}});
   task_collisions.set_buffers({.buffers = std::array{collisions[current_frame]}});
+  task_collision_scratch.set_buffers({.buffers = std::array{collision_scratch}});
   task_previous_rigid_body_link_manifolds.set_buffers({.buffers = std::array{rigid_body_link_manifolds[previous_frame]}});
+  task_collision_entries_previous.set_buffers({.buffers = std::array{collision_entries[previous_frame]}});
   task_old_collisions.set_buffers({.buffers = std::array{collisions[previous_frame]}});
   task_scratch_body_links.set_buffers({.buffers = std::array{scratch_body_links[current_frame]}});
   task_body_links.set_buffers({.buffers = std::array{body_links[current_frame]}});

@@ -84,7 +84,10 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "rigid_body_link_manifold_task"}};
   daxa::TaskBuffer task_previous_rigid_body_link_manifolds{{.initial_buffers = {}, .name = "previous_rigid_body_link_manifold_task"}};
   daxa::TaskBuffer task_next_rigid_bodies{{.initial_buffers = {}, .name = "RB_next_task"}};
+  daxa::TaskBuffer task_collision_entries{{.initial_buffers = {}, .name = "RB_collision_entry_task"}};
   daxa::TaskBuffer task_collisions{{.initial_buffers = {}, .name = "RB_collision_task"}};
+  daxa::TaskBuffer task_collision_scratch{{.initial_buffers = {}, .name = "RB_collision_scratch_task"}};
+  daxa::TaskBuffer task_collision_entries_previous{{.initial_buffers = {}, .name = "RB_previous_collision_entry_task"}};
   daxa::TaskBuffer task_old_collisions{{.initial_buffers = {}, .name = "RB_old_collision_task"}};
   daxa::TaskBuffer task_active_rigid_bodies{{.initial_buffers = {}, .name = "RB_active_rigid_body_task"}};
   daxa::TaskBuffer task_scratch_body_links{{.initial_buffers = {}, .name = "RB_scratch_body_link_task"}};
@@ -176,7 +179,9 @@ private:
   daxa::BufferId lbvh_construction_info = {};
   daxa::BufferId broad_phase_collisions[DOUBLE_BUFFERING] = {};
   daxa::BufferId global_histograms[DOUBLE_BUFFERING] = {};
+  daxa::BufferId collision_entries[DOUBLE_BUFFERING] = {};
   daxa::BufferId collisions[DOUBLE_BUFFERING] = {};
+  daxa::BufferId collision_scratch = {};
   daxa::BufferId rigid_body_entries[DOUBLE_BUFFERING] = {};
   daxa::BufferId rigid_body_scratch = {};
   daxa::BufferId active_rigid_bodies[DOUBLE_BUFFERING] = {};

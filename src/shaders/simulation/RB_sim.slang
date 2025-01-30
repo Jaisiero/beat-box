@@ -87,16 +87,16 @@
 
 #if defined(BB_RADIX_SORT_HISTOGRAM)
 // groupshared variables
-groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
+groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
 // Entry point with HLSL semantics
-[numthreads(RADIX_SORT_WORKGROUP_SIZE, 1, 1)] void entry_radix_sort_histogram(daxa::u32vec3 compute_i : SV_DispatchThreadID, daxa::u32vec3 GroupThreadID : SV_GroupThreadID, daxa::u32vec3 GroupID : SV_GroupID)
+[numthreads(RADIX_SORT_WORKGROUP_SIZE, 1, 1)] void entry_radix_sort_histogram(daxa_u32vec3 compute_i : SV_DispatchThreadID, daxa_u32vec3 GroupThreadID : SV_GroupThreadID, daxa_u32vec3 GroupID : SV_GroupID)
 {
   let lID = GroupThreadID.x;
   let wID = GroupID.x;
 
   var global_histograms =
-      (daxa::u32*)(RBRSH.task_head.global_histograms);
+      (daxa_u32*)(RBRSH.task_head.global_histograms);
 
   var morton_codes =
       (MortonCode*)(RBRSH.task_head.morton_codes);
@@ -153,8 +153,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   DispatchBuffer* dispatch_buffer =
       (DispatchBuffer*)(SRS.task_head.dispatch_buffer);
 
-  daxa::u32* global_histograms =
-      (daxa::u32*)(SRS.task_head.global_histograms);
+  daxa_u32* global_histograms =
+      (daxa_u32*)(SRS.task_head.global_histograms);
 
   MortonCode* morton_codes_in =
       (MortonCode*)(SRS.task_head.morton_codes_in);
@@ -267,7 +267,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
-  daxa::u32 node_index = lbvh_construction_info[leaf_offset + index].parent;
+  daxa_u32 node_index = lbvh_construction_info[leaf_offset + index].parent;
   while(true) {
     var visitations = 0U;
     InterlockedAdd(lbvh_construction_info[node_index].visitation_count, 1U, visitations);
@@ -296,8 +296,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   SimConfig* sim_config =
       (SimConfig*)(RBR.task_head.sim_config);
 
-  daxa::u32 index = compute_i.x;
-  daxa::u32 rb_count = sim_config->rigid_body_count;
+  daxa_u32 index = compute_i.x;
+  daxa_u32 rb_count = sim_config->rigid_body_count;
   if (index >= rb_count)
   {
     return;
@@ -393,13 +393,13 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 }
 
 [shader("compute")]
-    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_narrow_phase(daxa::u32vec3 compute_i : SV_DispatchThreadID)
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_narrow_phase(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   var sim_config =
       (SimConfig*)(NP.task_head.sim_config);
 
-  daxa::u32 index = compute_i.x;
-  daxa::u32 collision_count = sim_config->broad_phase_collision_count;
+  daxa_u32 index = compute_i.x;
+  daxa_u32 collision_count = sim_config->broad_phase_collision_count;
   if (index >= collision_count)
   {
     return;
@@ -423,11 +423,17 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   var rigid_body_link_manifolds =
       (ManifoldNode*)(NP.task_head.rigid_body_link_manifolds);
 
+  var collision_map =
+      (CollisionEntry*)(NP.task_head.collision_map);
+
   var collisions =
       (Manifold*)(NP.task_head.collisions);
 
   var previous_rigid_body_link_manifolds =
       (ManifoldNode*)(NP.task_head.previous_rigid_body_link_manifolds);
+
+  var collision_map_prev =
+      (CollisionEntry*)(NP.task_head.collision_map_prev);
 
   var old_collisions =
       (Manifold*)(NP.task_head.old_collisions);
@@ -438,7 +444,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   var bp_collision =
       (BroadPhaseCollision)(NP.task_head.broad_phase_collisions[index]);
 
-  narrow_phase(bp_collision, rigid_body_map, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collisions, previous_rigid_body_map, previous_rigid_bodies, previous_rigid_body_link_manifolds, old_collisions, body_links);
+  narrow_phase(bp_collision, rigid_body_map, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collision_map, collisions, previous_rigid_body_map, previous_rigid_bodies, previous_rigid_body_link_manifolds, collision_map_prev, old_collisions, body_links);
 
 }
 
@@ -642,11 +648,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Manifold* m =
-          &MIB.task_head.collisions[index];
+      Manifold m =
+          MIB.task_head.collisions[index];
 
-      daxa_u32 body_a_index = m->obb1_index;
-      daxa_u32 body_b_index = m->obb2_index;
+      daxa_u32 body_a_index = m.obb1_index;
+      daxa_u32 body_b_index = m.obb2_index;
 
       if (body_a_index >= sim_config->rigid_body_count || body_b_index >= sim_config->rigid_body_count || body_a_index == body_b_index)
       {
@@ -762,11 +768,11 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
         return;
       }
 
-      Manifold* m =
-          &MLI.task_head.collisions[index];
+      Manifold m =
+          MLI.task_head.collisions[index];
 
-      daxa_u32 body_a_index = m->obb1_index;
-      daxa_u32 body_b_index = m->obb2_index;
+      daxa_u32 body_a_index = m.obb1_index;
+      daxa_u32 body_b_index = m.obb2_index;
 
       if (body_a_index >= sim_config->rigid_body_count || body_b_index >= sim_config->rigid_body_count || body_a_index == body_b_index)
       {
@@ -796,9 +802,18 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
       ManifoldLinkIsland* manifold_links =
           (ManifoldLinkIsland*)(MLI.task_head.manifold_links);
 
+      var collision_map = (CollisionEntry*)(MLI.task_head.collision_map);
+
+      var collision_sorted = (Manifold*)(MLI.task_head.collision_sorted);
+
       ContactIslandBuilder builder = ContactIslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands, sim_config->g_c_info.collision_count, manifold_links);
 
-      builder.manifold_link_to_island(index, a_active_body_index, b_active_body_index);
+      let manifold_index = builder.manifold_link_to_island(index, a_active_body_index, b_active_body_index);
+
+      if(manifold_index != MAX_U32) {
+        collision_sorted[manifold_index] = m;
+        collision_map[index].index = manifold_index;
+      }
     }
 
 [shader("compute")]
@@ -821,7 +836,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 
   ContactIslandBuilder builder = ContactIslandBuilder(&sim_config->contact_island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
 
-  builder.sort_manifold_links_in_island(index);
+  // builder.sort_manifold_links_in_island(index);
 }
 
 [shader("compute")]
@@ -850,6 +865,9 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   ManifoldLinkIsland* manifold_links =
       (ManifoldLinkIsland*)(CPS.task_head.manifold_links);
 
+  let collision_map =
+      (CollisionEntry*)(CPS.task_head.collision_map);
+
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
 
@@ -861,10 +879,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
-  for (daxa_u32 m = start_index; m < start_index + max_count; ++m)
+  for (daxa_u32 manifold_index = start_index; manifold_index < start_index + max_count; ++manifold_index)
   {
-
-    daxa_u32 manifold_index = manifold_links[m].manifold_index;
 #endif // BB_SIM_DEBUG
 
         Manifold manifold =
@@ -878,10 +894,10 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
         RigidBody r1 = CPS.task_head.rigid_bodies[manifold.obb1_index];
         RigidBody r2 = CPS.task_head.rigid_bodies[manifold.obb2_index];
 
-        daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
-        daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
-        daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
-        daxa_f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
+        daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+        daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+        daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+        daxa::f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
 
         if (sim_config->solver_type == SimSolverType::PGS_SOFT)
         {
@@ -919,10 +935,13 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   {
 #else
   ContactIsland* islands =
-      (ContactIsland*)(CPS.task_head.contact_islands);
+      (ContactIsland*)(CS.task_head.contact_islands);
 
   ManifoldLinkIsland* manifold_links =
-      (ManifoldLinkIsland*)(CPS.task_head.manifold_links);
+      (ManifoldLinkIsland*)(CS.task_head.manifold_links);
+
+  let collision_map =
+      (CollisionEntry*)(CS.task_head.collision_map);
 
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
@@ -935,10 +954,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
-  for (daxa_u32 m = start_index; m < start_index + max_count; ++m)
+  for (daxa_u32 manifold_index = start_index; manifold_index < start_index + max_count; ++manifold_index)
   {
-
-    daxa_u32 manifold_index = manifold_links[m].manifold_index;
 #endif // BB_SIM_DEBUG
 
     Manifold manifold =
@@ -954,9 +971,9 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     RigidBody r1 = CS.task_head.rigid_bodies[manifold.obb1_index];
     RigidBody r2 = CS.task_head.rigid_bodies[manifold.obb2_index];
 
-    daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
-    daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
-    daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+    daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+    daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+    daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
 
     // Solve the collision
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)
@@ -1020,10 +1037,13 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
   {
 #else
   ContactIsland* islands =
-      (ContactIsland*)(CPS.task_head.contact_islands);
+      (ContactIsland*)(CSR.task_head.contact_islands);
 
   ManifoldLinkIsland* manifold_links =
-      (ManifoldLinkIsland*)(CPS.task_head.manifold_links);
+      (ManifoldLinkIsland*)(CSR.task_head.manifold_links);
+
+  let collision_map =
+      (CollisionEntry*)(CSR.task_head.collision_map);
 
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
@@ -1036,10 +1056,8 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
-  for (daxa_u32 m = start_index; m < start_index + max_count; ++m)
+  for (daxa_u32 manifold_index = start_index; manifold_index < start_index + max_count; ++manifold_index)
   {
-
-    daxa_u32 manifold_index = manifold_links[m].manifold_index;
 #endif // BB_SIM_DEBUG
 
     Manifold manifold =
@@ -1053,9 +1071,9 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
     RigidBody r1 = CSR.task_head.rigid_bodies[manifold.obb1_index];
     RigidBody r2 = CSR.task_head.rigid_bodies[manifold.obb2_index];
 
-    daxa_b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
-    daxa_b32 friction = sim_config->has_flag(SimFlag::FRICTION);
-    daxa_f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+    daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+    daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+    daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
 
     // Solve the collision with relaxation
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)
@@ -1070,7 +1088,7 @@ groupshared Atomic<daxa::u32> histogram[RADIX_SORT_BINS];
 }
 
 const static daxa_u32 LINE_POINT_COUNT = 2;
-const static daxa_f32 LINE_SIZE = 0.5f;
+const static daxa::f32 LINE_SIZE = 0.5f;
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
@@ -1099,9 +1117,9 @@ const static daxa_f32 LINE_SIZE = 0.5f;
     {
       daxa_u32 current_index = index + i;
       vertex_buffer[current_index].position = m.contacts[i].position;
-      daxa_f32 blue = (daxa_f32)(255 - m.contacts[i].warm_start) / 255.0f;
-      daxa_f32 red = 1.0f - blue;
-      vertex_buffer[current_index].color = daxa_f32vec3(red, 0.0f, blue);
+      daxa::f32 blue = (daxa::f32)(255 - m.contacts[i].warm_start) / 255.0f;
+      daxa::f32 red = 1.0f - blue;
+      vertex_buffer[current_index].color = daxa::f32vec3(red, 0.0f, blue);
 
       line_vertex_buffer[current_index * LINE_POINT_COUNT].position = m.contacts[i].position;
       line_vertex_buffer[current_index * LINE_POINT_COUNT + 1].position = m.contacts[i].position + m.normal * LINE_SIZE;
@@ -1135,13 +1153,13 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
 
   if (sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
-    daxa_f32vec3 _min = r.minimum;
-    daxa_f32vec3 _max = r.maximum;
-    daxa_f32vec3 center = (_min + _max) * 0.5f;
+    daxa::f32vec3 _min = r.minimum;
+    daxa::f32vec3 _max = r.maximum;
+    daxa::f32vec3 center = (_min + _max) * 0.5f;
     var axes_vertex_buffer = (GUIVertexLine*)(RB_update.task_head.axes_vertex_buffer);
-    let x_axis = r.rotate_vector(daxa_f32vec3(1.0f, 0.0f, 0.0f));
-    let y_axis = r.rotate_vector(daxa_f32vec3(0.0f, 1.0f, 0.0f));
-    let z_axis = r.rotate_vector(daxa_f32vec3(0.0f, 0.0f, 1.0f));
+    let x_axis = r.rotate_vector(daxa::f32vec3(1.0f, 0.0f, 0.0f));
+    let y_axis = r.rotate_vector(daxa::f32vec3(0.0f, 1.0f, 0.0f));
+    let z_axis = r.rotate_vector(daxa::f32vec3(0.0f, 0.0f, 1.0f));
 
     center = r.object_to_world(center);
 
