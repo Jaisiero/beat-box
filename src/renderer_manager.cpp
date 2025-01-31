@@ -45,8 +45,10 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
       {
         auto const accumulating = status_manager->is_accumulating();
         auto const show_islands = status_manager->is_showing_islands();
+        auto const show_normals = status_manager->is_showing_normals();
+        auto const show_collisions = status_manager->is_showing_collisions();
         auto flags = accumulating ? RayTracingFlag::RT_ACCUMULATE : RayTracingFlag::RT_NONE;
-        flags |= show_islands ? RayTracingFlag::RT_SHOW_ISLANDS : RayTracingFlag::RT_NONE;
+        flags |= show_islands ? RayTracingFlag::RT_SHOW_ISLANDS : show_normals ? RayTracingFlag::RT_SHOW_NORMALS : show_collisions ? RayTracingFlag::RT_SHOW_COLLISIONS : RayTracingFlag::RT_NONE;
         ti.device.buffer_host_address_as<RayTracingConfig>(ti.get(task_ray_tracing_config_host).ids[0]).value()[0] = RayTracingConfig{
             .flags = flags,
             .max_bounces = MAX_BOUNCES,

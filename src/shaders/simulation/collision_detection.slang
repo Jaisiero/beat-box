@@ -330,7 +330,7 @@ struct OBBvsOBBCollision {
   }
 
   static daxa_b32 in_front(daxa_f32 v) {
-    return v > 0.0f;
+    return v >= 0.0f;
   }
 
   static daxa_b32 behind(daxa_f32 v) {
@@ -441,7 +441,7 @@ struct OBBvsOBBCollision {
   }
 
 
-  static void support_edge(const Transform tx, const daxa_f32vec3 e, daxa_f32vec3 n, out daxa_f32vec3 CA, out daxa_f32vec3 CB) {
+  static void support_edge(const Transform tx, const daxa::f32vec3 e, daxa::f32vec3 n, out daxa::f32vec3 CA, out daxa::f32vec3 CB) {
     n = tx.rotate_transpose(n);
     daxa_f32vec3 abs_n = abs(n);
 
@@ -893,11 +893,6 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   daxa::u32 rbb_index = broad_phase_collision.body_b_index;
 
   RigidBody* r = (RigidBody*)(&rigid_bodies[rba_index]);
-  // FIXME: refactor this clear flag to another compute pass
-#if defined(BB_DEBUG)
-  r->clear_flag(RigidBodyFlag::COLLIDING);
-  r->face_collided = 0u;
-#endif // BB_DEBUG
   RigidBody* r2 = (RigidBody*)(&rigid_bodies[rbb_index]);
 
   IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count, body_links);

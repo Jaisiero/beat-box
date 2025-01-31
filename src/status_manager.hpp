@@ -226,6 +226,46 @@ struct StatusManager
 #endif
   }
 
+  bool is_showing_normals()
+  {
+    return show_normals;
+  }
+
+  void switch_show_normals()
+  {
+    show_normals = !show_normals;
+#if defined(BB_DEBUG)
+    if(show_normals)
+    {
+      std::cout << "Showing normals" << std::endl;
+    }
+    else
+    {
+      std::cout << "Hiding normals" << std::endl;
+    }
+#endif
+  }
+
+  bool is_showing_collisions()
+  {
+    return show_collisions;
+  }
+
+  void switch_show_collisions()
+  {
+    show_collisions = !show_collisions;
+#if defined(BB_DEBUG)
+    if(show_collisions)
+    {
+      std::cout << "Showing collisions" << std::endl;
+    }
+    else
+    {
+      std::cout << "Hiding collisions" << std::endl;
+    }
+#endif
+  }
+
   daxa_u64 get_accumulation_count()
   {
     return frame_accumulation_count;
@@ -276,6 +316,10 @@ private:
   bool accumulation = false;
   // flag for showing islands
   bool show_islands = false;
+  // flag for showing normals
+  bool show_normals = false;
+  // flag for showing collisions
+  bool show_collisions = false;
   // double buffering counter
   daxa_u32 double_buffering_counter = 0;
   // frame index

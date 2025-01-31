@@ -79,8 +79,15 @@
 
   MortonCode* morton_codes =
       (MortonCode*)(GMC.task_head.morton_codes);
+  
+  var r = &rigid_bodies[index];
 
-  let morton_code = MortonCodeGenerator.morton3D(rigid_bodies[index].position);
+  let morton_code = MortonCodeGenerator.morton3D(r->position);
+
+#if defined(BB_DEBUG)
+  r->clear_flag(RigidBodyFlag::COLLIDING);
+  r->face_collided = 0u;
+#endif // BB_DEBUG
 
   morton_codes[index] = MortonCode(morton_code, index);
 }
@@ -445,7 +452,6 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       (BroadPhaseCollision)(NP.task_head.broad_phase_collisions[index]);
 
   narrow_phase(bp_collision, rigid_body_map, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collision_map, collisions, previous_rigid_body_map, previous_rigid_bodies, previous_rigid_body_link_manifolds, collision_map_prev, old_collisions, body_links);
-
 }
 
 [shader("compute")]

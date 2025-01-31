@@ -168,6 +168,7 @@ enum RayTracingFlag : daxa_u32
   RT_ACCUMULATE = 1 << 0,
   RT_SHOW_NORMALS = 1 << 1,
   RT_SHOW_ISLANDS = 1 << 2,
+  RT_SHOW_COLLISIONS = 1 << 3,
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 RayTracingFlag  operator|(RayTracingFlag a, RayTracingFlag b)

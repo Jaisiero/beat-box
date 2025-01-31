@@ -590,3 +590,146 @@ daxa_f32vec3 compute_direct_lighting_cubes(
 
     return contribution;
 }
+
+static const daxa::f32vec3 face_X = daxa::f32vec3(1.0, 0.0, 0.0);                   // red
+static const daxa::f32vec3 face_neg_X = daxa::f32vec3(1.0, 1.0, 0.0);               // yellow
+static const daxa::f32vec3 face_Y = daxa::f32vec3(0.0, 1.0, 0.0);                   // green
+static const daxa::f32vec3 face_neg_Y = daxa::f32vec3(0.0, 1.0, 1.0);               // light blue
+static const daxa::f32vec3 face_Z = daxa::f32vec3(0.0, 0.0, 1.0);                   // blue
+static const daxa::f32vec3 face_neg_Z = daxa::f32vec3(1.0, 0.0, 1.0);               // purple
+static const daxa::f32vec3 material_color = daxa::f32vec3(0.0, 0.0, 0.0);           // black
+static const daxa::f32vec3 collision_material_color = daxa::f32vec3(0.1, 0.1, 0.1); // white
+
+BoxFace get_face_by_normal(daxa::f32vec3 normal)
+{
+  daxa::f32vec3 abs_normal = abs(normal);
+  daxa::f32 max_component = max(max(abs_normal.x, abs_normal.y), abs_normal.z);
+  let sign = sign(normal);
+  return (max_component == abs_normal.x) ? (sign.x > 0 ? BoxFace::RIGHT : BoxFace::LEFT) : (max_component == abs_normal.y) ? (sign.y > 0 ? BoxFace::TOP : BoxFace::BOTTOM)
+                                                                                                                           : (sign.z > 0 ? BoxFace::FRONT : BoxFace::BACK);
+}
+
+daxa::f32vec3 get_face_color(BoxFace face)
+{
+  switch (face)
+  {
+  case BoxFace::RIGHT:
+    return face_X;
+  case BoxFace::LEFT:
+    return face_neg_X;
+  case BoxFace::TOP:
+    return face_Y;
+  case BoxFace::BOTTOM:
+    return face_neg_Y;
+  case BoxFace::FRONT:
+    return face_Z;
+  case BoxFace::BACK:
+    return face_neg_Z;
+  default:
+    return daxa::f32vec3(0.0);
+  }
+}
+
+daxa::f32vec3 get_color_by_island_index(daxa::u32 island_index)
+{
+  island_index %= 15;
+
+  daxa::f32vec3 color = daxa::f32vec3(0.0);
+  switch (island_index)
+  {
+  case 0:
+    color = daxa::f32vec3(1.0, 0.0, 0.0); // red
+    break;
+  case 1:
+    color = daxa::f32vec3(0.0, 1.0, 0.0); // green
+    break;
+  case 2:
+    color = daxa::f32vec3(0.0, 0.0, 1.0); // blue
+    break;
+  case 3:
+    color = daxa::f32vec3(1.0, 1.0, 0.0); // yellow
+    break;
+  case 4:
+    color = daxa::f32vec3(1.0, 0.0, 1.0); // purple
+    break;
+  case 5:
+    color = daxa::f32vec3(0.0, 1.0, 1.0); // light blue
+  case 6:
+    color = daxa::f32vec3(1.0, 0.5, 0.0); // orange
+    break;
+  case 7:
+    color = daxa::f32vec3(0.5, 1.0, 0.0); // lime
+    break;
+  case 8:
+    color = daxa::f32vec3(0.0, 1.0, 0.5); // mint
+    break;
+  case 9:
+    color = daxa::f32vec3(0.0, 0.5, 1.0); // sky
+    break;
+  case 10:
+    color = daxa::f32vec3(1.0, 0.0, 0.5); // pink
+    break;
+  case 11:
+    color = daxa::f32vec3(0.5, 0.0, 1.0); // purple
+    break;
+  case 12:
+    color = daxa::f32vec3(1.0, 1.0, 0.5); // yellow
+    break;
+  case 13:
+    color = daxa::f32vec3(0.5, 1.0, 1.0); // light blue
+    break;
+  case 14:
+    color = daxa::f32vec3(1.0, 0.5, 1.0); // purple
+    break;
+  default:
+    color = daxa::f32vec3(0.0);
+    break;
+  }
+  return color;
+}
+
+daxa::f32vec3 get_color(RayTracingConfig* config, daxa::f32vec3 normal, daxa::f32vec3 albedo, RigidBody* r)
+{
+    daxa::f32vec3 color = albedo;
+
+    if (config->has_flag(RayTracingFlag::RT_SHOW_NORMALS))
+    {
+        // get face by normal
+        BoxFace face = get_face_by_normal(normal);
+        color = get_face_color(face);
+    }
+    else if(config->has_flag(RayTracingFlag::RT_SHOW_COLLISIONS))
+    {
+        if (r->has_flag(RigidBodyFlag::COLLIDING))
+        {
+            // get face by normal
+            BoxFace face = get_face_by_normal(normal);
+            if (r->is_face_colliding(face))
+            {
+                color = collision_material_color;
+            }
+        }
+    }
+    else if (config->has_flag(RayTracingFlag::RT_SHOW_ISLANDS))
+    {
+        if (r->island_index != MAX_U32)
+        {
+            daxa_u32 island_index = r->island_index;
+            if (island_index != MAX_U32)
+            {
+                let contact_island_index = p.task_head.islands[island_index].contact_island_index;
+                if (contact_island_index != MAX_U32)
+                {
+                    // if(contact_island_index < 229) {
+                    let key = p.task_head.contact_islands[contact_island_index].key;
+                    if (key != MAX_U32)
+                    {
+                        color = get_color_by_island_index(key);
+                    }
+                }
+            }
+        }
+    }
+
+    return color;
+}
