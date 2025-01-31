@@ -421,6 +421,12 @@ struct OBBvsOBBCollision {
 
     in_count = ortographic_clip(-1.0f, e.y, 1, clip_edges[3], out, out_count, in);
 
+    if(in_count == 0) {
+      // DEBUGGING
+      error = 13;
+      return 0;
+    }
+
     // Keep incident vertices behind the reference face
     out_count = 0;
     for(daxa_i32 i = 0; i < in_count; ++i) {
@@ -548,8 +554,8 @@ struct OBBvsOBBCollision {
     Transform tx_B = Transform(B->get_rotation_matrix(), B->position);
 
     // Get the half extents of the OBBs
-    daxa_f32vec3 e_A = (A->maximum - A->minimum) * 0.5f;
-    daxa_f32vec3 e_B = (B->maximum - B->minimum) * 0.5f;
+    daxa_f32vec3 e_A = A->half_extent();
+    daxa_f32vec3 e_B = B->half_extent();
 
 
     Transform tx_C;
@@ -788,7 +794,7 @@ struct OBBvsOBBCollision {
           obb2_faces = reference_face;
         } else {
           obb1_faces = reference_face;
-          obb2_faces = incident_face;
+          // obb2_faces = incident_face;
         }
 
         for(daxa_i32 i = 0; i < out_num; ++i) {

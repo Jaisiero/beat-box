@@ -37,6 +37,11 @@
 #define MIN_I32 std::numeric_limits<daxa_i32>::min()
 #define MAX_I32 std::numeric_limits<daxa_i32>::max()
 
+FORCE_INLINE daxa_f32vec3 operator+(const daxa_f32vec3& a, const daxa_f32vec3& b)
+{
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
 FORCE_INLINE daxa_f32vec3 operator-(const daxa_f32vec3& a, const daxa_f32vec3& b)
 {
     return {a.x - b.x, a.y - b.y, a.z - b.z};

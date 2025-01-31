@@ -308,6 +308,14 @@ struct RigidBody
     return index == 0 ? size.x : (index == 1 ? size.y : size.z);
   }
 
+  daxa_f32vec3 get_center() {
+    return (maximum + minimum) * 0.5f;
+  }
+
+  daxa_f32vec3 half_extent() {
+    return (maximum - minimum) * 0.5f;
+  }
+
 
   daxa_f32mat3x4 get_instance_transform() {
     daxa_f32mat4x4 transform = get_transform_matrix();
