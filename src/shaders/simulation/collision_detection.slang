@@ -330,11 +330,11 @@ struct OBBvsOBBCollision {
   }
 
   static daxa_b32 in_front(daxa_f32 v) {
-    return v >= 0.0f;
+    return v < 0.0f;
   }
 
   static daxa_b32 behind(daxa_f32 v) {
-    return v < 0.0f;
+    return v >= 0.0f;
   }
 
   static const daxa_f32 CLIP_THRESHOLD = 0.005f;
@@ -352,8 +352,8 @@ struct OBBvsOBBCollision {
     {
       ClipVertex b = in[i];
 
-      daxa_f32 da = e - sign * a.v[axis];
-      daxa_f32 db = e - sign * b.v[axis];
+      daxa_f32 da = sign * a.v[axis] - e;
+      daxa_f32 db = sign * b.v[axis] - e;
 
       ClipVertex cv;
       
@@ -627,7 +627,6 @@ struct OBBvsOBBCollision {
     // Iterate through OBB2's axes
     for(int i = 0; i < 3; ++i) {
         // Compute the projection using dot product
-        // dot(t, C[i]) = t.x * C[0][i] + t.y * C[1][i] + t.z * C[2][i]
         float projection = dot(t, tx_C.get_axis(i));
         // Compute the separation distance
         float s = abs(projection) - (e_B[i] + dot(tx_abs_C.get_axis(i), e_A));
@@ -776,7 +775,8 @@ struct OBBvsOBBCollision {
           obb1_faces = reference_face;
           obb2_faces = incident_face;
         }
-        return true; // FAIL
+        printf("Error: %d\n", error);
+        return false; // FAIL
       }
 
       if(out_num > 0) {
@@ -962,14 +962,12 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
 
 
 #if defined(BB_DEBUG)
-    var old_obb1_faces = 0u;
-    var old_obb2_faces = 0u;
     if(obb1_faces != 0) {
-      InterlockedOr(r->face_collided, obb1_faces, old_obb1_faces);
+      InterlockedOr(r->face_collided, obb1_faces);
       r->flags |= RigidBodyFlag::COLLIDING;
     }
     if(obb2_faces != 0) {
-      InterlockedOr(r2->face_collided, obb2_faces, old_obb2_faces);
+      InterlockedOr(r2->face_collided, obb2_faces);
       r2->flags |= RigidBodyFlag::COLLIDING;
     }
 #endif // BB_DEBUG

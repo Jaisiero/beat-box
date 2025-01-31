@@ -182,10 +182,12 @@ struct StatusManager
     if(advection)
     {
       rigid_body_manager->set_sim_flags(SimFlag::ADVECTION);
+      std::cout << "Advection enabled" << std::endl;
     }
     else
     {
       rigid_body_manager->clear_sim_flags(SimFlag::ADVECTION);
+      std::cout << "Advection disabled" << std::endl;
     }
   }
 
