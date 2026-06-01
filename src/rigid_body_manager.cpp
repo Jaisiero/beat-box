@@ -15,6 +15,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_RBSRS = task_manager->create_compute(RigidBodySingleRadixSortInfo{}.info);
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
     pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
+    pipeline_CBBLBVHGH = task_manager->create_compute(RigidBodyConvertBoundingBoxesLinearBVHInfo{}.info);
     pipeline_RBR = task_manager->create_compute(RigidBodyReorderingInfo{}.info);
     pipeline_RBL = task_manager->create_compute(ResetBodyLinksInfo{}.info);
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
@@ -58,6 +59,7 @@ daxa::BufferId RigidBodyManager::get_sim_config_host_buffer()
   return sim_config_host_buffer[renderer_manager->get_frame_index()];
 }
 
+
 void RigidBodyManager::record_active_rigid_body_list_upload_tasks(TaskGraph &ARBL_TG)
 {
   daxa::InlineTaskInfo task_update_active_rigid_bodies({
@@ -68,13 +70,17 @@ void RigidBodyManager::record_active_rigid_body_list_upload_tasks(TaskGraph &ARB
       .task = [this](daxa::TaskInterface const &ti)
       {
         auto active_rigid_bodies = renderer_manager->get_active_rigid_bodies();
-
         allocate_fill_copy(ti, active_rigid_bodies, ti.get(task_active_rigid_bodies), 0);
 
-        ti.recorder.clear_buffer({.buffer = ti.get(task_rigid_body_entries).ids[0], .size = sizeof(RigidBodyEntry) * renderer_manager->get_rigid_body_count(), .clear_value = MAX_U32});
-
+        // Initialize rigid_body_entries with identity mapping so the RT shader can
+        // access rigid bodies correctly even when simulation is paused.
+        // The simulation reordering task will overwrite this when it runs.
+        auto rb_count = renderer_manager->get_rigid_body_count();
+        std::vector<RigidBodyEntry> identity_entries(rb_count);
+        for (u32 i = 0; i < rb_count; ++i) { identity_entries[i].index = i; }
+        allocate_fill_copy(ti, identity_entries, ti.get(task_rigid_body_entries), 0);
       },
-      .name = "upload materials",
+      .name = "upload rigid body list",
   });
   std::array<daxa::TaskBuffer, 2> buffers = {
       task_active_rigid_bodies,
@@ -100,7 +106,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     sim_config_host_buffer[i] = device.create_buffer({
         .size = sizeof(SimConfig),
-        .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
         .name = "sim_config_host_" + std::to_string(i),
     });
     sim_config[i] = device.create_buffer({
@@ -255,7 +261,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
-        ti.recorder.copy_buffer_to_buffer({.src_buffer = ti.get(task_rigid_bodies).ids[0], .dst_buffer = ti.get(task_rigid_body_scratch).ids[0], .size = sizeof(RigidBody) * renderer_manager->get_rigid_body_count()});
+        ti.recorder.copy_buffer_to_buffer({.src_buffer = ti.get(task_rigid_bodies).id, .dst_buffer = ti.get(task_rigid_body_scratch).id, .size = sizeof(RigidBody) * renderer_manager->get_rigid_body_count()});
       },
       .name = "copy rigid bodies",
   });
@@ -282,7 +288,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_GMC);
     ti.recorder.push_constant(RigidBodyGenerateMortonCodePushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyGenerateMortonCodeTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyGenerateMortonCodeTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_GMC = TaskTemplate<RigidBodyGenerateMortonCodeTaskHead::Task, decltype(user_callback_GMC)>;
@@ -302,7 +308,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_RBRSH);
     ti.recorder.push_constant(RigidBodyRadixSortHistogramPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyRadixSortHistogramTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RADIX_SORT_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyRadixSortHistogramTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RADIX_SORT_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_RBSRH = TaskTemplate<RigidBodyRadixSortHistogramTaskHead::Task, decltype(user_callback_RBSRH)>;
@@ -330,7 +336,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_RBSRS);
     ti.recorder.push_constant(RigidBodySingleRadixSortPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySingleRadixSortTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RADIX_SORT_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySingleRadixSortTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RADIX_SORT_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_RBSRS = TaskTemplate<RigidBodySingleRadixSortTaskHead::Task, decltype(user_callback_RBSRS)>;
@@ -374,7 +380,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_RBLBVHGH);
     ti.recorder.push_constant(RigidBodyGenerateHierarchyLinearBVHPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyGenerateHierarchyLinearBVHTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_RBLBVHGH = TaskTemplate<RigidBodyGenerateHierarchyLinearBVHTaskHead::Task, decltype(user_callback_RBLBVHGH)>;
@@ -395,7 +401,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_BBBLBVHGH);
     ti.recorder.push_constant(RigidBodyBuildBoundingBoxesLBVHPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyBuildBoundingBoxesLinearBVHTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyBuildBoundingBoxesLinearBVHTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_BBBLBVHGH = TaskTemplate<RigidBodyBuildBoundingBoxesLinearBVHTaskHead::Task, decltype(user_callback_BBBLBVHGH)>;
@@ -409,12 +415,30 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_BBBLBVHGH);
 
+  // Task for Converting integer-mapped LBVH bounds back into float AABBs (internal nodes)
+  auto user_callback_CBBLBVHGH = [this](daxa::TaskInterface ti, auto &self)
+  {
+    ti.recorder.set_pipeline(*pipeline_CBBLBVHGH);
+    ti.recorder.push_constant(RigidBodyConvertBoundingBoxesLBVHPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyConvertBoundingBoxesLinearBVHTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+  };
+
+  using TTask_CBBLBVHGH = TaskTemplate<RigidBodyConvertBoundingBoxesLinearBVHTaskHead::Task, decltype(user_callback_CBBLBVHGH)>;
+
+  TTask_CBBLBVHGH task_CBBLBVHGH(std::array{
+                       daxa::attachment_view(RigidBodyConvertBoundingBoxesLinearBVHTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(RigidBodyConvertBoundingBoxesLinearBVHTaskHead::AT.sim_config, task_sim_config),
+                        daxa::attachment_view(RigidBodyConvertBoundingBoxesLinearBVHTaskHead::AT.lbvh_nodes, task_lbvh_nodes),
+                        daxa::attachment_view(RigidBodyConvertBoundingBoxesLinearBVHTaskHead::AT.lbvh_construction_info, task_lbvh_construction_info),
+                   },
+                   user_callback_CBBLBVHGH);
+
   // Task for Reordering Rigid Bodies
   auto user_callback_RBR = [this](daxa::TaskInterface ti, auto &self)
   {
     ti.recorder.set_pipeline(*pipeline_RBR);
     ti.recorder.push_constant(RigidBodyReorderingPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyReorderingTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyReorderingTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_RBR = TaskTemplate<RigidBodyReorderingTaskHead::Task, decltype(user_callback_RBR)>;
@@ -437,7 +461,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_RBL);
     ti.recorder.push_constant(ResetBodyLinkPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(ResetBodyLinkTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(ResetBodyLinkTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_RBL = TaskTemplate<ResetBodyLinkTaskHead::Task, decltype(user_callback_RBL)>;
@@ -458,7 +482,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_BP);
     ti.recorder.push_constant(BroadPhasePushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(BroadPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(BroadPhaseTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_BP = TaskTemplate<BroadPhaseTaskHead::Task, decltype(user_callback_BP)>;
@@ -495,7 +519,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_NP);
     ti.recorder.push_constant(NarrowPhasePushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(NarrowPhaseTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(NarrowPhaseTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_NP = TaskTemplate<NarrowPhaseTaskHead::Task, decltype(user_callback_NP)>;
@@ -524,7 +548,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_advect);
     ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySimTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySimTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTaskAdvect = TaskTemplate<RigidBodySimTaskHead::Task, decltype(user_callback_advect)>;
@@ -541,7 +565,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_IC);
     ti.recorder.push_constant(IslandCounterPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandCounterTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandCounterTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_IC = TaskTemplate<IslandCounterTaskHead::Task, decltype(user_callback_IC)>;
@@ -591,7 +615,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_IB);
     ti.recorder.push_constant(IslandBuilderPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_IB = TaskTemplate<IslandBuilderTaskHead::Task, decltype(user_callback_IB)>;
@@ -628,7 +652,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_IBL);
     ti.recorder.push_constant(IslandBuilderBodyLink2IslandPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderBodyLink2IslandTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderBodyLink2IslandTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_IBL = TaskTemplate<IslandBuilderBodyLink2IslandTaskHead::Task, decltype(user_callback_IBL)>;
@@ -647,7 +671,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_SBLI);
     ti.recorder.push_constant(IslandBuilderSortBodyLinkInIslandPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderSortBodyLinkInIslandTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ISLAND_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderSortBodyLinkInIslandTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ISLAND_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_SBLI = TaskTemplate<IslandBuilderSortBodyLinkInIslandTaskHead::Task, decltype(user_callback_SBLI)>;
@@ -665,7 +689,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_MIB);
     ti.recorder.push_constant(ManifoldIslandBuilderPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(ManifoldIslandBuilderTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * COLLISION_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(ManifoldIslandBuilderTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * COLLISION_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_MIB = TaskTemplate<ManifoldIslandBuilderTaskHead::Task, decltype(user_callback_MIB)>;
@@ -685,7 +709,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_CIG);
     ti.recorder.push_constant(ContactIslandGatherPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(ContactIslandGatherTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ISLAND_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(ContactIslandGatherTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ISLAND_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_CGI = TaskTemplate<ContactIslandGatherTaskHead::Task, decltype(user_callback_CGI)>;
@@ -736,7 +760,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_IML);
     ti.recorder.push_constant(IslandBuilderManifoldLink2IslandPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderManifoldLink2IslandTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * COLLISION_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderManifoldLink2IslandTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * COLLISION_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_IML = TaskTemplate<IslandBuilderManifoldLink2IslandTaskHead::Task, decltype(user_callback_IML)>;
@@ -760,7 +784,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_SMLI);
     ti.recorder.push_constant(IslandBuilderSortManifoldLinkInIslandPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderSortManifoldLinkInIslandTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IslandBuilderSortManifoldLinkInIslandTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_SMLI = TaskTemplate<IslandBuilderSortManifoldLinkInIslandTaskHead::Task, decltype(user_callback_SMLI)>;
@@ -778,7 +802,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_CPS);
     ti.recorder.push_constant(CollisionPreSolverPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionPreSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionPreSolverTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_CPS = TaskTemplate<CollisionPreSolverTaskHead::Task, decltype(user_callback_CPS)>;
@@ -799,7 +823,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_CS);
     ti.recorder.push_constant(CollisionSolverPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_CS = TaskTemplate<CollisionSolverTaskHead::Task, decltype(user_callback_CS)>;
@@ -820,7 +844,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_IP);
     ti.recorder.push_constant(RigidBodyIntegratePositionsPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IntegratePositionsTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IntegratePositionsTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTask_IP = TaskTemplate<IntegratePositionsTaskHead::Task, decltype(user_callback_IP)>;
@@ -839,7 +863,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     {
       ti.recorder.set_pipeline(*pipeline_CSR);
       ti.recorder.push_constant(CollisionSolverRelaxationPushConstants{.task_head = ti.attachment_shader_blob});
-      ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
+      ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * CONTACT_ISLAND_DISPATCH_COUNT_OFFSET});
     }
   };
 
@@ -862,7 +886,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*create_points_pipeline);
     ti.recorder.push_constant(CreatePointsPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CreatePointsTaskHead::AT.dispatch_buffer).ids[0],
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CreatePointsTaskHead::AT.dispatch_buffer).id,
                                    .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
@@ -882,7 +906,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*update_pipeline);
     ti.recorder.push_constant(RigidBodyUpdatePushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyUpdateTaskHead::AT.dispatch_buffer).ids[0], .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodyUpdateTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
 
   using TTaskUpdate = TaskTemplate<RigidBodyUpdateTaskHead::Task, decltype(user_callback_update)>;
@@ -948,6 +972,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   }
   RB_TG.add_task(task_RBLBVHGH);
   RB_TG.add_task(task_BBBLBVHGH);
+  RB_TG.add_task(task_CBBLBVHGH);
   RB_TG.add_task(task_RBR);
   RB_TG.add_task(task_RBL);
   RB_TG.add_task(task_BP);
@@ -978,6 +1003,40 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_CP);
   RB_TG.add_task(task_update);
 
+  // Bind backing resources to all task buffers to prevent unbound resource compilation crashes in Daxa 3.6
+  task_sim_config_host.set_buffer(sim_config_host_buffer[0]);
+  task_sim_config.set_buffer(sim_config[0]);
+  task_old_sim_config.set_buffer(sim_config[1]);
+  task_morton_codes.set_buffer(morton_codes);
+  task_tmp_morton_codes.set_buffer(tmp_morton_codes);
+  task_radix_sort_histograms.set_buffer(global_histograms[0]);
+  task_previous_rigid_bodies.set_buffer(rigid_body_scratch); // Placeholder
+  task_rigid_bodies.set_buffer(rigid_body_scratch); // Placeholder
+  task_next_rigid_bodies.set_buffer(rigid_body_scratch); // Placeholder
+  task_lbvh_nodes.set_buffer(lbvh_nodes[0]);
+  task_lbvh_construction_info.set_buffer(lbvh_construction_info);
+  task_active_rigid_bodies.set_buffer(active_rigid_bodies[0]);
+  task_rigid_body_entries.set_buffer(rigid_body_entries[0]);
+  task_previous_rigid_body_entries.set_buffer(rigid_body_entries[1]);
+  task_broad_phase_collisions.set_buffer(broad_phase_collisions[0]);
+  task_rigid_body_scratch.set_buffer(rigid_body_scratch);
+  task_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[0]);
+  task_collision_entries.set_buffer(collision_entries[0]);
+  task_collisions.set_buffer(collisions[0]);
+  task_collision_scratch.set_buffer(collision_scratch);
+  task_previous_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[1]);
+  task_collision_entries_previous.set_buffer(collision_entries[1]);
+  task_old_collisions.set_buffer(collisions[1]);
+  task_scratch_body_links.set_buffer(scratch_body_links[0]);
+  task_body_links.set_buffer(body_links[0]);
+  task_manifold_links.set_buffer(manifold_links[0]);
+  task_islands.set_buffer(island_buffer[0]);
+  task_contact_islands.set_buffer(contact_island_buffer[0]);
+
+  // Placeholders for accel_struct_mngr task buffers which are compiled here but bound later
+  accel_struct_mngr->task_dispatch_buffer.set_buffer(tmp_morton_codes);
+  accel_struct_mngr->task_aabb_buffer.set_buffer(tmp_morton_codes);
+
   RB_TG.submit();
   RB_TG.complete();
 
@@ -1006,8 +1065,8 @@ void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &readback_SC_
       .task = [this](daxa::TaskInterface const &ti)
       {
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = ti.get(task_old_sim_config).ids[0],
-            .dst_buffer = ti.get(task_sim_config_host).ids[0],
+            .src_buffer = ti.get(task_old_sim_config).id,
+            .dst_buffer = ti.get(task_sim_config_host).id,
             .size = sizeof(SimConfig),
         });
       },
@@ -1036,8 +1095,8 @@ void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &update_SC_TG)
       .task = [this](daxa::TaskInterface const &ti)
       {
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = ti.get(task_sim_config_host).ids[0],
-            .dst_buffer = ti.get(task_sim_config).ids[0],
+            .src_buffer = ti.get(task_sim_config_host).id,
+            .dst_buffer = ti.get(task_sim_config).id,
             .size = sizeof(SimConfig),
         });
       },
@@ -1126,7 +1185,7 @@ bool RigidBodyManager::update_resources()
     return !initialized;
   }
 
-  task_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_rigid_body_buffer()}});
+  task_rigid_bodies.set_buffer(accel_struct_mngr->get_rigid_body_buffer());
 
   return initialized;
 }
@@ -1197,34 +1256,34 @@ void RigidBodyManager::update_buffers()
   daxa_u32 previous_frame = renderer_manager->get_previous_frame_index();
   daxa_u32 current_frame = renderer_manager->get_frame_index();
 
-  task_sim_config_host.set_buffers({.buffers = std::array{sim_config_host_buffer[current_frame]}});
-  task_sim_config.set_buffers({.buffers = std::array{sim_config[current_frame]}});
-  task_old_sim_config.set_buffers({.buffers = std::array{sim_config[previous_frame]}});
-  task_morton_codes.set_buffers({.buffers = std::array{morton_codes}});
-  task_tmp_morton_codes.set_buffers({.buffers = std::array{tmp_morton_codes}});
-  task_radix_sort_histograms.set_buffers({.buffers = std::array{global_histograms[current_frame]}});
-  task_previous_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_previous_rigid_body_buffer()}});
-  task_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_rigid_body_buffer()}});
-  task_next_rigid_bodies.set_buffers({.buffers = std::array{accel_struct_mngr->get_next_rigid_body_buffer()}});
-  task_lbvh_nodes.set_buffers({.buffers = std::array{lbvh_nodes[current_frame]}});
-  task_lbvh_construction_info.set_buffers({.buffers = std::array{lbvh_construction_info}});
-  task_active_rigid_bodies.set_buffers({.buffers = std::array{active_rigid_bodies[current_frame]}});
-  task_rigid_body_entries.set_buffers({.buffers = std::array{rigid_body_entries[current_frame]}});
-  task_previous_rigid_body_entries.set_buffers({.buffers = std::array{rigid_body_entries[previous_frame]}});
-  task_broad_phase_collisions.set_buffers({.buffers = std::array{broad_phase_collisions[current_frame]}});
-  task_rigid_body_scratch.set_buffers({.buffers = std::array{rigid_body_scratch}});
-  task_rigid_body_link_manifolds.set_buffers({.buffers = std::array{rigid_body_link_manifolds[current_frame]}});
-  task_collision_entries.set_buffers({.buffers = std::array{collision_entries[current_frame]}});
-  task_collisions.set_buffers({.buffers = std::array{collisions[current_frame]}});
-  task_collision_scratch.set_buffers({.buffers = std::array{collision_scratch}});
-  task_previous_rigid_body_link_manifolds.set_buffers({.buffers = std::array{rigid_body_link_manifolds[previous_frame]}});
-  task_collision_entries_previous.set_buffers({.buffers = std::array{collision_entries[previous_frame]}});
-  task_old_collisions.set_buffers({.buffers = std::array{collisions[previous_frame]}});
-  task_scratch_body_links.set_buffers({.buffers = std::array{scratch_body_links[current_frame]}});
-  task_body_links.set_buffers({.buffers = std::array{body_links[current_frame]}});
-  task_manifold_links.set_buffers({.buffers = std::array{manifold_links[current_frame]}});
-  task_islands.set_buffers({.buffers = std::array{island_buffer[current_frame]}});
-  task_contact_islands.set_buffers({.buffers = std::array{contact_island_buffer[current_frame]}});
+  task_sim_config_host.set_buffer(sim_config_host_buffer[current_frame]);
+  task_sim_config.set_buffer(sim_config[current_frame]);
+  task_old_sim_config.set_buffer(sim_config[previous_frame]);
+  task_morton_codes.set_buffer(morton_codes);
+  task_tmp_morton_codes.set_buffer(tmp_morton_codes);
+  task_radix_sort_histograms.set_buffer(global_histograms[current_frame]);
+  task_previous_rigid_bodies.set_buffer(accel_struct_mngr->get_previous_rigid_body_buffer());
+  task_rigid_bodies.set_buffer(accel_struct_mngr->get_rigid_body_buffer());
+  task_next_rigid_bodies.set_buffer(accel_struct_mngr->get_next_rigid_body_buffer());
+  task_lbvh_nodes.set_buffer(lbvh_nodes[current_frame]);
+  task_lbvh_construction_info.set_buffer(lbvh_construction_info);
+  task_active_rigid_bodies.set_buffer(active_rigid_bodies[current_frame]);
+  task_rigid_body_entries.set_buffer(rigid_body_entries[current_frame]);
+  task_previous_rigid_body_entries.set_buffer(rigid_body_entries[previous_frame]);
+  task_broad_phase_collisions.set_buffer(broad_phase_collisions[current_frame]);
+  task_rigid_body_scratch.set_buffer(rigid_body_scratch);
+  task_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[current_frame]);
+  task_collision_entries.set_buffer(collision_entries[current_frame]);
+  task_collisions.set_buffer(collisions[current_frame]);
+  task_collision_scratch.set_buffer(collision_scratch);
+  task_previous_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[previous_frame]);
+  task_collision_entries_previous.set_buffer(collision_entries[previous_frame]);
+  task_old_collisions.set_buffer(collisions[previous_frame]);
+  task_scratch_body_links.set_buffer(scratch_body_links[current_frame]);
+  task_body_links.set_buffer(body_links[current_frame]);
+  task_manifold_links.set_buffer(manifold_links[current_frame]);
+  task_islands.set_buffer(island_buffer[current_frame]);
+  task_contact_islands.set_buffer(contact_island_buffer[current_frame]);
 }
 
 BB_NAMESPACE_END

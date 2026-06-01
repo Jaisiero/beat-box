@@ -1,4 +1,5 @@
 #include "image.hpp"
+#include <iostream>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_FAILURE_USERMSG
@@ -8,11 +9,22 @@ BB_NAMESPACE_BEGIN
 
 BBImage::BBImage(std::string filename, const char* path)
 {
-
     if (load(std::string(path) + "/" + filename))
         return;
 
-    std::cerr << "ERROR: Could not load image file '" << filename.c_str() << "'.\n";
+    static bool warned = false;
+    if (!warned) {
+        std::cerr << "WARNING: Could not load image files (e.g. STBN). Using dummy zero-initialized textures instead.\n";
+        warned = true;
+    }
+
+    image_width = 128;
+    image_height = 128;
+    bytes_per_scanline = 128 * bytes_per_pixel;
+    data = (unsigned char*)std::malloc(image_width * image_height * bytes_per_pixel);
+    if (data) {
+        std::memset(data, 0, image_width * image_height * bytes_per_pixel);
+    }
 }
 
 BBImage::~BBImage()

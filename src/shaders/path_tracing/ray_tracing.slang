@@ -52,8 +52,8 @@
   // Generate the primary ray
   RayDesc ray = create_ray(inv_view, inv_proj, thread_idx, rt_size, tMin, tMax);
 
-  // Get the top-level acceleration structure
-  var tlas = RaytracingAccelerationStructure::get(p.task_head.tlas);
+  // Get the top-level acceleration structure (Daxa 3.6: use index-based binding table lookup)
+  var tlas = daxa::RayTracingAccelerationStructureTable[p.task_head.tlas.index()];
     
   HitPayload payload = {daxa::f32vec3(0), daxa::f32vec3(0), MAX_U32, MAX_U32, daxa::f32vec3(1.0), daxa::f32vec3(0.0)};
 

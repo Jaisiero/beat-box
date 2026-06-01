@@ -20,8 +20,8 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
       .name = "GUI vertex buffer " + std::to_string(f),
     });
 
-  task_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[0]}});
-  task_previous_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[1]}});
+  task_vertex_buffer.set_buffer(vertex_buffer[0]);
+  task_previous_vertex_buffer.set_buffer(vertex_buffer[1]);
 
   gui_task_info = GUIDrawTask{
     .views = std::array{
@@ -44,8 +44,8 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
       .name = "GUI line vertex buffer " + std::to_string(f),
     });
 
-  task_line_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[0]}});
-  task_previous_line_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[1]}});
+  task_line_vertex_buffer.set_buffer(vertex_buffer[0]);
+  task_previous_line_vertex_buffer.set_buffer(vertex_buffer[1]);
 
   gui_line_task_info = GUILineDrawTask{
     .views = std::array{
@@ -69,7 +69,8 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
       .name = "GUI axes vertex buffer " + std::to_string(f),
     });
 
-  task_axes_vertex_buffer.set_buffers({.buffers = std::array{axes_vertex_buffer[0]}});
+  task_axes_vertex_buffer.set_buffer(axes_vertex_buffer[0]);
+  task_previous_axes_vertex_buffer.set_buffer(axes_vertex_buffer[1]);
 
   gui_axes_task_info = GUIAxesDrawTask{
     .views = std::array{
@@ -134,12 +135,12 @@ daxa::BufferId GUIManager::get_previous_axes_vertex_buffer()
 }
 
 void GUIManager::update_buffers() {
-  task_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[renderer_manager->get_frame_index()]}});
-  task_previous_vertex_buffer.set_buffers({.buffers = std::array{vertex_buffer[renderer_manager->get_previous_frame_index()]}});
-  task_line_vertex_buffer.set_buffers({.buffers = std::array{vertex_line_buffer[renderer_manager->get_frame_index()]}});
-  task_previous_line_vertex_buffer.set_buffers({.buffers = std::array{vertex_line_buffer[renderer_manager->get_previous_frame_index()]}});
-  task_axes_vertex_buffer.set_buffers({.buffers = std::array{axes_vertex_buffer[renderer_manager->get_frame_index()]}});
-  task_previous_axes_vertex_buffer.set_buffers({.buffers = std::array{axes_vertex_buffer[renderer_manager->get_previous_frame_index()]}});
+  task_vertex_buffer.set_buffer(vertex_buffer[renderer_manager->get_frame_index()]);
+  task_previous_vertex_buffer.set_buffer(vertex_buffer[renderer_manager->get_previous_frame_index()]);
+  task_line_vertex_buffer.set_buffer(vertex_line_buffer[renderer_manager->get_frame_index()]);
+  task_previous_line_vertex_buffer.set_buffer(vertex_line_buffer[renderer_manager->get_previous_frame_index()]);
+  task_axes_vertex_buffer.set_buffer(axes_vertex_buffer[renderer_manager->get_frame_index()]);
+  task_previous_axes_vertex_buffer.set_buffer(axes_vertex_buffer[renderer_manager->get_previous_frame_index()]);
 }
 
 BB_NAMESPACE_END

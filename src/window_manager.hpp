@@ -10,6 +10,7 @@ using HWND = void *;
 #define GLFW_EXPOSE_NATIVE_WAYLAND
 #endif
 #include <GLFW/glfw3native.h>
+#include <iostream>
 
 #include "defines.hpp"
 #include "input_manager.hpp"
@@ -24,8 +25,16 @@ struct WindowManager{
     InputManager& input_manager;
 
     explicit WindowManager(char const * window_name, InputManager& input_manager,  u32 sx = 800, u32 sy = 600) : input_manager{input_manager}, width{sx}, height{sy} {
+        // Register GLFW error callback
+        glfwSetErrorCallback([](int error, const char* description) {
+            std::cerr << "GLFW Error (" << error << "): " << description << std::endl;
+        });
+
         // Initialize GLFW
-        glfwInit();
+        if (!glfwInit()) {
+            std::cerr << "CRITICAL ERROR: Failed to initialize GLFW!" << std::endl;
+            exit(-1);
+        }
 
         // Tell GLFW to not include any other API
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -35,6 +44,11 @@ struct WindowManager{
 
         // Create the window
         glfw_window_ptr = glfwCreateWindow(static_cast<i32>(width), static_cast<i32>(height), window_name, nullptr, nullptr);
+        if (!glfw_window_ptr) {
+            std::cerr << "CRITICAL ERROR: Failed to create GLFW window!" << std::endl;
+            std::cerr << "Please verify that your GPU graphics drivers are fully installed and support Vulkan." << std::endl;
+            exit(-1);
+        }
 
         // Set the user pointer to this window
         glfwSetWindowUserPointer(glfw_window_ptr, this);
@@ -86,31 +100,29 @@ struct WindowManager{
         glfwTerminate();
     }
 
-    auto get_native_handle() const -> daxa::NativeWindowHandle
+    auto get_native_window_info() const -> daxa::NativeWindowInfo
     {
     #if defined(_WIN32)
-        return glfwGetWin32Window(glfw_window_ptr);
+        return daxa::NativeWindowInfoWin32{
+            .hwnd = glfwGetWin32Window(glfw_window_ptr),
+        };
     #elif defined(__linux__)
-        switch (get_native_platform())
+        switch (glfwGetPlatform())
         {
-            case daxa::NativeWindowPlatform::WAYLAND_API:
-                return reinterpret_cast<daxa::NativeWindowHandle>(glfwGetWaylandWindow(glfw_window_ptr));
-            case daxa::NativeWindowPlatform::XLIB_API:
+            case GLFW_PLATFORM_WAYLAND:
+                return daxa::NativeWindowInfoWayland{
+                    .display = glfwGetWaylandDisplay(),
+                    .surface = glfwGetWaylandWindow(glfw_window_ptr),
+                    .width = width,
+                    .height = height,
+                };
+            case GLFW_PLATFORM_X11:
             default:
-                return reinterpret_cast<daxa::NativeWindowHandle>(glfwGetX11Window(glfw_window_ptr));
+                return daxa::NativeWindowInfoXlib{
+                    .window = reinterpret_cast<void *>(glfwGetX11Window(glfw_window_ptr)),
+                };
         }
     #endif
-    }
-
-    static auto get_native_platform() -> daxa::NativeWindowPlatform
-    {
-        switch(glfwGetPlatform())
-        {
-            case GLFW_PLATFORM_WIN32: return daxa::NativeWindowPlatform::WIN32_API;
-            case GLFW_PLATFORM_X11: return daxa::NativeWindowPlatform::XLIB_API;
-            case GLFW_PLATFORM_WAYLAND: return daxa::NativeWindowPlatform::WAYLAND_API;
-            default: return daxa::NativeWindowPlatform::UNKNOWN;
-        }
     }
 
 
@@ -129,7 +141,6 @@ struct WindowManager{
     inline bool update() const
     {
         glfwPollEvents();
-        glfwSwapBuffers(glfw_window_ptr);
 
         if(should_close())
         {

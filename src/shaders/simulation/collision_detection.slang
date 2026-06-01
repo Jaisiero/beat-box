@@ -541,7 +541,7 @@ struct OBBvsOBBCollision {
     }
   }
 
-  static daxa_b32 collision_detection(const RigidBody* A, const RigidBody* B, out Manifold manifold, out daxa_u32 obb1_faces, out daxa_u32 obb2_faces) {
+  static daxa_b32 collision_detection(RigidBody* A, RigidBody* B, out Manifold manifold, out daxa_u32 obb1_faces, out daxa_u32 obb2_faces) {
     manifold.contact_count = 0;
     manifold.key = -1;
     manifold.error = 0;

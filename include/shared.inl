@@ -4,6 +4,69 @@
 #include "daxa/daxa.inl"
 #include "daxa/utils/task_graph.inl"
 
+#if !defined(DAXA_SHADERLANG)
+#define DAXA_SHADERLANG DAXA_LANGUAGE
+#endif
+
+#if !defined(DAXA_SHADERLANG_SLANG)
+#define DAXA_SHADERLANG_SLANG DAXA_LANGUAGE_SLANG
+#endif
+
+#if defined(__cplusplus)
+namespace daxa
+{
+namespace TaskAccessConsts
+{
+static constexpr TaskAccess RAY_TRACING_SHADER_READ = RAY_TRACING_SHADER::READ;
+static constexpr TaskAccess RAY_TRACING_SHADER_READ_WRITE = RAY_TRACING_SHADER::READ_WRITE;
+static constexpr TaskAccess RAY_TRACING_SHADER_STORAGE_READ_ONLY = RAY_TRACING_SHADER::READ;
+static constexpr TaskAccess RAY_TRACING_SHADER_STORAGE_WRITE_ONLY = RAY_TRACING_SHADER::WRITE;
+static constexpr TaskAccess VERTEX_SHADER_READ = VERTEX_SHADER::READ;
+static constexpr TaskAccess COMPUTE_SHADER_READ = COMPUTE_SHADER::READ;
+static constexpr TaskAccess COMPUTE_SHADER_READ_WRITE = COMPUTE_SHADER::READ_WRITE;
+static constexpr TaskAccess COMPUTE_SHADER_READ_WRITE_CONCURRENT = COMPUTE_SHADER::READ_WRITE_CONCURRENT;
+static constexpr TaskAccess COMPUTE_SHADER_STORAGE_WRITE_ONLY = COMPUTE_SHADER::WRITE;
+static constexpr TaskAccess TRANSFER_READ = TRANSFER::READ;
+static constexpr TaskAccess TRANSFER_WRITE = TRANSFER::WRITE;
+static constexpr TaskAccess TRANSFER_READ_WRITE = TRANSFER::READ_WRITE;
+static constexpr TaskAccess BUILD_READ = ACCELERATION_STRUCTURE_BUILD::READ;
+static constexpr TaskAccess BUILD_WRITE = ACCELERATION_STRUCTURE_BUILD::WRITE;
+} // namespace TaskAccessConsts
+
+struct TaskBufferAccess
+{
+  static constexpr TaskAccess TRANSFER_READ = TaskAccessConsts::TRANSFER::READ;
+  static constexpr TaskAccess TRANSFER_WRITE = TaskAccessConsts::TRANSFER::WRITE;
+  static constexpr TaskAccess TRANSFER_READ_WRITE = TaskAccessConsts::TRANSFER::READ_WRITE;
+  static constexpr TaskAccess COMPUTE_SHADER_READ = TaskAccessConsts::COMPUTE_SHADER::READ;
+  static constexpr TaskAccess COMPUTE_SHADER_READ_WRITE = TaskAccessConsts::COMPUTE_SHADER::READ_WRITE;
+  static constexpr TaskAccess RAY_TRACING_SHADER_READ = TaskAccessConsts::RAY_TRACING_SHADER::READ;
+  static constexpr TaskAccess RAY_TRACING_SHADER_READ_WRITE = TaskAccessConsts::RAY_TRACING_SHADER::READ_WRITE;
+};
+
+struct TaskImageAccess
+{
+  static constexpr TaskAccess TRANSFER_READ = TaskAccessConsts::TRANSFER::READ;
+  static constexpr TaskAccess TRANSFER_WRITE = TaskAccessConsts::TRANSFER::WRITE;
+  static constexpr TaskAccess TRANSFER_READ_WRITE = TaskAccessConsts::TRANSFER::READ_WRITE;
+  static constexpr TaskAccess COMPUTE_SHADER_STORAGE_WRITE_ONLY = TaskAccessConsts::COMPUTE_SHADER::WRITE;
+  static constexpr TaskAccess RAY_TRACING_SHADER_STORAGE_WRITE_ONLY = TaskAccessConsts::RAY_TRACING_SHADER::WRITE;
+};
+
+struct TaskBlasAccess
+{
+  static constexpr TaskAccess BUILD_READ = TaskAccessConsts::ACCELERATION_STRUCTURE_BUILD::READ;
+  static constexpr TaskAccess BUILD_WRITE = TaskAccessConsts::ACCELERATION_STRUCTURE_BUILD::WRITE;
+};
+
+struct TaskTlasAccess
+{
+  static constexpr TaskAccess BUILD_READ = TaskAccessConsts::ACCELERATION_STRUCTURE_BUILD::READ;
+  static constexpr TaskAccess BUILD_WRITE = TaskAccessConsts::ACCELERATION_STRUCTURE_BUILD::WRITE;
+};
+}
+#endif
+
 #include <math.hpp>
 
 static const daxa_f32 LINEAR_DAMPING = 0.1f;
@@ -15,8 +78,8 @@ static const daxa_f32 PENETRATION_FACTOR = 0.01f;
 static const daxa_f32 BIAS_FACTOR = 0.2f;
 
 #define BB_DEBUG 1
-#if defined(BB_DEBUG) 
-// #define BB_RT_DEBUG 1  
+#if defined(BB_DEBUG)
+// #define BB_RT_DEBUG 1
 // #define BB_SIM_DEBUG 1
 #endif // BB_DEBUG
 
@@ -590,10 +653,15 @@ struct LBVHNode
 };
 DAXA_DECL_BUFFER_PTR(LBVHNode)
 
-struct LBVHConstructionInfo 
+struct LBVHConstructionInfo
 {
   daxa::u32 parent; // pointer to parent node
   daxa::u32 visitation_count; // number of times the node has been visited
+  // Order-preserving-mapped AABB bounds, used to merge node AABBs across workgroups
+  // with portable integer atomics (InterlockedMin/Max) instead of coherent pointer
+  // loads, which Slang does not support (shader-slang/slang#3870).
+  daxa_u32vec3 bound_min; // avoid member names min/max (windows.h macro trap)
+  daxa_u32vec3 bound_max;
 };
 DAXA_DECL_BUFFER_PTR(LBVHConstructionInfo)
 
@@ -737,6 +805,21 @@ DAXA_DECL_TASK_HEAD_END
 struct RigidBodyBuildBoundingBoxesLBVHPushConstants
 {
   DAXA_TH_BLOB(RigidBodyBuildBoundingBoxesLinearBVHTaskHead, task_head)
+};
+
+// CONVERT BOUNDING BOXES LBVH: integer-mapped bounds in lbvh_construction_info ->
+// float AABBs in lbvh_nodes. Separate pass because the merge accumulates bounds with
+// integer atomics (portable, no coherent pointer loads needed — slang#3870).
+DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyConvertBoundingBoxesLinearBVHTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(LBVHNode), lbvh_nodes)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(LBVHConstructionInfo), lbvh_construction_info)
+DAXA_DECL_TASK_HEAD_END
+
+struct RigidBodyConvertBoundingBoxesLBVHPushConstants
+{
+  DAXA_TH_BLOB(RigidBodyConvertBoundingBoxesLinearBVHTaskHead, task_head)
 };
 
 struct RigidBodyEntry

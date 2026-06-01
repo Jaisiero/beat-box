@@ -48,9 +48,13 @@ struct ImageManager
         // Copy the image to host buffer
         image_host_buffer = gpu->device.create_buffer({
             .size = INIT_HOST_BUFFER_SIZE,
-            .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+            .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
             .name = "image_host_buffer",
         });
+
+        // Bind backing resources before submitting/completing task graph
+        task_host_buffer.set_buffer(image_host_buffer);
+        task_image.set_image(stbn_texture);
 
         record_task_graph_upload_image(upload_images_TG);
         upload_images_TG.submit();
@@ -73,9 +77,9 @@ struct ImageManager
                 });
 
                 ti.recorder.copy_buffer_to_image({
-                    .buffer = ti.get(task_host_buffer).ids[0],
+                    .src_buffer = ti.get(task_host_buffer).id,
                     .buffer_offset = 0,
-                    .image = ti.get(task_image).ids[0],
+                    .dst_image = ti.get(task_image).id,
                     .image_offset = daxa::Offset3D(0, 0, 0),
                     .image_extent = daxa::Extent3D(128, 128, 64),
                 });
@@ -130,9 +134,9 @@ struct ImageManager
             upload_image(image, image_index++, offset);
         }
 
-        task_host_buffer.set_buffers({.buffers = std::array{image_host_buffer}});
+        task_host_buffer.set_buffer(image_host_buffer);
 
-        task_image.set_images({.images = std::array{stbn_texture}});
+        task_image.set_image(stbn_texture);
 
 
         // // Copy the image data to the texture
@@ -179,7 +183,7 @@ struct ImageManager
     }
 
     // Upload an image
-    void upload_image_gpu(daxa::TransferCommandRecorder& rec)
+    void upload_image_gpu(daxa::CommandRecorder& rec)
     {
         rec.pipeline_barrier({
             .src_access = daxa::AccessConsts::TRANSFER_READ_WRITE,
@@ -187,9 +191,9 @@ struct ImageManager
         });
 
         rec.copy_buffer_to_image({
-            .buffer = image_host_buffer,
+            .src_buffer = image_host_buffer,
             .buffer_offset = 0,
-            .image = stbn_texture,
+            .dst_image = stbn_texture,
             .image_offset = daxa::Offset3D(0, 0, 0),
             .image_extent = daxa::Extent3D(128, 128, 64),
         });
@@ -214,9 +218,9 @@ private:
     // Task graph for uploading images
     TaskGraph upload_images_TG;
     // Task buffer upload image
-    daxa::TaskBuffer task_host_buffer{{.initial_buffers = {}, .name = "task_host_image_buffer"}};
+    daxa::TaskBuffer task_host_buffer{{.buffer = {}, .name = "task_host_image_buffer"}};
     // Task image upload image
-    daxa::TaskImage task_image{{.initial_images = {}, .name = "task_upload_image"}};
+    daxa::TaskImage task_image{{.image = {}, .name = "task_upload_image"}};
 
     // Image references
     std::vector<std::shared_ptr<BBImageTexture>> images;

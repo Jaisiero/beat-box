@@ -218,6 +218,44 @@ struct Aabb
 #endif // __cplusplus
 };
 
+#if !defined(__cplusplus)
+// Order-preserving float<->uint mapping so that integer atomic min/max
+// (InterlockedMin/InterlockedMax) reproduce float min/max. This is the portable
+// way to merge AABBs across workgroups WITHOUT relying on coherent buffer loads
+// through pointers — which Slang does not support (shader-slang/slang#3870).
+// credits: https://www.jeremyong.com/graphics/2023/09/05/f32-interlocked-min-max-hlsl/
+// NOTE: check isnan(value) before use.
+daxa_u32 order_preserving_float_map(daxa_f32 value)
+{
+  // For negative values the mask becomes 0xffffffff, for positive 0x80000000.
+  daxa_u32 uvalue = asuint(value);
+  daxa_u32 mask = daxa_u32(-daxa_i32(uvalue >> 31)) | 0x80000000u;
+  return uvalue ^ mask;
+}
+
+daxa_u32vec3 order_preserving_float3_map(daxa_f32vec3 values)
+{
+  return daxa_u32vec3(
+      order_preserving_float_map(values.x),
+      order_preserving_float_map(values.y),
+      order_preserving_float_map(values.z));
+}
+
+daxa_f32 inverse_order_preserving_float_map(daxa_u32 value)
+{
+  daxa_u32 mask = ((value >> 31) - 1u) | 0x80000000u;
+  return asfloat(value ^ mask);
+}
+
+daxa_f32vec3 inverse_order_preserving_float3_map(daxa_u32vec3 values)
+{
+  return daxa_f32vec3(
+      inverse_order_preserving_float_map(values.x),
+      inverse_order_preserving_float_map(values.y),
+      inverse_order_preserving_float_map(values.z));
+}
+#endif // !__cplusplus
+
 static const daxa_u32 MAX_INCIDENT_VERTEX_COUNT = 4;
 static const daxa_u32 MAX_CONTACT_POINT_COUNT = 8;
 

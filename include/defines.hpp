@@ -1,5 +1,11 @@
 #pragma once
 
+#include <array>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <type_traits>
 #include <vector>
 
 #include "shared.inl"
@@ -7,6 +13,306 @@
 using namespace daxa::types;
 #include <daxa/utils/pipeline_manager.hpp>
 #include <daxa/utils/task_graph.hpp>
+
+#define BB_DAXA_TASK_ALIAS(NAME) namespace NAME { using Task = daxa::TInlineTask<Info>; }
+BB_DAXA_TASK_ALIAS(RayTracingTaskHead)
+BB_DAXA_TASK_ALIAS(GUITaskHead)
+BB_DAXA_TASK_ALIAS(GUILineTaskHead)
+BB_DAXA_TASK_ALIAS(GUIAxesTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodyDispatcherTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodyGenerateMortonCodeTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodyRadixSortHistogramTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodySingleRadixSortTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodyGenerateHierarchyLinearBVHTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodyBuildBoundingBoxesLinearBVHTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodyConvertBoundingBoxesLinearBVHTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodyReorderingTaskHead)
+BB_DAXA_TASK_ALIAS(ResetBodyLinkTaskHead)
+BB_DAXA_TASK_ALIAS(BroadPhaseTaskHead)
+BB_DAXA_TASK_ALIAS(NarrowPhaseDispatcherTaskHead)
+BB_DAXA_TASK_ALIAS(NarrowPhaseTaskHead)
+BB_DAXA_TASK_ALIAS(CollisionSolverDispatcherTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodySimTaskHead)
+BB_DAXA_TASK_ALIAS(IslandCounterTaskHead)
+BB_DAXA_TASK_ALIAS(IslandDispatcherTaskHead)
+BB_DAXA_TASK_ALIAS(IslandBuilderTaskHead)
+BB_DAXA_TASK_ALIAS(IslandPrefixSumTaskHead)
+BB_DAXA_TASK_ALIAS(IslandBuilderBodyLink2IslandTaskHead)
+BB_DAXA_TASK_ALIAS(IslandBuilderSortBodyLinkInIslandTaskHead)
+BB_DAXA_TASK_ALIAS(ManifoldIslandBuilderTaskHead)
+BB_DAXA_TASK_ALIAS(ContactIslandGatherTaskHead)
+BB_DAXA_TASK_ALIAS(ContactIslandDispatcherTaskHead)
+BB_DAXA_TASK_ALIAS(ManifoldIslandPrefixSumTaskHead)
+BB_DAXA_TASK_ALIAS(IslandBuilderManifoldLink2IslandTaskHead)
+BB_DAXA_TASK_ALIAS(IslandBuilderSortManifoldLinkInIslandTaskHead)
+BB_DAXA_TASK_ALIAS(CollisionPreSolverTaskHead)
+BB_DAXA_TASK_ALIAS(CollisionSolverTaskHead)
+BB_DAXA_TASK_ALIAS(IntegratePositionsTaskHead)
+BB_DAXA_TASK_ALIAS(CollisionSolverRelaxationTaskHead)
+BB_DAXA_TASK_ALIAS(RigidBodyUpdateTaskHead)
+BB_DAXA_TASK_ALIAS(UpdateInstancesTaskHead)
+BB_DAXA_TASK_ALIAS(CreatePointsTaskHead)
+#undef BB_DAXA_TASK_ALIAS
+
+namespace daxa
+{
+struct ShaderCompileOptions
+{
+  std::optional<std::string> entry_point = {};
+  std::optional<ShaderLanguage> language = {};
+  std::vector<ShaderDefine> defines = {};
+  std::optional<bool> enable_debug_info = {};
+  std::optional<ShaderCreateFlags> create_flags = {};
+  std::optional<u32> required_subgroup_size = {};
+};
+
+struct ShaderCompileInfo
+{
+  ShaderSource source = Monostate{};
+  ShaderCompileOptions compile_options = {};
+
+  [[nodiscard]] auto to_info2() const -> ShaderCompileInfo2
+  {
+    return ShaderCompileInfo2{
+        .source = source,
+        .entry_point = compile_options.entry_point,
+        .language = compile_options.language,
+        .defines = compile_options.defines,
+        .enable_debug_info = compile_options.enable_debug_info,
+        .create_flags = compile_options.create_flags,
+        .required_subgroup_size = compile_options.required_subgroup_size,
+    };
+  }
+
+  [[nodiscard]] operator ShaderCompileInfo2() const
+  {
+    return to_info2();
+  }
+};
+
+inline auto to_info2(std::vector<ShaderCompileInfo> const &infos) -> std::vector<ShaderCompileInfo2>
+{
+  auto ret = std::vector<ShaderCompileInfo2>{};
+  ret.reserve(infos.size());
+  for (auto const &info : infos)
+  {
+    ret.push_back(info.to_info2());
+  }
+  return ret;
+}
+
+inline auto to_info2(Optional<ShaderCompileInfo> const &info) -> Optional<ShaderCompileInfo2>
+{
+  if (info.has_value())
+  {
+    return Optional<ShaderCompileInfo2>{info.value().to_info2()};
+  }
+  return {};
+}
+
+struct RayTracingPipelineCompileInfo
+{
+  std::vector<ShaderCompileInfo> ray_gen_infos = {};
+  std::vector<ShaderCompileInfo> intersection_infos = {};
+  std::vector<ShaderCompileInfo> any_hit_infos = {};
+  std::vector<ShaderCompileInfo> callable_infos = {};
+  std::vector<ShaderCompileInfo> closest_hit_infos = {};
+  std::vector<ShaderCompileInfo> miss_hit_infos = {};
+  std::vector<RayTracingShaderGroupInfo> shader_groups_infos = {};
+  u32 max_ray_recursion_depth = {};
+  u32 push_constant_size = DAXA_MAX_PUSH_CONSTANT_BYTE_SIZE;
+  std::string name = {};
+
+  [[nodiscard]] operator RayTracingPipelineCompileInfo2() const
+  {
+    return RayTracingPipelineCompileInfo2{
+        .ray_gen_infos = daxa::to_info2(ray_gen_infos),
+        .intersection_infos = daxa::to_info2(intersection_infos),
+        .any_hit_infos = daxa::to_info2(any_hit_infos),
+        .callable_infos = daxa::to_info2(callable_infos),
+        .closest_hit_infos = daxa::to_info2(closest_hit_infos),
+        .miss_hit_infos = daxa::to_info2(miss_hit_infos),
+        .shader_groups_infos = shader_groups_infos,
+        .max_ray_recursion_depth = max_ray_recursion_depth,
+        .push_constant_size = push_constant_size,
+        .name = name,
+    };
+  }
+};
+
+struct ComputePipelineCompileInfo
+{
+  ShaderCompileInfo shader_info = {};
+  u32 push_constant_size = DAXA_MAX_PUSH_CONSTANT_BYTE_SIZE;
+  std::string name = {};
+
+  [[nodiscard]] operator ComputePipelineCompileInfo2() const
+  {
+    auto info = shader_info.to_info2();
+    return ComputePipelineCompileInfo2{
+        .source = info.source,
+        .entry_point = info.entry_point,
+        .language = info.language,
+        .defines = info.defines,
+        .enable_debug_info = info.enable_debug_info,
+        .create_flags = info.create_flags,
+        .required_subgroup_size = info.required_subgroup_size,
+        .push_constant_size = push_constant_size,
+        .name = name,
+    };
+  }
+};
+
+struct RasterPipelineCompileInfo
+{
+  Optional<ShaderCompileInfo> mesh_shader_info = {};
+  Optional<ShaderCompileInfo> vertex_shader_info = {};
+  Optional<ShaderCompileInfo> tesselation_control_shader_info = {};
+  Optional<ShaderCompileInfo> tesselation_evaluation_shader_info = {};
+  Optional<ShaderCompileInfo> fragment_shader_info = {};
+  Optional<ShaderCompileInfo> task_shader_info = {};
+  std::vector<RenderAttachment> color_attachments = {};
+  Optional<DepthTestInfo> depth_test = {};
+  RasterizerInfo raster = {};
+  TesselationInfo tesselation = {};
+  u32 push_constant_size = DAXA_MAX_PUSH_CONSTANT_BYTE_SIZE;
+  std::string name = {};
+
+  [[nodiscard]] operator RasterPipelineCompileInfo2() const
+  {
+    return RasterPipelineCompileInfo2{
+        .mesh_shader_info = daxa::to_info2(mesh_shader_info),
+        .vertex_shader_info = daxa::to_info2(vertex_shader_info),
+        .tesselation_control_shader_info = daxa::to_info2(tesselation_control_shader_info),
+        .tesselation_evaluation_shader_info = daxa::to_info2(tesselation_evaluation_shader_info),
+        .fragment_shader_info = daxa::to_info2(fragment_shader_info),
+        .task_shader_info = daxa::to_info2(task_shader_info),
+        .color_attachments = color_attachments,
+        .depth_test = depth_test,
+        .raster = raster,
+        .tesselation = tesselation,
+        .push_constant_size = push_constant_size,
+        .name = name,
+    };
+  }
+};
+
+using TaskBuffer = ExternalTaskBuffer;
+using TaskImage = ExternalTaskImage;
+using TaskBlas = ExternalTaskBlas;
+using TaskTlas = ExternalTaskTlas;
+
+template <typename Views, std::size_t N>
+inline auto make_attachment_views(std::array<TaskViewVariant, N> const &values) -> Views
+{
+  struct ViewStorage
+  {
+    u32 dummy = {};
+    std::array<TaskViewVariant, N> values = {};
+  };
+
+  auto storage = ViewStorage{.values = values};
+  auto ret = Views{};
+  static_assert(sizeof(Views) == sizeof(ViewStorage));
+  std::memcpy(&ret, &storage, sizeof(Views));
+  return ret;
+}
+
+inline auto attachment_view(auto, ExternalTaskBuffer const &buffer) -> TaskViewVariant
+{
+  return buffer.view();
+}
+
+inline auto attachment_view(auto, ExternalTaskImage const &image) -> TaskViewVariant
+{
+  return image.view();
+}
+
+inline auto attachment_view(auto, ExternalTaskBlas const &blas) -> TaskViewVariant
+{
+  return blas.view();
+}
+
+inline auto attachment_view(auto, ExternalTaskTlas const &tlas) -> TaskViewVariant
+{
+  return tlas.view();
+}
+
+inline auto inl_attachment(TaskAccess access, ExternalTaskBuffer const &buffer) -> TaskAttachmentInfo
+{
+  return TaskBufferAttachmentInfo{
+      .name = buffer.info().name.data(),
+      .task_access = access,
+      .id = buffer.id(),
+      .view = buffer.view(),
+      .translated_view = buffer.view(),
+  };
+}
+
+inline auto inl_attachment(TaskAccess access, ExternalTaskImage const &image) -> TaskAttachmentInfo
+{
+  return TaskImageAttachmentInfo{
+      .name = image.info().name.data(),
+      .task_access = access,
+      .id = image.id(),
+      .view = image.view(),
+      .translated_view = image.view(),
+  };
+}
+
+inline auto inl_attachment(TaskAccess access, ExternalTaskBlas const &blas) -> TaskAttachmentInfo
+{
+  return TaskBlasAttachmentInfo{
+      .name = blas.info().name.data(),
+      .task_access = access,
+      .id = blas.id(),
+      .view = blas.view(),
+      .translated_view = blas.view(),
+  };
+}
+
+inline auto inl_attachment(TaskAccess access, ExternalTaskTlas const &tlas) -> TaskAttachmentInfo
+{
+  return TaskTlasAttachmentInfo{
+      .name = tlas.info().name.data(),
+      .task_access = access,
+      .id = tlas.id(),
+      .view = tlas.view(),
+      .translated_view = tlas.view(),
+  };
+}
+
+struct InlineTaskInfo
+{
+  std::vector<TaskAttachmentInfo> attachments = {};
+  std::function<void(TaskInterface const &)> task = {};
+  std::string_view name = {};
+
+  [[nodiscard]] auto to_inline_task() const -> InlineTask;
+};
+
+inline auto retain_task_callback(std::function<void(TaskInterface const &)> callback) -> std::function<void(TaskInterface const &)> *
+{
+  static auto callbacks = std::vector<std::unique_ptr<std::function<void(TaskInterface const &)>>>{};
+  callbacks.push_back(std::make_unique<std::function<void(TaskInterface const &)>>(std::move(callback)));
+  return callbacks.back().get();
+}
+
+inline auto InlineTaskInfo::to_inline_task() const -> InlineTask
+{
+  auto ret = InlineTask{name};
+  for (auto const &attachment : attachments)
+  {
+    ret.uses(attachment);
+  }
+  auto *callback = retain_task_callback(task);
+  ret.executes([callback](TaskInterface ti)
+  {
+    (*callback)(ti);
+  });
+  return ret;
+}
+} // namespace daxa
 
 #define BB_NAMESPACE_BEGIN namespace beatbox {
 #define BB_NAMESPACE_END }
@@ -107,6 +413,10 @@ const auto generate_hierarchy_linear_bvh_pipeline_name = "Generate Hierarchy Lin
 // build bounding boxes for linear bounding volume hierarchy
 const auto entry_build_bounding_boxes_linear_bvh = "entry_build_bounding_boxes_linear_bvh";
 const auto build_bounding_boxes_linear_bvh_pipeline_name = "Build Bounding Boxes Linear BVH";
+
+// convert integer-mapped bounding boxes to float AABBs for linear bounding volume hierarchy
+const auto entry_convert_bounding_boxes_linear_bvh = "entry_convert_bounding_boxes_linear_bvh";
+const auto convert_bounding_boxes_linear_bvh_pipeline_name = "Convert Bounding Boxes Linear BVH";
 
 // reorder rigid bodies
 const auto entry_rigid_body_reordering = "entry_rigid_body_reordering";
@@ -285,83 +595,67 @@ struct MainRayTracingPipeline
       },
   };
 
-  std::vector<daxa::RayTracingShaderCompileInfo> stages;
-
+  std::vector<daxa::ShaderCompileInfo> ray_gen_infos;
+  std::vector<daxa::ShaderCompileInfo> intersection_infos;
+  std::vector<daxa::ShaderCompileInfo> any_hit_infos;
+  std::vector<daxa::ShaderCompileInfo> closest_hit_infos;
+  std::vector<daxa::ShaderCompileInfo> miss_hit_infos;
   std::vector<daxa::RayTracingShaderGroupInfo> groups;
 
   daxa::RayTracingPipelineCompileInfo info;
 
   explicit MainRayTracingPipeline() {
 
-    stages.resize(STAGES_COUNT);
+    ray_gen_infos = {rt_gen_shader};
+    intersection_infos = {rt_intersection_shader, rt_intersection_lbvh_shader_file_string};
+    any_hit_infos = {rt_any_hit_lbvh_shader_file_string};
+    closest_hit_infos = {rt_closest_hit_shader};
+    miss_hit_infos = {rt_miss_shader, rt_miss_shadow_shader};
+
+    static constexpr u32 RAYGEN_STAGE = 0;
+    static constexpr u32 INTERSECTION_STAGE = 1;
+    static constexpr u32 INTERSECTION_LBVH_STAGE = 2;
+    static constexpr u32 ANY_HIT_LBVH_STAGE = 3;
+    static constexpr u32 CLOSE_HIT_STAGE = 4;
+    static constexpr u32 MISS_STAGE = 5;
+    static constexpr u32 MISS2_STAGE = 6;
+
     groups.resize(GROUPS_COUNT);
 
-    stages[RAYGEN] = daxa::RayTracingShaderCompileInfo{
-        .shader_info = rt_gen_shader,
-        .type = daxa::RayTracingShaderType::RAYGEN,
-    };
-
-    stages[MISS] = daxa::RayTracingShaderCompileInfo{
-        .shader_info = rt_miss_shader,
-        .type = daxa::RayTracingShaderType::MISS,
-    };
-
-    stages[MISS2] = daxa::RayTracingShaderCompileInfo{
-        .shader_info = rt_miss_shadow_shader,
-        .type = daxa::RayTracingShaderType::MISS,
-    };
-
-    stages[CLOSE_HIT] = daxa::RayTracingShaderCompileInfo{
-        .shader_info = rt_closest_hit_shader,
-        .type = daxa::RayTracingShaderType::CLOSEST_HIT,
-    };
-
-    stages[INTERSECTION] = daxa::RayTracingShaderCompileInfo{
-        .shader_info = rt_intersection_shader,
-        .type = daxa::RayTracingShaderType::INTERSECTION,
-    };
-
-    stages[ANY_HIT_LBVH] = daxa::RayTracingShaderCompileInfo{
-        .shader_info = rt_any_hit_lbvh_shader_file_string,
-        .type = daxa::RayTracingShaderType::ANY_HIT,
-    };
-
-    stages[INTERSECTION_LBVH] = daxa::RayTracingShaderCompileInfo{
-        .shader_info = rt_intersection_lbvh_shader_file_string,
-        .type = daxa::RayTracingShaderType::INTERSECTION,
-    };
-
     groups[PRIMARY_RAY] = daxa::RayTracingShaderGroupInfo{
-        .type = daxa::ExtendedShaderGroupType::RAYGEN,
-        .general_shader_index = StageIndex::RAYGEN,
+        .type = daxa::ShaderGroup::GENERAL,
+        .general_shader_index = RAYGEN_STAGE,
     };
 
     groups[HIT_MISS] = daxa::RayTracingShaderGroupInfo{
-        .type = daxa::ExtendedShaderGroupType::MISS,
-        .general_shader_index = StageIndex::MISS,
+        .type = daxa::ShaderGroup::GENERAL,
+        .general_shader_index = MISS_STAGE,
     };
 
     groups[SHADOW_MISS] = daxa::RayTracingShaderGroupInfo{
-        .type = daxa::ExtendedShaderGroupType::MISS,
-        .general_shader_index = StageIndex::MISS2,
+        .type = daxa::ShaderGroup::GENERAL,
+        .general_shader_index = MISS2_STAGE,
     };
 
     groups[PROCEDURAL_HIT] = daxa::RayTracingShaderGroupInfo{
-        .type = daxa::ExtendedShaderGroupType::PROCEDURAL_HIT_GROUP,
-        .closest_hit_shader_index = StageIndex::CLOSE_HIT,
-        .intersection_shader_index = StageIndex::INTERSECTION,
+        .type = daxa::ShaderGroup::PROCEDURAL_HIT_GROUP,
+        .closest_hit_shader_index = CLOSE_HIT_STAGE,
+        .intersection_shader_index = INTERSECTION_STAGE,
     };
 
     groups[LBVH_HIT] = daxa::RayTracingShaderGroupInfo{
-        .type = daxa::ExtendedShaderGroupType::PROCEDURAL_HIT_GROUP,
-        // .closest_hit_shader_index = StageIndex::CLOSE_HIT_LBVH,
-        .any_hit_shader_index = StageIndex::ANY_HIT_LBVH,
-        .intersection_shader_index = StageIndex::INTERSECTION_LBVH,
+        .type = daxa::ShaderGroup::PROCEDURAL_HIT_GROUP,
+        .any_hit_shader_index = ANY_HIT_LBVH_STAGE,
+        .intersection_shader_index = INTERSECTION_LBVH_STAGE,
     };
 
     info = daxa::RayTracingPipelineCompileInfo{
-        .stages = stages,
-        .groups = groups,
+        .ray_gen_infos = ray_gen_infos,
+        .intersection_infos = intersection_infos,
+        .any_hit_infos = any_hit_infos,
+        .closest_hit_infos = closest_hit_infos,
+        .miss_hit_infos = miss_hit_infos,
+        .shader_groups_infos = groups,
         .max_ray_recursion_depth = 2,
         .push_constant_size = sizeof(RTPushConstants),
         .name = RT_main_pipeline_name,
@@ -462,6 +756,21 @@ struct RigidBodyBuildBoundingBoxesLinearBVHInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(RigidBodyBuildBoundingBoxesLBVHPushConstants),
       .name = build_bounding_boxes_linear_bvh_pipeline_name,
+  };
+};
+
+struct RigidBodyConvertBoundingBoxesLinearBVHInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_convert_bounding_boxes_linear_bvh,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyConvertBoundingBoxesLBVHPushConstants),
+      .name = convert_bounding_boxes_linear_bvh_pipeline_name,
   };
 };
 
