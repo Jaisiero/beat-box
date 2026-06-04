@@ -219,8 +219,11 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   if (index < num_bodies)
   {
     let morton_code = morton_codes[index];
-    let r = rigid_bodies[morton_code.index];
-    let rb_aabb = r.get_AABB_from_OBB();
+    // Pointer access (NOT value-copy): a whole-struct load through a daxa buffer
+    // pointer pads vec3->16 in Daxa 3.6, corrupting position/min/max and thus the
+    // computed AABB. That feeds every LBVH leaf, breaking broad-phase detection.
+    RigidBody* r = &rigid_bodies[morton_code.index];
+    let rb_aabb = r->get_AABB_from_OBB();
     lbvh_nodes[leaf_offset + index] = LBVHNode(rb_aabb, -1, -1, morton_code.index);
   }
 
@@ -409,12 +412,15 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   }
 
   // FIXME: split between static and dynamic objects
-  let rigid_body = BP.task_head.rigid_bodies[index];
+  // Pointer access (NOT value-copy): a whole-struct load through a daxa buffer
+  // pointer pads vec3->16 in Daxa 3.6, corrupting the OBB and thus the query AABB.
+  RigidBody* rigid_bodies = (RigidBody*)(BP.task_head.rigid_bodies);
+  RigidBody* rigid_body = &rigid_bodies[index];
   let lbvh_nodes = (LBVHNode*)(BP.task_head.lbvh_nodes);
   var bp_collisions =
       (BroadPhaseCollision*)(BP.task_head.broad_phase_collisions);
-  
-  Aabb aabb = rigid_body.get_AABB_from_OBB();
+
+  Aabb aabb = rigid_body->get_AABB_from_OBB();
 
   LBVH::broad_phase(sim_config, index, aabb, lbvh_nodes, bp_collisions);
 }
@@ -928,16 +934,17 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   {
 #endif // BB_SIM_DEBUG
 
-        Manifold manifold =
-            CPS.task_head.collisions[manifold_index];
+        Manifold* manifolds = (Manifold*)(CPS.task_head.collisions);
+        Manifold* manifold = &manifolds[manifold_index];
 
-        if (manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
+        if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index)
         {
           continue;
         }
 
-        RigidBody r1 = CPS.task_head.rigid_bodies[manifold.obb1_index];
-        RigidBody r2 = CPS.task_head.rigid_bodies[manifold.obb2_index];
+        RigidBody* rigid_bodies = (RigidBody*)(CPS.task_head.rigid_bodies);
+        RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+        RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
 
         daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
         daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
@@ -953,9 +960,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
           PGS.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction);
         }
 
-        CPS.task_head.collisions[manifold_index] = manifold;
-        CPS.task_head.rigid_bodies[manifold.obb1_index] = r1;
-        CPS.task_head.rigid_bodies[manifold.obb2_index] = r2;
+        // manifold + r1/r2 are pointers into the buffers; pre_step wrote contacts/velocity directly.
       }
     }
 
@@ -1003,18 +1008,18 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   {
 #endif // BB_SIM_DEBUG
 
-    Manifold manifold =
-        CS.task_head.collisions[manifold_index];
+    Manifold* manifolds = (Manifold*)(CS.task_head.collisions);
+    Manifold* manifold = &manifolds[manifold_index];
 
-    if (manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
+    if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index)
     {
       continue;
     }
 
-    // printf("Solving collision %d, rigid_body_a %d, rigid_body_b %d cc: %d\n", m, manifold.obb1_index, manifold.obb2_index, manifold.contact_count);
-
-    RigidBody r1 = CS.task_head.rigid_bodies[manifold.obb1_index];
-    RigidBody r2 = CS.task_head.rigid_bodies[manifold.obb2_index];
+    // Raw `RigidBody*` (scalar layout) instead of value-copy through the daxa BufferPtr.
+    RigidBody* rigid_bodies = (RigidBody*)(CS.task_head.rigid_bodies);
+    RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+    RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
 
     daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
@@ -1030,9 +1035,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       PGS.solve(manifold, r1, r2, accum_impulse, friction);
     }
 
-    CS.task_head.collisions[manifold_index] = manifold;
-    CS.task_head.rigid_bodies[manifold.obb1_index] = r1;
-    CS.task_head.rigid_bodies[manifold.obb2_index] = r2;
+    // manifold + r1/r2 are pointers into the buffers; solve wrote contacts/velocity directly.
   }
 }
 
@@ -1105,16 +1108,18 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   {
 #endif // BB_SIM_DEBUG
 
-    Manifold manifold =
-        CSR.task_head.collisions[manifold_index];
+    Manifold* manifolds = (Manifold*)(CSR.task_head.collisions);
+    Manifold* manifold = &manifolds[manifold_index];
 
-    if (manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
+    if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index)
     {
       continue;
     }
 
-    RigidBody r1 = CSR.task_head.rigid_bodies[manifold.obb1_index];
-    RigidBody r2 = CSR.task_head.rigid_bodies[manifold.obb2_index];
+    // Raw `RigidBody*` (scalar layout) instead of value-copy through the daxa BufferPtr.
+    RigidBody* rigid_bodies = (RigidBody*)(CSR.task_head.rigid_bodies);
+    RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+    RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
 
     daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
@@ -1126,9 +1131,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
     }
 
-    CSR.task_head.collisions[manifold_index] = manifold;
-    CSR.task_head.rigid_bodies[manifold.obb1_index] = r1;
-    CSR.task_head.rigid_bodies[manifold.obb2_index] = r2;
+    // manifold + r1/r2 are pointers into the buffers; solve wrote contacts/velocity directly.
   }
 }
 

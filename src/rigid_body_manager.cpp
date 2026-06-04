@@ -178,10 +178,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .dt = TIME_STEP,
         .gravity = -GRAVITY,
         .flags = sim_flags,
-        .frame_count = 0,
         .g_c_info = GlobalCollisionInfo{
             .collision_count = 0,
             .collision_point_count = 0},
+        .frame_count = 0,
     };
   }
   tmp_morton_codes = device.create_buffer({
@@ -212,44 +212,38 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .task = [this](daxa::TaskInterface const &ti)
       {
         // TODO: simplify this
+        // Use offsetof for every field so the per-frame reset stays correct
+        // regardless of SimConfig field order/padding (previously these were
+        // hand-computed byte offsets that silently break on any reorder).
         auto rigid_body_count = renderer_manager->get_rigid_body_count();
-        auto rigid_body_count_offset = sizeof(SimSolverType);
-        allocate_fill_copy(ti, rigid_body_count, ti.get(task_sim_config), rigid_body_count_offset);
+        allocate_fill_copy(ti, rigid_body_count, ti.get(task_sim_config), offsetof(SimConfig, rigid_body_count));
 
         auto active_rigid_body_count = renderer_manager->get_active_rigid_body_count();
-        auto active_rigid_body_offset = sizeof(SimSolverType) + sizeof(daxa_u32);
-        allocate_fill_copy(ti, active_rigid_body_count, ti.get(task_sim_config), active_rigid_body_offset);
+        allocate_fill_copy(ti, active_rigid_body_count, ti.get(task_sim_config), offsetof(SimConfig, active_rigid_body_count));
 
         auto island_count = 0;
-        auto island_count_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 2;
-        allocate_fill_copy(ti, island_count, ti.get(task_sim_config), island_count_offset);
+        allocate_fill_copy(ti, island_count, ti.get(task_sim_config), offsetof(SimConfig, island_count));
 
         auto contact_island_count = 0;
-        auto contact_island_count_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 3;
-        allocate_fill_copy(ti, contact_island_count, ti.get(task_sim_config), contact_island_count_offset);
+        allocate_fill_copy(ti, contact_island_count, ti.get(task_sim_config), offsetof(SimConfig, contact_island_count));
 
         auto manifold_node_count = 0;
-        auto manifold_node_count_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 4;
-        allocate_fill_copy(ti, manifold_node_count, ti.get(task_sim_config), manifold_node_count_offset);
+        allocate_fill_copy(ti, manifold_node_count, ti.get(task_sim_config), offsetof(SimConfig, manifold_node_count));
 
         auto broad_phase_collision_count = 0;
-        auto broad_phase_collision_count_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 5;
-        allocate_fill_copy(ti, broad_phase_collision_count, ti.get(task_sim_config), broad_phase_collision_count_offset);
+        allocate_fill_copy(ti, broad_phase_collision_count, ti.get(task_sim_config), offsetof(SimConfig, broad_phase_collision_count));
 
         shift = 0;
-        auto radix_shift_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 6;
-        allocate_fill_copy(ti, shift, ti.get(task_sim_config), radix_shift_offset);
+        allocate_fill_copy(ti, shift, ti.get(task_sim_config), offsetof(SimConfig, radix_shift));
 
         auto frame_count = renderer_manager->get_frame_count();
-        auto frame_count_dst_offset = sizeof(SimConfig) - sizeof(GlobalCollisionInfo) - sizeof(daxa_u64);
-        allocate_fill_copy(ti, frame_count, ti.get(task_sim_config), frame_count_dst_offset);
+        allocate_fill_copy(ti, frame_count, ti.get(task_sim_config), offsetof(SimConfig, frame_count));
 
         auto reset_c_info = GlobalCollisionInfo{
             .collision_count = 0,
             .collision_point_count = 0,
         };
-        auto dst_offset = sizeof(SimConfig) - sizeof(GlobalCollisionInfo);
-        allocate_fill_copy(ti, reset_c_info, ti.get(task_sim_config), dst_offset);
+        allocate_fill_copy(ti, reset_c_info, ti.get(task_sim_config), offsetof(SimConfig, g_c_info));
       },
       .name = "reset sim config",
   });
@@ -369,8 +363,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .task = [this](daxa::TaskInterface const &ti)
       {
         shift += BIT_SHIFT;
-        auto radix_shift_offset = sizeof(SimSolverType) + sizeof(daxa_u32) * 6;
-        allocate_fill_copy(ti, shift, ti.get(task_sim_config), radix_shift_offset);
+        allocate_fill_copy(ti, shift, ti.get(task_sim_config), offsetof(SimConfig, radix_shift));
       },
       .name = "update radix shift",
   });
@@ -811,8 +804,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_CPS task_CPS(std::array{
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.sim_config, task_sim_config),
-                         daxa::attachment_view(CollisionPreSolverTaskHead::AT.collision_map, task_collision_entries),
+                         // ORDER MUST MATCH THE HEAD (make_attachment_views is positional): rigid_bodies BEFORE collision_map.
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                         daxa::attachment_view(CollisionPreSolverTaskHead::AT.collision_map, task_collision_entries),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.collisions, task_collisions),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.contact_islands, task_contact_islands),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.manifold_links, task_manifold_links),
@@ -832,8 +826,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_CS task_CS(std::array{
                        daxa::attachment_view(CollisionSolverTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.sim_config, task_sim_config),
-                       daxa::attachment_view(CollisionSolverTaskHead::AT.collision_map, task_collision_entries),
+                       // ORDER MUST MATCH THE HEAD (positional): rigid_bodies BEFORE collision_map.
                        daxa::attachment_view(CollisionSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                       daxa::attachment_view(CollisionSolverTaskHead::AT.collision_map, task_collision_entries),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.collisions, task_collisions),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.contact_islands, task_contact_islands),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.manifold_links, task_manifold_links),
@@ -873,8 +868,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_CSR task_CSR(std::array{
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.sim_config, task_sim_config),
-                         daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.collision_map, task_collision_entries),
+                         // ORDER MUST MATCH THE HEAD (positional): rigid_bodies BEFORE collision_map.
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                         daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.collision_map, task_collision_entries),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.collisions, task_collisions),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.contact_islands, task_contact_islands),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.manifold_links,
@@ -1209,11 +1205,11 @@ bool RigidBodyManager::update_sim()
       .dt = TIME_STEP,
       .gravity = -GRAVITY,
       .flags = sim_flags,
-      .frame_count = renderer_manager->get_frame_count(),
       .g_c_info = GlobalCollisionInfo{
           .collision_count = 0,
           .collision_point_count = 0,
       },
+      .frame_count = renderer_manager->get_frame_count(),
   };
 
   update_buffers();
