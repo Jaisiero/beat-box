@@ -202,19 +202,27 @@ using TaskImage = ExternalTaskImage;
 using TaskBlas = ExternalTaskBlas;
 using TaskTlas = ExternalTaskTlas;
 
-// ⚠️ POSITIONAL BINDING — FOOTGUN. This `memcpy`s the `values` array straight into the
-// task head's `Views` struct, slot-by-slot. Combined with `attachment_view(auto, buffer)`
-// below IGNORING its first arg (the `AT.x` tag is decorative!), this means a task's
-// binding array order MUST EXACTLY MATCH its head's attachment declaration order. A
-// mismatch silently wires `task_head.fieldA` to fieldB's buffer with NO compile error —
-// e.g. swapping `collision_map`/`rigid_bodies` in the solver tasks made the solver read/
-// write garbage bodies and let cubes fall through the floor (debugged 2026-06). When
-// adding/reordering a task's attachments, keep the binding order identical to the head.
-// TODO: make `attachment_view` actually use the `AT.x` tag to map by name (would need the
-//       tag to carry its slot index) so order no longer matters.
-template <typename Views, std::size_t N>
-inline auto make_attachment_views(std::array<TaskViewVariant, N> const &values) -> Views
+// Task attachment binding — NAME-BASED (order-independent). `attachment_view(AT.<name>, buf)`
+// captures the attachment's slot index from `AT.<name>.value` (a Task*AttachmentIndex), and
+// `make_attachment_views` places each view at that slot before the memcpy into the head's
+// `Views` struct. So a task's binding-array order does NOT need to match the head's `DAXA_TH_*`
+// declaration order — each view is routed by name.
+// (Until 2026-06 this was POSITIONAL and the AT tag was ignored, which silently mis-wired the
+//  solver's collision_map/rigid_bodies and let cubes fall through the floor. Now fixed by
+//  honoring the tag's slot index.)
+struct TaggedTaskView
 {
+  u32 slot = {};
+  TaskViewVariant view = {};
+};
+
+template <typename Views, std::size_t N>
+inline auto make_attachment_views(std::array<TaggedTaskView, N> const &tagged) -> Views
+{
+  std::array<TaskViewVariant, N> values = {};
+  for (auto const &t : tagged)
+    values[t.slot] = t.view; // route each view to its head slot (by name), not by position
+
   struct ViewStorage
   {
     u32 dummy = {};
@@ -228,24 +236,25 @@ inline auto make_attachment_views(std::array<TaskViewVariant, N> const &values) 
   return ret;
 }
 
-inline auto attachment_view(auto, ExternalTaskBuffer const &buffer) -> TaskViewVariant
+// First arg is the head's `AT.<name>` (a Task*AttachmentIndex carrying `.value` = slot).
+inline auto attachment_view(auto idx, ExternalTaskBuffer const &buffer) -> TaggedTaskView
 {
-  return buffer.view();
+  return {idx.value, buffer.view()};
 }
 
-inline auto attachment_view(auto, ExternalTaskImage const &image) -> TaskViewVariant
+inline auto attachment_view(auto idx, ExternalTaskImage const &image) -> TaggedTaskView
 {
-  return image.view();
+  return {idx.value, image.view()};
 }
 
-inline auto attachment_view(auto, ExternalTaskBlas const &blas) -> TaskViewVariant
+inline auto attachment_view(auto idx, ExternalTaskBlas const &blas) -> TaggedTaskView
 {
-  return blas.view();
+  return {idx.value, blas.view()};
 }
 
-inline auto attachment_view(auto, ExternalTaskTlas const &tlas) -> TaskViewVariant
+inline auto attachment_view(auto idx, ExternalTaskTlas const &tlas) -> TaggedTaskView
 {
-  return tlas.view();
+  return {idx.value, tlas.view()};
 }
 
 inline auto inl_attachment(TaskAccess access, ExternalTaskBuffer const &buffer) -> TaskAttachmentInfo

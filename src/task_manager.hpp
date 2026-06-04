@@ -22,7 +22,7 @@ struct TaskTemplate<daxa::TInlineTask<HeadInfo>, Callback> : public daxa::TInlin
   Callback user_callback;
 
   template <std::size_t N>
-  TaskTemplate(std::array<daxa::TaskViewVariant, N> const &views_, Callback user_callback_)
+  TaskTemplate(std::array<daxa::TaggedTaskView, N> const &views_, Callback user_callback_)
       : Base(HeadInfo::NAME, HeadInfo::TYPE), user_callback(user_callback_)
   {
     this->head_views(daxa::make_attachment_views<AttachmentViews>(views_));

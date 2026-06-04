@@ -804,7 +804,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_CPS task_CPS(std::array{
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.sim_config, task_sim_config),
-                         // ORDER MUST MATCH THE HEAD (make_attachment_views is positional): rigid_bodies BEFORE collision_map.
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.collision_map, task_collision_entries),
                          daxa::attachment_view(CollisionPreSolverTaskHead::AT.collisions, task_collisions),
@@ -826,7 +825,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_CS task_CS(std::array{
                        daxa::attachment_view(CollisionSolverTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.sim_config, task_sim_config),
-                       // ORDER MUST MATCH THE HEAD (positional): rigid_bodies BEFORE collision_map.
                        daxa::attachment_view(CollisionSolverTaskHead::AT.rigid_bodies, task_rigid_bodies),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.collision_map, task_collision_entries),
                        daxa::attachment_view(CollisionSolverTaskHead::AT.collisions, task_collisions),
@@ -868,7 +866,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_CSR task_CSR(std::array{
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.sim_config, task_sim_config),
-                         // ORDER MUST MATCH THE HEAD (positional): rigid_bodies BEFORE collision_map.
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.rigid_bodies, task_rigid_bodies),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.collision_map, task_collision_entries),
                          daxa::attachment_view(CollisionSolverRelaxationTaskHead::AT.collisions, task_collisions),

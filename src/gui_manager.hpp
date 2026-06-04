@@ -12,7 +12,7 @@ class RendererManager;
 
 struct GUIDrawTask
 {
-  std::array<daxa::TaskViewVariant, GUITaskHead::ATTACHMENT_COUNT> views = {};
+  std::array<daxa::TaggedTaskView, GUITaskHead::ATTACHMENT_COUNT> views = {};
   std::shared_ptr<daxa::RasterPipeline> gui_pipeline = {};
   std::shared_ptr<RigidBodyManager> rigid_body_manager = {};
   std::shared_ptr<StatusManager> status_manager = {};
@@ -59,7 +59,7 @@ struct GUIDrawTask
 
 struct GUILineDrawTask
 {
-  std::array<daxa::TaskViewVariant, GUILineTaskHead::ATTACHMENT_COUNT> views = {};
+  std::array<daxa::TaggedTaskView, GUILineTaskHead::ATTACHMENT_COUNT> views = {};
   std::shared_ptr<daxa::RasterPipeline> gui_pipeline = {};
   std::shared_ptr<RigidBodyManager> rigid_body_manager = {};
   std::shared_ptr<StatusManager> status_manager = {};
@@ -107,7 +107,7 @@ struct GUILineDrawTask
 
 struct GUIAxesDrawTask
 {
-  std::array<daxa::TaskViewVariant, GUIAxesTaskHead::ATTACHMENT_COUNT> views = {};
+  std::array<daxa::TaggedTaskView, GUIAxesTaskHead::ATTACHMENT_COUNT> views = {};
   std::shared_ptr<daxa::RasterPipeline> gui_pipeline = {};
   std::shared_ptr<RigidBodyManager> rigid_body_manager = {};
   std::shared_ptr<StatusManager> status_manager = {};
