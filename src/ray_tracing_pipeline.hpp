@@ -11,24 +11,14 @@ struct RayTracingPipeline
   daxa::Device& device;
   // Shader Binding Table
   daxa::BufferId sbt_buffer;
-  // Region count
-  u32 region_count = 0;
   // Shader Binding Table
-  std::vector<daxa::GroupRegionInfo> regions = {};
+  daxa::RayTracingShaderBindingTable sbt = {};
   // flag for initialization
   bool initialized = false;
-  std::vector<u32> groups = {};
 
   explicit RayTracingPipeline(std::shared_ptr<daxa::RayTracingPipeline> pipeline, daxa::Device &device) : pipeline(pipeline), device(device)
   {
-    // FIXME: pass the groups as an argument
-    groups = {GroupIndex::PRIMARY_RAY, GroupIndex::HIT_MISS, GroupIndex::SHADOW_MISS, GroupIndex::PROCEDURAL_HIT, GroupIndex::LBVH_HIT};
-    usize sbt_size = 0;
-    pipeline->create_sbt({groups}, &region_count, nullptr, &sbt_size, nullptr);
-    regions.clear();
-    regions.resize(region_count);
-    pipeline->create_sbt({groups}, &region_count, regions.data(), nullptr, &sbt_buffer);
-    initialized = true;
+    (void)rebuild_SBT();
   };
 
   RayTracingPipeline(RayTracingPipeline const &other) = delete;
@@ -49,12 +39,16 @@ struct RayTracingPipeline
         device.destroy_buffer(buffer);
       }
     }
+    sbt = {};
     initialized = false;
   };
 
   [[nodiscard]] auto rebuild_SBT() -> daxa::RayTracingShaderBindingTable
   {
-    pipeline->create_sbt({groups}, &region_count, regions.data(), nullptr, &sbt_buffer);
+    free_SBT();
+    auto const sbt_pair = pipeline->create_default_sbt();
+    sbt_buffer = sbt_pair.buffer;
+    sbt = sbt_pair.table;
     initialized = true;
     return build_SBT();
   }
@@ -66,12 +60,7 @@ struct RayTracingPipeline
       return rebuild_SBT();
     }
 
-    return {
-        .raygen_region = regions.at(0).region,
-        .miss_region = regions.at(1).region,
-        .hit_region = regions.at(2).region,
-        .callable_region = {},
-    };
+    return sbt;
   };
 private:
 

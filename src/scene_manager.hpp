@@ -40,8 +40,8 @@ public:
         .name = "lights_buffer",
     });
 
-    task_material_buffer.set_buffers({.buffers = std::array{material_buffer}});
-    task_lights_buffer.set_buffers({.buffers = std::array{lights_buffer}});
+    task_material_buffer.set_buffer(material_buffer);
+    task_lights_buffer.set_buffer(lights_buffer);
 
     record_material_upload_tasks(material_TG);
     material_TG.submit();
@@ -170,8 +170,8 @@ public:
       {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, -50.0, 0.0), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-50.0, -50.0, -50.0), .maximum = daxa_f32vec3(50.0, 50.0, 50.0), .mass = 0.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5}, 
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5, 2.0, -0.5), .rotation = Quaternion(0.4572f, 0.0000f, -0.4572f, -0.7629f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7, .friction = 0.3}, 
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-3.0, 5.0, -1.0), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-1.0, -1.0, -1.0), .maximum = daxa_f32vec3(1.0, 1.0, 1.0), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 10),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.1, .friction = 0.6}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.3, 1.7, 0.3), .rotation = Quaternion(-0.4572f, 0.0000f, 0.4572f, -0.7629f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 2.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.3, .friction = 0.6}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5, 0.25, 0.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.4, .friction = 0.2}, 
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.3, 1.7, 0.3), .rotation = Quaternion(-0.4572f, 0.0000f, 0.4572f, -0.7629f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 2.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.3, .friction = 0.6},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5, 0.25, 0.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.4, .friction = 0.2},
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(2.5, 3.0, 2.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5}, 
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(1.5, 3.0, 2.3), .rotation = Quaternion(0.0000f, 0.0000f, 0.5000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.6, .friction = 0.7}, 
       {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-2.5, 3.0, 2.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7, .friction = 0.8}, 
@@ -406,10 +406,20 @@ public:
     light_TG.execute();
 
     // TODO: Handle error
-    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb))
+    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb)) {
+      std::cerr << "ERROR: Failed to build acceleration structures in scene_manager!" << std::endl;
       return false;
+    }
     accel_struct_mngr->build_AS();
 
+    // Rebuild the TLAS instances via the GPU update shader so the INITIAL (pre-simulation)
+    // render uses the same instance-transform convention as the runtime path. The CPU-side
+    // get_instance_transform() produces a transposed rotation relative to the intersection
+    // shader's world_to_object(), which makes rotated cubes render with clipped/beveled
+    // corners. Running the GPU instance update once here makes the static frame correct.
+    accel_struct_mngr->update_TLAS();
+
+    std::cout << "SUCCESS: Scene loaded successfully with " << rigid_body_count << " rigid bodies!" << std::endl;
     return initialized;
   }
 

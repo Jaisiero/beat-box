@@ -9,6 +9,7 @@
 [[vk::push_constant]] RigidBodySingleRadixSortPushConstants SRS;
 [[vk::push_constant]] RigidBodyGenerateHierarchyLinearBVHPushConstants GHLBVH;
 [[vk::push_constant]] RigidBodyBuildBoundingBoxesLBVHPushConstants BBBLBVH;
+[[vk::push_constant]] RigidBodyConvertBoundingBoxesLBVHPushConstants CBBLBVH;
 [[vk::push_constant]] RigidBodyReorderingPushConstants RBR;
 [[vk::push_constant]] ResetBodyLinkPushConstants RBL;
 [[vk::push_constant]] BroadPhasePushConstants BP;
@@ -82,7 +83,15 @@
   
   var r = &rigid_bodies[index];
 
-  let morton_code = MortonCodeGenerator.morton3D(r->position);
+  // Normalize the world position into the unit cube [0,1] expected by morton3D.
+  // Without this, raw world coordinates (floor at y=-50, cubes spread over tens of
+  // units) saturate to degenerate values -> duplicate Morton codes -> a malformed
+  // Karras LBVH -> broad phase finds no overlaps -> no collisions at all.
+  const daxa_f32vec3 WORLD_MIN = daxa_f32vec3(-64.0f, -64.0f, -64.0f);
+  const daxa_f32vec3 WORLD_MAX = daxa_f32vec3(64.0f, 64.0f, 64.0f);
+  daxa_f32vec3 normalized_position = (r->position - WORLD_MIN) / (WORLD_MAX - WORLD_MIN);
+
+  let morton_code = MortonCodeGenerator.morton3D(normalized_position);
 
 #if defined(BB_DEBUG)
   r->clear_flag(RigidBodyFlag::COLLIDING);
@@ -210,8 +219,11 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   if (index < num_bodies)
   {
     let morton_code = morton_codes[index];
-    let r = rigid_bodies[morton_code.index];
-    let rb_aabb = r.get_AABB_from_OBB();
+    // Pointer access (NOT value-copy): a whole-struct load through a daxa buffer
+    // pointer pads vec3->16 in Daxa 3.6, corrupting position/min/max and thus the
+    // computed AABB. That feeds every LBVH leaf, breaking broad-phase detection.
+    RigidBody* r = &rigid_bodies[morton_code.index];
+    let rb_aabb = r->get_AABB_from_OBB();
     lbvh_nodes[leaf_offset + index] = LBVHNode(rb_aabb, -1, -1, morton_code.index);
   }
 
@@ -244,13 +256,15 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
     // Record parent-child relationships.
     // FIXME: record relative indices instead of absolute indices.
     lbvh_nodes[index] = LBVHNode(Aabb(), child_a, child_b, MAX_U32);
-    lbvh_construction_info[child_a] = LBVHConstructionInfo(index, 0);
-    lbvh_construction_info[child_b] = LBVHConstructionInfo(index, 0);
+    // Initialize bounds to sentinels (min = +inf-mapped = 0xFFFFFFFF, max = -inf-mapped = 0)
+    // so the integer atomic min/max merge in build_bounding_boxes accumulates correctly.
+    lbvh_construction_info[child_a] = LBVHConstructionInfo(index, 0, daxa_u32vec3(0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu), daxa_u32vec3(0u, 0u, 0u));
+    lbvh_construction_info[child_b] = LBVHConstructionInfo(index, 0, daxa_u32vec3(0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu), daxa_u32vec3(0u, 0u, 0u));
   }
 
   // root node
   if(index == 0) {
-    lbvh_construction_info[0] = LBVHConstructionInfo(0, 0);
+    lbvh_construction_info[0] = LBVHConstructionInfo(0, 0, daxa_u32vec3(0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu), daxa_u32vec3(0u, 0u, 0u));
   }
 }
 
@@ -274,27 +288,55 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
+  // Portable cross-workgroup AABB merge WITHOUT coherent pointer loads.
+  // Slang cannot do coherent loads/stores through pointers (shader-slang/slang#3870,
+  // filed by the Daxa author), so we cannot reliably read a sibling node's AABB that
+  // another workgroup wrote. Instead each leaf scatters its own bounds up the tree
+  // using integer atomics (InterlockedMin/Max on order-preserving-mapped floats),
+  // which ARE device-coherent through pointers. Every ancestor thus ends up holding
+  // the union of all descendant leaf bounds. A separate convert pass turns the
+  // integer-mapped bounds back into float AABBs for the internal nodes.
+  // This also avoids the read-after-write race the visitation-counter approach has
+  // when reading children with plain (non-atomic) loads.
+  let leaf_aabb = lbvh_nodes[leaf_offset + index].aabb;
+  let leaf_min = order_preserving_float3_map(leaf_aabb.minimum);
+  let leaf_max = order_preserving_float3_map(leaf_aabb.maximum);
+
   daxa_u32 node_index = lbvh_construction_info[leaf_offset + index].parent;
   while(true) {
-    var visitations = 0U;
-    InterlockedAdd(lbvh_construction_info[node_index].visitation_count, 1U, visitations);
-    if(visitations < 1) {
-      // this is the first time we visit this node so it's finished
-      break;
-    }
-
-    var bvh_node = lbvh_nodes[node_index];
-    // FIXME: use relative indices instead of absolute indices
-    let child_a = lbvh_nodes[bvh_node.left];
-    let child_b = lbvh_nodes[bvh_node.right]; 
-
-    let aabb = Aabb::merge(child_a.aabb, child_b.aabb);
-    lbvh_nodes[node_index].aabb = aabb;
+    InterlockedMin(lbvh_construction_info[node_index].bound_min.x, leaf_min.x);
+    InterlockedMin(lbvh_construction_info[node_index].bound_min.y, leaf_min.y);
+    InterlockedMin(lbvh_construction_info[node_index].bound_min.z, leaf_min.z);
+    InterlockedMax(lbvh_construction_info[node_index].bound_max.x, leaf_max.x);
+    InterlockedMax(lbvh_construction_info[node_index].bound_max.y, leaf_max.y);
+    InterlockedMax(lbvh_construction_info[node_index].bound_max.z, leaf_max.z);
     if(node_index == 0) {
       break;
     }
     node_index = lbvh_construction_info[node_index].parent;
   }
+}
+
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_convert_bounding_boxes_linear_bvh(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  var sim_config =
+      (SimConfig*)(CBBLBVH.task_head.sim_config);
+
+  let num_bodies = sim_config->rigid_body_count;
+  let index = compute_i.x;
+  // Only internal nodes [0, num_bodies-1) have integer-mapped bounds to convert.
+  // Leaf nodes already carry their float AABB from the hierarchy generation pass.
+  if(num_bodies < 2u || index >= num_bodies - 1u) {
+    return;
+  }
+
+  var lbvh_nodes = (LBVHNode*)(CBBLBVH.task_head.lbvh_nodes);
+  let lbvh_construction_info = (LBVHConstructionInfo*)(CBBLBVH.task_head.lbvh_construction_info);
+
+  daxa_f32vec3 node_min = inverse_order_preserving_float3_map(lbvh_construction_info[index].bound_min);
+  daxa_f32vec3 node_max = inverse_order_preserving_float3_map(lbvh_construction_info[index].bound_max);
+  lbvh_nodes[index].aabb = Aabb(node_min, node_max);
 }
 
 [shader("compute")]
@@ -370,12 +412,15 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   }
 
   // FIXME: split between static and dynamic objects
-  let rigid_body = BP.task_head.rigid_bodies[index];
+  // Pointer access (NOT value-copy): a whole-struct load through a daxa buffer
+  // pointer pads vec3->16 in Daxa 3.6, corrupting the OBB and thus the query AABB.
+  RigidBody* rigid_bodies = (RigidBody*)(BP.task_head.rigid_bodies);
+  RigidBody* rigid_body = &rigid_bodies[index];
   let lbvh_nodes = (LBVHNode*)(BP.task_head.lbvh_nodes);
   var bp_collisions =
       (BroadPhaseCollision*)(BP.task_head.broad_phase_collisions);
-  
-  Aabb aabb = rigid_body.get_AABB_from_OBB();
+
+  Aabb aabb = rigid_body->get_AABB_from_OBB();
 
   LBVH::broad_phase(sim_config, index, aabb, lbvh_nodes, bp_collisions);
 }
@@ -889,16 +934,17 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   {
 #endif // BB_SIM_DEBUG
 
-        Manifold manifold =
-            CPS.task_head.collisions[manifold_index];
+        Manifold* manifolds = (Manifold*)(CPS.task_head.collisions);
+        Manifold* manifold = &manifolds[manifold_index];
 
-        if (manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
+        if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index)
         {
           continue;
         }
 
-        RigidBody r1 = CPS.task_head.rigid_bodies[manifold.obb1_index];
-        RigidBody r2 = CPS.task_head.rigid_bodies[manifold.obb2_index];
+        RigidBody* rigid_bodies = (RigidBody*)(CPS.task_head.rigid_bodies);
+        RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+        RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
 
         daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
         daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
@@ -914,9 +960,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
           PGS.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction);
         }
 
-        CPS.task_head.collisions[manifold_index] = manifold;
-        CPS.task_head.rigid_bodies[manifold.obb1_index] = r1;
-        CPS.task_head.rigid_bodies[manifold.obb2_index] = r2;
+        // manifold + r1/r2 are pointers into the buffers; pre_step wrote contacts/velocity directly.
       }
     }
 
@@ -964,18 +1008,18 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   {
 #endif // BB_SIM_DEBUG
 
-    Manifold manifold =
-        CS.task_head.collisions[manifold_index];
+    Manifold* manifolds = (Manifold*)(CS.task_head.collisions);
+    Manifold* manifold = &manifolds[manifold_index];
 
-    if (manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
+    if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index)
     {
       continue;
     }
 
-    // printf("Solving collision %d, rigid_body_a %d, rigid_body_b %d cc: %d\n", m, manifold.obb1_index, manifold.obb2_index, manifold.contact_count);
-
-    RigidBody r1 = CS.task_head.rigid_bodies[manifold.obb1_index];
-    RigidBody r2 = CS.task_head.rigid_bodies[manifold.obb2_index];
+    // Raw `RigidBody*` (scalar layout) instead of value-copy through the daxa BufferPtr.
+    RigidBody* rigid_bodies = (RigidBody*)(CS.task_head.rigid_bodies);
+    RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+    RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
 
     daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
@@ -991,9 +1035,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       PGS.solve(manifold, r1, r2, accum_impulse, friction);
     }
 
-    CS.task_head.collisions[manifold_index] = manifold;
-    CS.task_head.rigid_bodies[manifold.obb1_index] = r1;
-    CS.task_head.rigid_bodies[manifold.obb2_index] = r2;
+    // manifold + r1/r2 are pointers into the buffers; solve wrote contacts/velocity directly.
   }
 }
 
@@ -1066,16 +1108,18 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   {
 #endif // BB_SIM_DEBUG
 
-    Manifold manifold =
-        CSR.task_head.collisions[manifold_index];
+    Manifold* manifolds = (Manifold*)(CSR.task_head.collisions);
+    Manifold* manifold = &manifolds[manifold_index];
 
-    if (manifold.obb1_index >= sim_config->rigid_body_count || manifold.obb2_index >= sim_config->rigid_body_count || manifold.obb1_index == manifold.obb2_index)
+    if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index)
     {
       continue;
     }
 
-    RigidBody r1 = CSR.task_head.rigid_bodies[manifold.obb1_index];
-    RigidBody r2 = CSR.task_head.rigid_bodies[manifold.obb2_index];
+    // Raw `RigidBody*` (scalar layout) instead of value-copy through the daxa BufferPtr.
+    RigidBody* rigid_bodies = (RigidBody*)(CSR.task_head.rigid_bodies);
+    RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+    RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
 
     daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
@@ -1087,9 +1131,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
     }
 
-    CSR.task_head.collisions[manifold_index] = manifold;
-    CSR.task_head.rigid_bodies[manifold.obb1_index] = r1;
-    CSR.task_head.rigid_bodies[manifold.obb2_index] = r2;
+    // manifold + r1/r2 are pointers into the buffers; solve wrote contacts/velocity directly.
   }
 }
 

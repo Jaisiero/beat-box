@@ -1,0 +1,60 @@
+diff --git a/cmake/deps.cmake b/cmake/deps.cmake
+index a1222ec1..b2febb08 100644
+--- a/cmake/deps.cmake
++++ b/cmake/deps.cmake
+@@ -94,7 +94,7 @@ if (DAXA_ENABLE_UTILS_IMGUI AND NOT TARGET imgui::imgui AND NOT TARGET implot::i
+ endif()
+ 
+ if (DAXA_ENABLE_UTILS_PIPELINE_MANAGER_SLANG AND NOT TARGET slang::slang)
+-    set(Slang_VERSION "2025.11")
++    set(Slang_VERSION "2026.10")
+     FetchContent_Declare(
+         slang
+         URL https://github.com/shader-slang/slang/releases/download/v${Slang_VERSION}/slang-${Slang_VERSION}-windows-x86_64.zip
+diff --git a/include/daxa/utils/task_graph.hpp b/include/daxa/utils/task_graph.hpp
+index a3b2064a..4222cc33 100644
+--- a/include/daxa/utils/task_graph.hpp
++++ b/include/daxa/utils/task_graph.hpp
+@@ -257,7 +257,7 @@ namespace daxa
+ 
+             if constexpr(!std::is_same_v<TaskHeadT, NoTaskHeadStruct>)
+             {
+-                *this = uses_head<TaskHeadT>();
++                *this = TInlineTask<NoTaskHeadStruct>(name, task_type).template uses_head<TaskHeadT>();
+             }
+         }
+         static auto Raster(std::string_view name) -> TInlineTask
+@@ -313,6 +313,24 @@ namespace daxa
+             this->value._internal._default_stage = other.value._internal._default_stage;
+             this->value._internal._queue = other.value._internal._queue;
+         }
++        TInlineTask & operator=(TInlineTask && other) noexcept
++        {
++            if (this != &other)
++            {
++                this->value.~InternalValue<Allow::NONE, TaskStages::NONE>();
++                new (this) TInlineTask(std::move(other));
++            }
++            return *this;
++        }
++        TInlineTask & operator=(TInlineTask const & other)
++        {
++            if (this != &other)
++            {
++                this->value.~InternalValue<Allow::NONE, TaskStages::NONE>();
++                new (this) TInlineTask(other);
++            }
++            return *this;
++        }
+ 
+       private:
+         // Implementation details:
+@@ -643,7 +661,7 @@ namespace daxa
+         auto uses(TaskAttachmentInfo const & inl_attachment) -> TInlineTaskPostAttachment &
+         {
+             value._internal._attachments.push_back(inl_attachment);
+-            return *this;
++            return *reinterpret_cast<TInlineTaskPostAttachment *>(this);
+         }
+ 
+         // task head interface:

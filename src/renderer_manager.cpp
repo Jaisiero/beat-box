@@ -1,4 +1,5 @@
 #include "renderer_manager.hpp"
+#include <iostream>
 
 BB_NAMESPACE_BEGIN
 
@@ -20,7 +21,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
 
     ray_tracing_config_host_buffer[f] = gpu->device.create_buffer({
         .size = sizeof(RayTracingConfig),
-        .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
         .name = "ray_tracing_config_host" + std::to_string(f),
     });
   }
@@ -49,7 +50,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
         auto const show_collisions = status_manager->is_showing_collisions();
         auto flags = accumulating ? RayTracingFlag::RT_ACCUMULATE : RayTracingFlag::RT_NONE;
         flags |= show_islands ? RayTracingFlag::RT_SHOW_ISLANDS : show_normals ? RayTracingFlag::RT_SHOW_NORMALS : show_collisions ? RayTracingFlag::RT_SHOW_COLLISIONS : RayTracingFlag::RT_NONE;
-        ti.device.buffer_host_address_as<RayTracingConfig>(ti.get(task_ray_tracing_config_host).ids[0]).value()[0] = RayTracingConfig{
+        ti.device.buffer_host_address_as<RayTracingConfig>(ti.get(task_ray_tracing_config_host).id).value()[0] = RayTracingConfig{
             .flags = flags,
             .max_bounces = MAX_BOUNCES,
             .current_frame_index = status_manager->get_frame_count(),
@@ -59,8 +60,8 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
         };
 
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = ti.get(task_ray_tracing_config_host).ids[0],
-            .dst_buffer = ti.get(task_ray_tracing_config).ids[0],
+            .src_buffer = ti.get(task_ray_tracing_config_host).id,
+            .dst_buffer = ti.get(task_ray_tracing_config).id,
             .size = sizeof(RayTracingConfig),
         });
       },
@@ -69,7 +70,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
 
   auto user_callback = [this, SBT](daxa::TaskInterface ti, auto &self)
   {
-    auto const image_info = ti.device.info_image(ti.get(RayTracingTaskHead::AT.swapchain).ids[0]).value();
+    auto const image_info = ti.device.image_info(ti.get(RayTracingTaskHead::AT.swapchain).id).value();
     ti.recorder.set_pipeline(*RT_pipeline->pipeline);
     ti.recorder.push_constant(RTPushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.trace_rays({
@@ -115,9 +116,8 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
         {
           // zero out the accumulation buffer
           ti.recorder.clear_image({
-              .dst_image_layout = daxa::ImageLayout::GENERAL,
-              .clear_value = {std::array<f32, 4>{0, 0, 0, 0}},
-              .dst_image = ti.get(task_accumulation_buffer).ids[0],
+              .image = ti.get(task_accumulation_buffer).id,
+              .clear_value = {std::array<f32, 4>{0.0f, 0.0f, 0.0f, 0.0f}},
           });
         }
       },
@@ -201,12 +201,12 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
     return false;
   }
 
-  task_swapchain_image.set_images({.images = std::array{swapchain_image}});
-  task_camera_buffer.set_buffers({.buffers = std::array{cam_mngr.camera_buffer}});
-  task_ray_tracing_config.set_buffers({.buffers = std::array{ray_tracing_config_buffer[get_frame_index()]}});
-  task_ray_tracing_config_host.set_buffers({.buffers = std::array{ray_tracing_config_host_buffer[get_frame_index()]}});
-  task_accumulation_buffer.set_images({.images = std::array{accumulation_buffer}});
-  task_stbn_texture.set_images({.images = std::array{image_manager->get_spatiotemporal_blue_noise_image()}});
+  task_swapchain_image.set_image(swapchain_image);
+  task_camera_buffer.set_buffer(cam_mngr.camera_buffer);
+  task_ray_tracing_config.set_buffer(ray_tracing_config_buffer[get_frame_index()]);
+  task_ray_tracing_config_host.set_buffer(ray_tracing_config_host_buffer[get_frame_index()]);
+  task_accumulation_buffer.set_image(accumulation_buffer);
+  task_stbn_texture.set_image(image_manager->get_spatiotemporal_blue_noise_image());
 
   return true;
 }
@@ -222,7 +222,7 @@ void RendererManager::render()
       rigid_body_manager->clean_dirty();
       rigid_body_manager->update_sim();
     }
-    
+
     // Simulate rigid bodies
     if(status_manager->is_simulating()) {
       rigid_body_manager->simulate();
@@ -277,12 +277,12 @@ void RendererManager::render()
     auto swapchain_image = gpu->swapchain_acquire_next_image();
     if (!swapchain_image.is_empty())
     {
-      handle_reload_result(task_manager->reload(), RT_pipeline, this);
+      // TODO: re-enable hot-reload once migration is stable
+      // handle_reload_result(task_manager->reload(), RT_pipeline, this);
       camera_manager->update(gpu->swapchain_get_extent());
       update_resources(swapchain_image, *camera_manager);
       execute();
       gpu->garbage_collector();
-
       status_manager->next_frame();
     }
   }

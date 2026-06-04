@@ -37,7 +37,7 @@
       }
     },
     {
-      "name": "Debug",
+      "name": "Debug-Linux",
       "description": "Debug configuration",
       "hidden": false,
       "generator": "Ninja",
@@ -52,7 +52,7 @@
       }
     },
     {
-      "name": "Release",
+      "name": "Release-Linux",
       "description": "Release configuration",
       "hidden": false,
       "generator": "Ninja",

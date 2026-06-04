@@ -54,23 +54,23 @@ extension RigidBody
     this.omega += angular_velocity;
   }
 
-  daxa_f32vec3 get_velocity_at(daxa_f32vec3 point)
+  [mutating] daxa_f32vec3 get_velocity_at(daxa_f32vec3 point)
   {
     return this.velocity - cross(point - this.position, this.omega);
   }
 
-  daxa_f32mat3x3 get_transformed_inertia()
+  [mutating] daxa_f32mat3x3 get_transformed_inertia()
   {
     daxa_f32mat3x3 rotation_matrix = get_rotation_matrix();
     return mul(rotation_matrix, mul(inv_inertia, transpose(rotation_matrix)));
   }
 
-  Aabb get_AABB()
+  [mutating] Aabb get_AABB()
   {
     return Aabb(minimum, maximum);
   }
 
-  Aabb get_AABB_from_OBB()
+  [mutating] Aabb get_AABB_from_OBB()
   {
     Aabb aabb = get_AABB();
 

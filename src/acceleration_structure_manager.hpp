@@ -108,6 +108,9 @@ private:
 
   // Buffer for the LBVH BLAS
   daxa::BlasId lbvh_blas[DOUBLE_BUFFERING] = {};
+  
+  // Placeholder BLAS to prevent task graph compiler crashes
+  daxa::BlasId placeholder_blas = {};
 
   // Buffer for the TLAS
   daxa::BufferId proc_tlas_buffer = {};

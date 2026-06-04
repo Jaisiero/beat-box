@@ -4,6 +4,7 @@
 #include "gpu_context.hpp"
 #include "acceleration_structure_manager.hpp"
 #include "rigid_body_manager.hpp"
+#include <iostream>
 
 BB_NAMESPACE_BEGIN
 
@@ -40,10 +41,19 @@ struct StatusManager
     
     dispatch_buffer = gpu->device.create_buffer({
         .size = sizeof(DispatchBuffer),
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
         .name = "RB_dispatch_buffer",
     });
 
-    // *gpu->device.buffer_host_address_as<DispatchBuffer>(dispatch_buffer).value() = DispatchBuffer(daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u), daxa_u32vec3(1u, 1u, 1u));
+    *gpu->device.buffer_host_address_as<DispatchBuffer>(dispatch_buffer).value() = DispatchBuffer{
+        .rigid_body_dispatch         = daxa_u32vec3(1u, 1u, 1u),
+        .island_dispatch             = daxa_u32vec3(1u, 1u, 1u),
+        .active_rigid_body_dispatch  = daxa_u32vec3(1u, 1u, 1u),
+        .collision_dispatch          = daxa_u32vec3(1u, 1u, 1u),
+        .contact_island_dispatch     = daxa_u32vec3(1u, 1u, 1u),
+        .radix_sort_rigid_body_dispatch = daxa_u32vec3(1u, 1u, 1u),
+        .narrow_phase_dispatch       = daxa_u32vec3(1u, 1u, 1u),
+    };
 
     // Link resources
     accel_struct_mngr->update_TLAS_resources(dispatch_buffer);
@@ -301,7 +311,7 @@ private:
   // flag for initialization
   bool initialized = false;
   // flag for simulation
-  bool simulating = true;
+  bool simulating = false;
   // update simulation buffer
   bool update_sim_buffer = false;
   // flag for gui

@@ -19,14 +19,17 @@
   RigidBodyEntry re =
       UI.task_head.rigid_body_map[index];
 
-  RigidBody r =
-      UI.task_head.rigid_bodies[re.index];
+  // Access through a raw `RigidBody*` (scalar layout). Value-copying the whole struct
+  // through the daxa BufferPtr pads vec3 members and corrupts `position`/rotation, which
+  // produced wrong instance transforms (rendered cubes vanished from view).
+  RigidBody* rigid_bodies = (RigidBody*)(UI.task_head.rigid_bodies);
+  RigidBody* r = &rigid_bodies[re.index];
 
-  daxa_BlasInstanceData* instance = (daxa_BlasInstanceData*)(&UI.task_head.blas_instance_data[r.id]);
+  daxa_BlasInstanceData* instance = (daxa_BlasInstanceData*)(&UI.task_head.blas_instance_data[r->id]);
 
-  instance->instance_custom_index = r.id;
+  instance->instance_custom_index = r->id;
   instance->mask = 0xFF;
   instance->instance_shader_binding_table_record_offset = 0;
   instance->flags = 0;
-  instance->transform = r.get_instance_transform();
+  instance->transform = r->get_instance_transform();
 }

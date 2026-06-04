@@ -4,6 +4,69 @@
 #include "daxa/daxa.inl"
 #include "daxa/utils/task_graph.inl"
 
+#if !defined(DAXA_SHADERLANG)
+#define DAXA_SHADERLANG DAXA_LANGUAGE
+#endif
+
+#if !defined(DAXA_SHADERLANG_SLANG)
+#define DAXA_SHADERLANG_SLANG DAXA_LANGUAGE_SLANG
+#endif
+
+#if defined(__cplusplus)
+namespace daxa
+{
+namespace TaskAccessConsts
+{
+static constexpr TaskAccess RAY_TRACING_SHADER_READ = RAY_TRACING_SHADER::READ;
+static constexpr TaskAccess RAY_TRACING_SHADER_READ_WRITE = RAY_TRACING_SHADER::READ_WRITE;
+static constexpr TaskAccess RAY_TRACING_SHADER_STORAGE_READ_ONLY = RAY_TRACING_SHADER::READ;
+static constexpr TaskAccess RAY_TRACING_SHADER_STORAGE_WRITE_ONLY = RAY_TRACING_SHADER::WRITE;
+static constexpr TaskAccess VERTEX_SHADER_READ = VERTEX_SHADER::READ;
+static constexpr TaskAccess COMPUTE_SHADER_READ = COMPUTE_SHADER::READ;
+static constexpr TaskAccess COMPUTE_SHADER_READ_WRITE = COMPUTE_SHADER::READ_WRITE;
+static constexpr TaskAccess COMPUTE_SHADER_READ_WRITE_CONCURRENT = COMPUTE_SHADER::READ_WRITE_CONCURRENT;
+static constexpr TaskAccess COMPUTE_SHADER_STORAGE_WRITE_ONLY = COMPUTE_SHADER::WRITE;
+static constexpr TaskAccess TRANSFER_READ = TRANSFER::READ;
+static constexpr TaskAccess TRANSFER_WRITE = TRANSFER::WRITE;
+static constexpr TaskAccess TRANSFER_READ_WRITE = TRANSFER::READ_WRITE;
+static constexpr TaskAccess BUILD_READ = ACCELERATION_STRUCTURE_BUILD::READ;
+static constexpr TaskAccess BUILD_WRITE = ACCELERATION_STRUCTURE_BUILD::WRITE;
+} // namespace TaskAccessConsts
+
+struct TaskBufferAccess
+{
+  static constexpr TaskAccess TRANSFER_READ = TaskAccessConsts::TRANSFER::READ;
+  static constexpr TaskAccess TRANSFER_WRITE = TaskAccessConsts::TRANSFER::WRITE;
+  static constexpr TaskAccess TRANSFER_READ_WRITE = TaskAccessConsts::TRANSFER::READ_WRITE;
+  static constexpr TaskAccess COMPUTE_SHADER_READ = TaskAccessConsts::COMPUTE_SHADER::READ;
+  static constexpr TaskAccess COMPUTE_SHADER_READ_WRITE = TaskAccessConsts::COMPUTE_SHADER::READ_WRITE;
+  static constexpr TaskAccess RAY_TRACING_SHADER_READ = TaskAccessConsts::RAY_TRACING_SHADER::READ;
+  static constexpr TaskAccess RAY_TRACING_SHADER_READ_WRITE = TaskAccessConsts::RAY_TRACING_SHADER::READ_WRITE;
+};
+
+struct TaskImageAccess
+{
+  static constexpr TaskAccess TRANSFER_READ = TaskAccessConsts::TRANSFER::READ;
+  static constexpr TaskAccess TRANSFER_WRITE = TaskAccessConsts::TRANSFER::WRITE;
+  static constexpr TaskAccess TRANSFER_READ_WRITE = TaskAccessConsts::TRANSFER::READ_WRITE;
+  static constexpr TaskAccess COMPUTE_SHADER_STORAGE_WRITE_ONLY = TaskAccessConsts::COMPUTE_SHADER::WRITE;
+  static constexpr TaskAccess RAY_TRACING_SHADER_STORAGE_WRITE_ONLY = TaskAccessConsts::RAY_TRACING_SHADER::WRITE;
+};
+
+struct TaskBlasAccess
+{
+  static constexpr TaskAccess BUILD_READ = TaskAccessConsts::ACCELERATION_STRUCTURE_BUILD::READ;
+  static constexpr TaskAccess BUILD_WRITE = TaskAccessConsts::ACCELERATION_STRUCTURE_BUILD::WRITE;
+};
+
+struct TaskTlasAccess
+{
+  static constexpr TaskAccess BUILD_READ = TaskAccessConsts::ACCELERATION_STRUCTURE_BUILD::READ;
+  static constexpr TaskAccess BUILD_WRITE = TaskAccessConsts::ACCELERATION_STRUCTURE_BUILD::WRITE;
+};
+}
+#endif
+
 #include <math.hpp>
 
 static const daxa_f32 LINEAR_DAMPING = 0.1f;
@@ -15,8 +78,8 @@ static const daxa_f32 PENETRATION_FACTOR = 0.01f;
 static const daxa_f32 BIAS_FACTOR = 0.2f;
 
 #define BB_DEBUG 1
-#if defined(BB_DEBUG) 
-// #define BB_RT_DEBUG 1  
+#if defined(BB_DEBUG)
+// #define BB_RT_DEBUG 1
 // #define BB_SIM_DEBUG 1
 #endif // BB_DEBUG
 
@@ -245,6 +308,20 @@ struct RayTracingConfig {
 DAXA_DECL_BUFFER_PTR(RayTracingConfig)
 
 
+// In Slang, a non-[mutating] method receives `this` BY VALUE: a whole-struct load
+// through the daxa buffer pointer. Daxa 3.6 lays that load out with vec3 padded to
+// 16 bytes, so every field after the first vec3 (rotation, minimum, maximum,
+// velocity, omega, inv_inertia) is read from the wrong offset -> corrupted rotation
+// matrices, extents and inertia (breaking narrow-phase SAT and the solver).
+// BB_REF marks a read-only method [mutating] so `this` is passed by reference and
+// fields are read with the correct scalar layout. In C++ the attribute is dropped
+// (C++ has no such layout hazard and these methods are already non-const).
+#if defined(__cplusplus)
+#define BB_REF
+#else
+#define BB_REF [mutating]
+#endif
+
 struct RigidBody
 {
   daxa_u32 id;
@@ -273,7 +350,7 @@ struct RigidBody
   // daxa_f32 drag;
   // daxa_f32 angular_drag;
 
-  daxa_f32mat3x3 get_rotation_matrix()
+  BB_REF daxa_f32mat3x3 get_rotation_matrix()
   {
 #if defined(__cplusplus)
     return rotation.to_matrix();
@@ -283,7 +360,7 @@ struct RigidBody
 #endif // defined(__cplusplus)
   }
 
-  daxa_f32mat4x4 get_transform_matrix()
+  BB_REF daxa_f32mat4x4 get_transform_matrix()
   {
     daxa_f32vec3 translation = position;
     daxa_f32mat3x3 rotation_matrix = rotation.to_matrix();
@@ -302,22 +379,22 @@ struct RigidBody
 #endif // defined(__cplusplus)
   }
 
-  daxa_f32 get_half_size(daxa_u32 index)
+  BB_REF daxa_f32 get_half_size(daxa_u32 index)
   {
     daxa_f32vec3 size = (maximum - minimum) * 0.5f;
     return index == 0 ? size.x : (index == 1 ? size.y : size.z);
   }
 
-  daxa_f32vec3 get_center() {
+  BB_REF daxa_f32vec3 get_center() {
     return (maximum + minimum) * 0.5f;
   }
 
-  daxa_f32vec3 half_extent() {
+  BB_REF daxa_f32vec3 half_extent() {
     return (maximum - minimum) * 0.5f;
   }
 
 
-  daxa_f32mat3x4 get_instance_transform() {
+  BB_REF daxa_f32mat3x4 get_instance_transform() {
     daxa_f32mat4x4 transform = get_transform_matrix();
 #if defined(__cplusplus)
     return daxa_f32mat3x4(transform.x, transform.y, transform.z);
@@ -353,22 +430,26 @@ struct RigidBody
     this.flags &= ~flag;
   }
   
-  daxa_f32vec3 rotate_vector(const daxa_f32vec3 v)
+  // [mutating] => `this` is passed by reference, not by value. A by-value `this`
+  // triggers a whole-struct load through the daxa buffer pointer, which Daxa 3.6
+  // pads vec3->16 (corrupting rotation/position). By-ref reads fields with the
+  // correct scalar layout. (Method does not actually mutate.)
+  [mutating] daxa_f32vec3 rotate_vector(const daxa_f32vec3 v)
   {
     return (rotation * Quaternion(v, 0) * rotation.conjugate()).v;
   }
 
-  daxa_f32vec3 rotate_vector_inverse(const daxa_f32vec3 v)
+  [mutating] daxa_f32vec3 rotate_vector_inverse(const daxa_f32vec3 v)
   {
     return (rotation.conjugate() * Quaternion(v, 0) * rotation).v;
   }
 
-  daxa_f32vec3 object_to_world(const daxa_f32vec3 v)
+  [mutating] daxa_f32vec3 object_to_world(const daxa_f32vec3 v)
   {
     return rotate_vector(v) + this.position;
   }
 
-  daxa_f32vec3 world_to_object(const daxa_f32vec3 v)
+  [mutating] daxa_f32vec3 world_to_object(const daxa_f32vec3 v)
   {
     return rotate_vector_inverse(v - this.position);
   }
@@ -482,8 +563,12 @@ struct SimConfig
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
-  daxa_u64 frame_count;
   GlobalCollisionInfo g_c_info;
+  // Keep the daxa_u64 LAST: a u64 in the middle forces 8-byte alignment whose
+  // padding Slang's scalar layout and C++ can disagree on, shifting every field
+  // after it (g_c_info.collision_count in particular). With the u64 last, all
+  // count fields + g_c_info land at offsets shared by C++ and the shader.
+  daxa_u64 frame_count;
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
   [mutating] bool has_flag(SimFlag flag)
   {
@@ -590,10 +675,15 @@ struct LBVHNode
 };
 DAXA_DECL_BUFFER_PTR(LBVHNode)
 
-struct LBVHConstructionInfo 
+struct LBVHConstructionInfo
 {
   daxa::u32 parent; // pointer to parent node
   daxa::u32 visitation_count; // number of times the node has been visited
+  // Order-preserving-mapped AABB bounds, used to merge node AABBs across workgroups
+  // with portable integer atomics (InterlockedMin/Max) instead of coherent pointer
+  // loads, which Slang does not support (shader-slang/slang#3870).
+  daxa_u32vec3 bound_min; // avoid member names min/max (windows.h macro trap)
+  daxa_u32vec3 bound_max;
 };
 DAXA_DECL_BUFFER_PTR(LBVHConstructionInfo)
 
@@ -663,7 +753,7 @@ DAXA_DECL_BUFFER_PTR(ContactIsland)
 
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
@@ -739,6 +829,21 @@ struct RigidBodyBuildBoundingBoxesLBVHPushConstants
   DAXA_TH_BLOB(RigidBodyBuildBoundingBoxesLinearBVHTaskHead, task_head)
 };
 
+// CONVERT BOUNDING BOXES LBVH: integer-mapped bounds in lbvh_construction_info ->
+// float AABBs in lbvh_nodes. Separate pass because the merge accumulates bounds with
+// integer atomics (portable, no coherent pointer loads needed — slang#3870).
+DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyConvertBoundingBoxesLinearBVHTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(LBVHNode), lbvh_nodes)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(LBVHConstructionInfo), lbvh_construction_info)
+DAXA_DECL_TASK_HEAD_END
+
+struct RigidBodyConvertBoundingBoxesLBVHPushConstants
+{
+  DAXA_TH_BLOB(RigidBodyConvertBoundingBoxesLinearBVHTaskHead, task_head)
+};
+
 struct RigidBodyEntry
 {
   daxa_u32 index;
@@ -796,7 +901,7 @@ struct BroadPhasePushConstants
 
 // NARROW PHASE DISPATCHER
 DAXA_DECL_TASK_HEAD_BEGIN(NarrowPhaseDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
@@ -837,7 +942,7 @@ struct NarrowPhasePushConstants
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
@@ -873,7 +978,7 @@ struct IslandCounterPushConstants
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(IslandDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
@@ -961,7 +1066,7 @@ struct ContactIslandGatherPushConstants
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(ContactIslandDispatcherTaskHead)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE_CONCURRENT, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
@@ -1014,7 +1119,7 @@ struct IslandBuilderSortManifoldLinkInIslandPushConstants
 
 // SOLVER
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionPreSolverTaskHead)
-DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(CollisionEntry), collision_map)
@@ -1029,7 +1134,7 @@ struct CollisionPreSolverPushConstants
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverTaskHead)
-DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(CollisionEntry), collision_map)
@@ -1044,7 +1149,7 @@ struct CollisionSolverPushConstants
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(IntegratePositionsTaskHead)
-DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_DECL_TASK_HEAD_END
@@ -1055,7 +1160,7 @@ struct RigidBodyIntegratePositionsPushConstants
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverRelaxationTaskHead)
-DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(CollisionEntry), collision_map)
@@ -1070,9 +1175,12 @@ struct CollisionSolverRelaxationPushConstants
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyUpdateTaskHead)
-DAXA_TH_BUFFER_PTR(READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+// rigid_bodies is READ-ONLY here (the shader only reads it; it writes the separate
+// rigid_bodies_update buffer). Declaring it READ_WRITE made the task graph think this
+// pass overwrites rigid_bodies -> false WAW with the solver -> solver writes culled.
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies_update)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(GUIVertexLine), axes_vertex_buffer)
 DAXA_DECL_TASK_HEAD_END

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.19)
+cmake_minimum_required(VERSION 3.21)
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/deps.cmake")
 
@@ -16,13 +16,49 @@ endforeach()
 
 add_executable(${PROJECT_NAME} ${SRCS})
 
+# RigidBodyManager::create() instantiates dozens of large task objects as locals in a
+# single function, producing a very large stack frame. The default 1 MB stack overflows
+# on entry (STATUS_STACK_OVERFLOW). Give the main thread generous headroom.
+if (MSVC)
+    target_link_options(${PROJECT_NAME} PRIVATE /STACK:33554432) # 32 MB
+else()
+    target_link_options(${PROJECT_NAME} PRIVATE -Wl,-z,stacksize=33554432)
+endif()
+
 target_include_directories(${PROJECT_NAME} PUBLIC include)
 
 find_package(glfw3 CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE glfw)
 
-find_package(daxa CONFIG REQUIRED)
+set(DAXA_ENABLE_UTILS_MEM ON CACHE BOOL "" FORCE)
+set(DAXA_ENABLE_UTILS_IMGUI ON CACHE BOOL "" FORCE)
+set(DAXA_ENABLE_UTILS_PIPELINE_MANAGER_SLANG ON CACHE BOOL "" FORCE)
+set(DAXA_ENABLE_UTILS_TASK_GRAPH ON CACHE BOOL "" FORCE)
+set(DAXA_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(DAXA_ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
+add_subdirectory("${PROJECT_SOURCE_DIR}/lib/Daxa" "${PROJECT_BINARY_DIR}/Daxa")
 target_link_libraries(${PROJECT_NAME} PRIVATE daxa::daxa)
+
+if (WIN32)
+    FetchContent_GetProperties(slang)
+    # Automatically copy all Slang bin files (DLLs, executables, and standard library) to the target executable directory
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${slang_SOURCE_DIR}/bin"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMENT "Copying Slang compiler binaries and standard libraries to target directory..."
+    )
+endif()
+
+# Copy assets to the build output directory so they are available when running from there
+if (EXISTS "${PROJECT_SOURCE_DIR}/assets")
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/assets"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/assets"
+        COMMENT "Copying assets to target directory..."
+    )
+endif()
 
 find_package(glm CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE glm::glm)

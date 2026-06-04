@@ -10,23 +10,37 @@ BB_NAMESPACE_BEGIN
 
 class RendererManager;
 
-struct GUIDrawTask : GUITaskHead::Task
+struct GUIDrawTask
 {
-  AttachmentViews views = {};
+  std::array<daxa::TaggedTaskView, GUITaskHead::ATTACHMENT_COUNT> views = {};
   std::shared_ptr<daxa::RasterPipeline> gui_pipeline = {};
   std::shared_ptr<RigidBodyManager> rigid_body_manager = {};
   std::shared_ptr<StatusManager> status_manager = {};
+
+  [[nodiscard]] auto as_inline_task() const -> GUITaskHead::Task
+  {
+    auto ret = GUITaskHead::Task{GUITaskHead::NAME, GUITaskHead::TYPE};
+    ret.head_views(daxa::make_attachment_views<GUITaskHead::AttachmentViews>(views));
+    auto *callback = daxa::retain_task_callback([self = *this](daxa::TaskInterface const &ti) mutable
+    {
+      auto ti_copy = ti;
+      self.callback(ti_copy);
+    });
+    ret.executes([callback](daxa::TaskInterface ti) { (*callback)(ti); });
+    return ret;
+  }
+
   void callback(daxa::TaskInterface ti)
   {
     if(status_manager->is_gui_enabled()) {
-      daxa::ImageInfo color_img_info = ti.info(AT.render_target).value();
+      daxa::ImageInfo color_img_info = ti.info(GUITaskHead::AT.render_target).value();
       auto const size_x = color_img_info.size.x;
       auto const size_y = color_img_info.size.y;
       auto& sim_config = rigid_body_manager->get_sim_config_reference();
       auto render_recorder = std::move(ti.recorder).begin_renderpass({
         .color_attachments = std::array{
           daxa::RenderAttachmentInfo{
-            .image_view = ti.get(GUITaskHead::AT.render_target).ids[0],
+            .image_view = ti.get(GUITaskHead::AT.render_target).view_ids[0],
             .load_op = daxa::AttachmentLoadOp::LOAD,
           }
         },
@@ -43,23 +57,37 @@ struct GUIDrawTask : GUITaskHead::Task
   }
 };
 
-struct GUILineDrawTask : GUILineTaskHead::Task
+struct GUILineDrawTask
 {
-  AttachmentViews views = {};
+  std::array<daxa::TaggedTaskView, GUILineTaskHead::ATTACHMENT_COUNT> views = {};
   std::shared_ptr<daxa::RasterPipeline> gui_pipeline = {};
   std::shared_ptr<RigidBodyManager> rigid_body_manager = {};
   std::shared_ptr<StatusManager> status_manager = {};
+
+  [[nodiscard]] auto as_inline_task() const -> GUILineTaskHead::Task
+  {
+    auto ret = GUILineTaskHead::Task{GUILineTaskHead::NAME, GUILineTaskHead::TYPE};
+    ret.head_views(daxa::make_attachment_views<GUILineTaskHead::AttachmentViews>(views));
+    auto *callback = daxa::retain_task_callback([self = *this](daxa::TaskInterface const &ti) mutable
+    {
+      auto ti_copy = ti;
+      self.callback(ti_copy);
+    });
+    ret.executes([callback](daxa::TaskInterface ti) { (*callback)(ti); });
+    return ret;
+  }
+
   void callback(daxa::TaskInterface ti)
   {
     if(status_manager->is_gui_enabled()) {
-      daxa::ImageInfo color_img_info = ti.info(AT.render_target).value();
+      daxa::ImageInfo color_img_info = ti.info(GUILineTaskHead::AT.render_target).value();
       auto const size_x = color_img_info.size.x;
       auto const size_y = color_img_info.size.y;
       auto& sim_config = rigid_body_manager->get_sim_config_reference();
       auto render_recorder = std::move(ti.recorder).begin_renderpass({
         .color_attachments = std::array{
           daxa::RenderAttachmentInfo{
-            .image_view = ti.get(GUILineTaskHead::AT.render_target).ids[0],
+            .image_view = ti.get(GUILineTaskHead::AT.render_target).view_ids[0],
             .load_op = daxa::AttachmentLoadOp::LOAD,
           }
         },
@@ -77,23 +105,37 @@ struct GUILineDrawTask : GUILineTaskHead::Task
 };
 
 
-struct GUIAxesDrawTask : GUIAxesTaskHead::Task
+struct GUIAxesDrawTask
 {
-  AttachmentViews views = {};
+  std::array<daxa::TaggedTaskView, GUIAxesTaskHead::ATTACHMENT_COUNT> views = {};
   std::shared_ptr<daxa::RasterPipeline> gui_pipeline = {};
   std::shared_ptr<RigidBodyManager> rigid_body_manager = {};
   std::shared_ptr<StatusManager> status_manager = {};
+
+  [[nodiscard]] auto as_inline_task() const -> GUIAxesTaskHead::Task
+  {
+    auto ret = GUIAxesTaskHead::Task{GUIAxesTaskHead::NAME, GUIAxesTaskHead::TYPE};
+    ret.head_views(daxa::make_attachment_views<GUIAxesTaskHead::AttachmentViews>(views));
+    auto *callback = daxa::retain_task_callback([self = *this](daxa::TaskInterface const &ti) mutable
+    {
+      auto ti_copy = ti;
+      self.callback(ti_copy);
+    });
+    ret.executes([callback](daxa::TaskInterface ti) { (*callback)(ti); });
+    return ret;
+  }
+
   void callback(daxa::TaskInterface ti)
   {
     if(status_manager->is_gui_enabled() && status_manager->is_axis_enabled()) {
-      daxa::ImageInfo color_img_info = ti.info(AT.render_target).value();
+      daxa::ImageInfo color_img_info = ti.info(GUIAxesTaskHead::AT.render_target).value();
       auto const size_x = color_img_info.size.x;
       auto const size_y = color_img_info.size.y;
       auto& sim_config = rigid_body_manager->get_sim_config_reference();
       auto render_recorder = std::move(ti.recorder).begin_renderpass({
         .color_attachments = std::array{
           daxa::RenderAttachmentInfo{
-            .image_view = ti.get(GUIAxesTaskHead::AT.render_target).ids[0],
+            .image_view = ti.get(GUIAxesTaskHead::AT.render_target).view_ids[0],
             .load_op = daxa::AttachmentLoadOp::LOAD,
           }
         },
@@ -132,9 +174,9 @@ struct GUIManager
   // vertex buffer
   daxa::BufferId vertex_buffer[DOUBLE_BUFFERING];
   // vertex task buffer
-  daxa::TaskBuffer task_vertex_buffer{{.initial_buffers = {}, .name = "GUI task vertex buffer"}};
+  daxa::TaskBuffer task_vertex_buffer{{.buffer = {}, .name = "GUI task vertex buffer"}};
   // previous vertex task buffer
-  daxa::TaskBuffer task_previous_vertex_buffer{{.initial_buffers = {}, .name = "GUI task previous vertex buffer"}};
+  daxa::TaskBuffer task_previous_vertex_buffer{{.buffer = {}, .name = "GUI task previous vertex buffer"}};
 
   
   // Raster pipeline for the GUI lines
@@ -144,9 +186,9 @@ struct GUIManager
   // vertex buffer
   daxa::BufferId vertex_line_buffer[DOUBLE_BUFFERING];
   // vertex task buffer
-  daxa::TaskBuffer task_line_vertex_buffer{{.initial_buffers = {}, .name = "GUI line task vertex buffer"}};
+  daxa::TaskBuffer task_line_vertex_buffer{{.buffer = {}, .name = "GUI line task vertex buffer"}};
   // previous vertex task buffer
-  daxa::TaskBuffer task_previous_line_vertex_buffer{{.initial_buffers = {}, .name = "GUI line task previous vertex buffer"}};
+  daxa::TaskBuffer task_previous_line_vertex_buffer{{.buffer = {}, .name = "GUI line task previous vertex buffer"}};
 
 
   // Raster pipeline for the GUI axes
@@ -156,9 +198,9 @@ struct GUIManager
   // vertex buffer
   daxa::BufferId axes_vertex_buffer[DOUBLE_BUFFERING];
   // vertex task buffer
-  daxa::TaskBuffer task_axes_vertex_buffer{{.initial_buffers = {}, .name = "GUI axes task vertex buffer"}};
+  daxa::TaskBuffer task_axes_vertex_buffer{{.buffer = {}, .name = "GUI axes task vertex buffer"}};
   // previous vertex task buffer
-  daxa::TaskBuffer task_previous_axes_vertex_buffer{{.initial_buffers = {}, .name = "GUI axes task previous vertex buffer"}};
+  daxa::TaskBuffer task_previous_axes_vertex_buffer{{.buffer = {}, .name = "GUI axes task previous vertex buffer"}};
 
   explicit GUIManager(std::shared_ptr<GPUcontext> gpu, WindowManager& window, std::shared_ptr<TaskManager> task_manager, std::shared_ptr<RigidBodyManager> rigid_body_manager) : gpu(gpu), window(window), task_manager(task_manager), rigid_body_manager(rigid_body_manager) {
   }

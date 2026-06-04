@@ -1,6 +1,7 @@
 #pragma once
 #include "defines.hpp"
 #include <map>
+#include <string>
 #include <variant>
 #include "gpu_context.hpp"
 
@@ -10,33 +11,36 @@ template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 template <typename TaskType, typename Callback>
-struct TaskTemplate : public TaskType
+struct TaskTemplate;
+
+template <typename HeadInfo, typename Callback>
+struct TaskTemplate<daxa::TInlineTask<HeadInfo>, Callback> : public daxa::TInlineTask<HeadInfo>
 {
-  using AttachmentViews = typename TaskType::AttachmentViews;
+  using Base = daxa::TInlineTask<HeadInfo>;
+  using AttachmentViews = typename HeadInfo::AttachmentViews;
 
-  // Stores the attachment views
-  AttachmentViews views = {};
-
-  // The user-defined callback function
   Callback user_callback;
 
-  // Constructor to set up views and user-defined callback
-  TaskTemplate(
-      AttachmentViews const &views_,
-      Callback user_callback_)
-      : views(views_), user_callback(user_callback_) {}
-
-  // Defaulted copy and move constructors and assignment operators
-  TaskTemplate(const TaskTemplate&) = default;
-  TaskTemplate& operator=(const TaskTemplate&) = default;
-  TaskTemplate(TaskTemplate&&) noexcept = default;
-  TaskTemplate& operator=(TaskTemplate&&) noexcept = default;
-
-  // The callback function called by the task graph
-  void callback(daxa::TaskInterface ti)
+  template <std::size_t N>
+  TaskTemplate(std::array<daxa::TaggedTaskView, N> const &views_, Callback user_callback_)
+      : Base(HeadInfo::NAME, HeadInfo::TYPE), user_callback(user_callback_)
   {
-    // Call the user-defined callback function, passing in 'this' as 'self'
-    user_callback(ti, *this);
+    this->head_views(daxa::make_attachment_views<AttachmentViews>(views_));
+    auto *callback = daxa::retain_task_callback([callback = user_callback](daxa::TaskInterface const &ti) mutable
+    {
+      auto ti_copy = ti;
+      auto self = daxa::NoTaskHeadStruct{};
+      callback(ti_copy, self);
+    });
+    this->executes([callback](daxa::TaskInterface ti)
+    {
+      (*callback)(ti);
+    });
+  }
+
+  [[nodiscard]] auto as_inline_task() const -> Base const &
+  {
+    return *this;
   }
 };
 
@@ -46,7 +50,7 @@ inline void allocate_fill_copy(daxa::TaskInterface ti, T value, daxa::TaskBuffer
     auto alloc = ti.allocator->allocate_fill(value).value();
     ti.recorder.copy_buffer_to_buffer({
         .src_buffer = ti.allocator->buffer(),
-        .dst_buffer = dst.ids[0],
+        .dst_buffer = dst.id,
         .src_offset = alloc.buffer_offset,
         .dst_offset = dst_offset,
         .size = sizeof(T),
@@ -61,7 +65,7 @@ inline void allocate_fill_copy(daxa::TaskInterface ti, std::vector<T> value, dax
   memcpy(alloc.host_address, value.data(),size);
   ti.recorder.copy_buffer_to_buffer({
       .src_buffer = ti.allocator->buffer(),
-      .dst_buffer = dst.ids[0],
+      .dst_buffer = dst.id,
       .src_offset = alloc.buffer_offset,
       .dst_offset = dst_offset,
       .size = size,
@@ -85,10 +89,10 @@ FORCE_INLINE std::filesystem::path debug_path{
 struct TaskGraph
 {
   daxa::TaskGraph task_graph;
-  std::map<daxa::SmallString, daxa::TaskBuffer> task_buffers;
-  std::map<daxa::SmallString, daxa::TaskImage> task_images;
-  std::map<daxa::SmallString, daxa::TaskTlas> task_tlas;
-  std::map<daxa::SmallString, daxa::TaskBlas> task_blas;
+  std::map<std::string, daxa::TaskBuffer> task_buffers;
+  std::map<std::string, daxa::TaskImage> task_images;
+  std::map<std::string, daxa::TaskTlas> task_tlas;
+  std::map<std::string, daxa::TaskBlas> task_blas;
 
   TaskGraph() = default;
 
@@ -98,7 +102,18 @@ struct TaskGraph
 
   void add_task(auto task)
   {
-    task_graph.add_task(task);
+    if constexpr (requires { task.as_inline_task(); })
+    {
+      task_graph.add_task(task.as_inline_task());
+    }
+    else if constexpr (std::is_same_v<std::decay_t<decltype(task)>, daxa::InlineTaskInfo>)
+    {
+      task_graph.add_task(task.to_inline_task());
+    }
+    else
+    {
+      task_graph.add_task(task);
+    }
   }
 
   void submit()
@@ -121,28 +136,28 @@ struct TaskGraph
     task_graph.execute({});
   }
 
-  void add_buffer(daxa::SmallString name, daxa::TaskBuffer buffer)
+  void add_buffer(std::string_view name, daxa::TaskBuffer buffer)
   {
-    task_buffers[name] = buffer;
-    task_graph.use_persistent_buffer(buffer);
+    task_buffers[std::string{name}] = buffer;
+    task_graph.register_buffer(buffer);
   }
 
-  void add_image(daxa::SmallString name, daxa::TaskImage image)
+  void add_image(std::string_view name, daxa::TaskImage image)
   {
-    task_images[name] = image;
-    task_graph.use_persistent_image(image);
+    task_images[std::string{name}] = image;
+    task_graph.register_image(image);
   }
 
-  void add_tlas(daxa::SmallString name, daxa::TaskTlas tlas)
+  void add_tlas(std::string_view name, daxa::TaskTlas tlas)
   {
-    task_tlas[name] = tlas;
-    task_graph.use_persistent_tlas(tlas);
+    task_tlas[std::string{name}] = tlas;
+    task_graph.register_tlas(tlas);
   }
 
-  void add_blas(daxa::SmallString name, daxa::TaskBlas blas)
+  void add_blas(std::string_view name, daxa::TaskBlas blas)
   {
-    task_blas[name] = blas;
-    task_graph.use_persistent_blas(blas);
+    task_blas[std::string{name}] = blas;
+    task_graph.register_blas(blas);
   }
 
 };
@@ -161,33 +176,31 @@ struct TaskManager
   {
     pipeline_manager = daxa::PipelineManager({
         .device = gpu->device,
-        .shader_compile_options = {
-            .root_paths = paths,
+        .root_paths = paths,
 #if defined(_DEBUG)
-            .write_out_shader_binary = debug_path,
+        .write_out_spirv = debug_path,
 #endif
-            .language = daxa::ShaderLanguage::SLANG,
+        .default_language = daxa::ShaderLanguage::SLANG,
 #if defined(_DEBUG)
-            .enable_debug_info = true,
+        .default_enable_debug_info = true,
 #endif
-        },
         .name = pipeline_mngr_name,
     });
   }
 
   [[nodiscard]] auto create_ray_tracing(daxa::RayTracingPipelineCompileInfo info) -> std::shared_ptr<daxa::RayTracingPipeline>
   {
-    return pipeline_manager.add_ray_tracing_pipeline(info).value();
+    return pipeline_manager.add_ray_tracing_pipeline2(static_cast<daxa::RayTracingPipelineCompileInfo2>(info)).value();
   }
 
   [[nodiscard]] auto create_compute(daxa::ComputePipelineCompileInfo info) -> std::shared_ptr<daxa::ComputePipeline>
   {
-    return pipeline_manager.add_compute_pipeline(info).value();
+    return pipeline_manager.add_compute_pipeline2(static_cast<daxa::ComputePipelineCompileInfo2>(info)).value();
   }
 
   [[nodiscard]] auto create_raster(daxa::RasterPipelineCompileInfo info) -> std::shared_ptr<daxa::RasterPipeline>
   {
-    return pipeline_manager.add_raster_pipeline(info).value();
+    return pipeline_manager.add_raster_pipeline2(static_cast<daxa::RasterPipelineCompileInfo2>(info)).value();
   }
 
   auto reload() -> daxa::PipelineReloadResult

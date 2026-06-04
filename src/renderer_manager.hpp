@@ -47,12 +47,12 @@ struct RendererManager
 
   // Task graph information for ray tracing
   TaskGraph RT_TG;
-  daxa::TaskImage task_swapchain_image{{.swapchain_image = true, .name = "swapchain_image"}};
-  daxa::TaskImage task_accumulation_buffer{{.swapchain_image = false, .name = "accumulation_buffer"}};
-  daxa::TaskBuffer task_camera_buffer{{.initial_buffers = {}, .name = "camera_buffer"}};
-  daxa::TaskBuffer task_ray_tracing_config{{.initial_buffers = {}, .name = "ray_tracing_config"}};
-  daxa::TaskBuffer task_ray_tracing_config_host{{.initial_buffers = {}, .name = "ray_tracing_config_host"}};
-  daxa::TaskImage task_stbn_texture{{.swapchain_image = false, .name = "stbn_texture_task"}};
+  daxa::TaskImage task_swapchain_image{{.is_swapchain_image = true, .name = "swapchain_image"}};
+  daxa::TaskImage task_accumulation_buffer{{.is_swapchain_image = false, .name = "accumulation_buffer"}};
+  daxa::TaskBuffer task_camera_buffer{{.buffer = {}, .name = "camera_buffer"}};
+  daxa::TaskBuffer task_ray_tracing_config{{.buffer = {}, .name = "ray_tracing_config"}};
+  daxa::TaskBuffer task_ray_tracing_config_host{{.buffer = {}, .name = "ray_tracing_config_host"}};
+  daxa::TaskImage task_stbn_texture{{.is_swapchain_image = false, .name = "stbn_texture_task"}};
 
   explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<GUIManager> gui_manager, std::shared_ptr<ImageManager> image_manager);
   ~RendererManager();

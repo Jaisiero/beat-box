@@ -29,7 +29,7 @@ struct CameraManager{
 
     camera_buffer = device.create_buffer({
         .size = sizeof(CameraView),
-        .allocate_info = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
         .name = camera_name,
     });
 
