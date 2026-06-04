@@ -202,6 +202,16 @@ using TaskImage = ExternalTaskImage;
 using TaskBlas = ExternalTaskBlas;
 using TaskTlas = ExternalTaskTlas;
 
+// ⚠️ POSITIONAL BINDING — FOOTGUN. This `memcpy`s the `values` array straight into the
+// task head's `Views` struct, slot-by-slot. Combined with `attachment_view(auto, buffer)`
+// below IGNORING its first arg (the `AT.x` tag is decorative!), this means a task's
+// binding array order MUST EXACTLY MATCH its head's attachment declaration order. A
+// mismatch silently wires `task_head.fieldA` to fieldB's buffer with NO compile error —
+// e.g. swapping `collision_map`/`rigid_bodies` in the solver tasks made the solver read/
+// write garbage bodies and let cubes fall through the floor (debugged 2026-06). When
+// adding/reordering a task's attachments, keep the binding order identical to the head.
+// TODO: make `attachment_view` actually use the `AT.x` tag to map by name (would need the
+//       tag to carry its slot index) so order no longer matters.
 template <typename Views, std::size_t N>
 inline auto make_attachment_views(std::array<TaskViewVariant, N> const &values) -> Views
 {
