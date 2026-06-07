@@ -702,8 +702,7 @@ daxa::f32vec3 get_color(RayTracingConfig* config, daxa::f32vec3 normal, daxa::f3
     {
         if (r->has_flag(RigidBodyFlag::COLLIDING))
         {
-            // get face by normal
-            BoxFace face = get_face_by_normal(normal);
+            BoxFace face = get_face_by_normal(r->rotate_vector_inverse(normal));
             if (r->is_face_colliding(face))
             {
                 color = collision_material_color;

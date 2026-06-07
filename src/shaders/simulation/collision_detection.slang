@@ -521,10 +521,6 @@ struct OBBvsOBBCollision {
     daxa_f32 TA = (b * f - c * e) / denom;
     daxa_f32 TB = (b * TA + f) / e;
 
-    // Clamp the values of TA and TB
-    TA = clamp(TA, 0.0f, 1.0f);
-    TB = clamp(TB, 0.0f, 1.0f);
-
     CA = PA + DA * TA;
     CB = PB + DB * TB;
   }
@@ -668,16 +664,16 @@ struct OBBvsOBBCollision {
           int j2 = (j + 2) % 3;
 
           // Calculate rA y rB
-          daxa_f32 rA = e_A[i1] * abs_C[i2][j] + e_A[i2] * abs_C[i1][j];
-          daxa_f32 rB = e_B[j1] * abs_C[i][j2] + e_B[j2] * abs_C[i][j1];
+          daxa_f32 rA = e_A[i1] * abs_C[j][i2] + e_A[i2] * abs_C[j][i1];
+          daxa_f32 rB = e_B[j1] * abs_C[j2][i] + e_B[j2] * abs_C[j1][i];
 
           // Calculate s
-          daxa_f32 s = abs(t[i1] * C[i2][j] - t[i2] * C[i1][j]) - (rA + rB);
+          daxa_f32 s = abs(t[i2] * C[j][i1] - t[i1] * C[j][i2]) - (rA + rB);
 
           // Axis vector
           daxa_f32vec3 axis = daxa_f32vec3(0.0f);
-          axis[i1] = -C[i1][j];
-          axis[i2] = C[i2][j];
+          axis[i1] = -C[j][i2];
+          axis[i2] = C[j][i1];
 
           // Track the axis
           if (track_edge_axis(e_axis, get_axis_enum(i * 3 + j), s, e_max, axis, n_e))
@@ -794,7 +790,7 @@ struct OBBvsOBBCollision {
           obb2_faces = reference_face;
         } else {
           obb1_faces = reference_face;
-          // obb2_faces = incident_face;
+          obb2_faces = incident_face;
         }
 
         for(daxa_i32 i = 0; i < out_num; ++i) {
@@ -943,7 +939,7 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       daxa_u32 old_index = 0;
       
 #if defined(BB_SIM_DEBUG)
-      if(find_old_collision(rba_prev_index, rbb_prev_index, previous_sim_config.g_c_info.collision_count, old_collisions, old_manifold, old_index))
+      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, previous_rigid_bodies[rba_prev_index].manifold_node_index, collision_map_prev, previous_manifold_nodes, old_collisions, old_manifold, old_index))
       {
 #else
       if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, previous_rigid_bodies[rba_prev_index].manifold_node_index, collision_map_prev, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
