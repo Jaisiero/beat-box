@@ -16,7 +16,7 @@ public:
   daxa::TaskBuffer task_material_buffer{{.name = "task_material_buffer"}};
   daxa::TaskBuffer task_lights_buffer{{.name = "task_lights_buffer"}};
 
-  explicit SceneManager(char const *name, daxa::Device &device, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<TaskManager> task_manager) : device(device), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), status_manager(status_manager), task_manager(task_manager)
+  explicit SceneManager(char const *, daxa::Device &device, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<TaskManager> task_manager) : device(device), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), status_manager(status_manager), task_manager(task_manager)
   {
   }
   ~SceneManager()
@@ -113,135 +113,135 @@ public:
   void scene_1() {
     materials = {
       {
-        .albedo = daxa_f32vec3(0.1, 0.1, 0.1),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.0, 0.0),
-        .emission = daxa_f32vec3(10.0, 10.0, 10.0),
+        .albedo = daxa_f32vec3(1.0f, 0.0f, 0.0f),
+        .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.0, 1.0, 0.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.0, 0.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 1.0, 0.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.0, 1.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.5, 0.5),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 0.5f, 0.5f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.5, 1.0, 0.5),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.5f, 1.0f, 0.5f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.5, 0.5, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.5f, 0.5f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.5, 1.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.5f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.5, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 0.5f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 1.0, 0.5),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.5f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
     };
 
     rigid_bodies = {
-      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, -50.0, 0.0), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-50.0, -50.0, -50.0), .maximum = daxa_f32vec3(50.0, 50.0, 50.0), .mass = 0.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5, 2.0, -0.5), .rotation = Quaternion(0.4572f, 0.0000f, -0.4572f, -0.7629f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7, .friction = 0.3}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-3.0, 5.0, -1.0), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-1.0, -1.0, -1.0), .maximum = daxa_f32vec3(1.0, 1.0, 1.0), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 10),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.1, .friction = 0.6}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.3, 1.7, 0.3), .rotation = Quaternion(-0.4572f, 0.0000f, 0.4572f, -0.7629f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 2.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.3, .friction = 0.6},
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5, 0.25, 0.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.4, .friction = 0.2},
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(2.5, 3.0, 2.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(1.5, 3.0, 2.3), .rotation = Quaternion(0.0000f, 0.0000f, 0.5000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.6, .friction = 0.7}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-2.5, 3.0, 2.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7, .friction = 0.8}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-2.5, 3.25, 1.5), .rotation = Quaternion(0.5000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.8, .friction = 0.9}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(3.5, 2.0, 0.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.9, .friction = 0.6}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(2.5, 2.0, -0.2), .rotation = Quaternion(0.0000f, 1.0000f, 1.0000f, 0.8000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.9, .friction = 0.5}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(4.0, 2.5, -2.0), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.8, .friction = 0.5}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(5.0, 2.5, -2.7), .rotation = Quaternion(0.0000f, 1.0000f, 1.0000f, 0.8000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7, .friction = 0.4}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(6.0, 3.5, 0.0), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.6, .friction = 0.7}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(5.0, 3.5, 0.7), .rotation = Quaternion(0.0000f, 1.0000f, 1.0000f, 0.8000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.3}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(6.5, 1.5, 0.0), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.4, .friction = 0.6}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(7.5, 1.5, 0.9), .rotation = Quaternion(0.0000f, 1.0000f, 1.0000f, 0.8000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.3, .friction = 0.9}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(6.9, 2.5, 4.5), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.2, .friction = 0.3}, 
-      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(5.8, 3.5, 4.5), .rotation = Quaternion(0.0000f, 1.0000f, 0.0000f, -0.5000f), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.1, .friction = 0.3}
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5f, .friction = 0.5f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5f, 2.0f, -0.5f), .rotation = Quaternion(0.4572f, 0.0000f, -0.4572f, -0.7629f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7f, .friction = 0.3f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-3.0f, 5.0f, -1.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-1.0f, -1.0f, -1.0f), .maximum = daxa_f32vec3(1.0f, 1.0f, 1.0f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 10),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.1f, .friction = 0.6f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.3f, 1.7f, 0.3f), .rotation = Quaternion(-0.4572f, 0.0000f, 0.4572f, -0.7629f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 2.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.3f, .friction = 0.6f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5f, 0.25f, 0.5f), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.4f, .friction = 0.2f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(2.5f, 3.0f, 2.5f), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5f, .friction = 0.5f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(1.5f, 3.0f, 2.3f), .rotation = Quaternion(0.0000f, 0.0000f, 0.5000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.6f, .friction = 0.7f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-2.5f, 3.0f, 2.5f), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7f, .friction = 0.8f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-2.5f, 3.25f, 1.5f), .rotation = Quaternion(0.5000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.8f, .friction = 0.9f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(3.5f, 2.0f, 0.5f), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.9f, .friction = 0.6f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(2.5f, 2.0f, -0.2f), .rotation = Quaternion(0.0000f, 1.0000f, 1.0000f, 0.8000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.9f, .friction = 0.5f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(4.0f, 2.5f, -2.0f), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.8f, .friction = 0.5f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(5.0f, 2.5f, -2.7f), .rotation = Quaternion(0.0000f, 1.0000f, 1.0000f, 0.8000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.7f, .friction = 0.4f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(6.0f, 3.5f, 0.0f), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.6f, .friction = 0.7f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(5.0f, 3.5f, 0.7f), .rotation = Quaternion(0.0000f, 1.0000f, 1.0000f, 0.8000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5f, .friction = 0.3f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(6.5f, 1.5f, 0.0f), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.4f, .friction = 0.6f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(7.5f, 1.5f, 0.9f), .rotation = Quaternion(0.0000f, 1.0000f, 1.0000f, 0.8000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.3f, .friction = 0.9f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(6.9f, 2.5f, 4.5f), .rotation = Quaternion(0.0000f, 0.0000f, 0.0000f, 1.0000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.2f, .friction = 0.3f},
+      {.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(5.8f, 3.5f, 4.5f), .rotation = Quaternion(0.0000f, 1.0000f, 0.0000f, -0.5000f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.1f, .friction = 0.3f}
     };
   }
 
   void scene_2() {
     materials = {
       {
-        .albedo = daxa_f32vec3(0.1, 0.1, 0.1),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.0, 0.0),
-        .emission = daxa_f32vec3(10.0, 10.0, 10.0),
+        .albedo = daxa_f32vec3(1.0f, 0.0f, 0.0f),
+        .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.0, 1.0, 0.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.0, 0.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 1.0, 0.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.0, 1.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.5, 0.5),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 0.5f, 0.5f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.5, 1.0, 0.5),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.5f, 1.0f, 0.5f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.5, 0.5, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.5f, 0.5f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.5, 1.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.5f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.5, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 0.5f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 1.0, 0.5),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.5f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
     };
 
@@ -253,74 +253,74 @@ public:
     rigid_bodies.reserve(n_body);
 
     rigid_bodies = {
-      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, -50.0, 0.0), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-50.0, -50.0, -50.0), .maximum = daxa_f32vec3(50.0, 50.0, 50.0), .mass = 0.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5}
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5f, .friction = 0.5f}
     };
-    
-    std::uniform_real_distribution<float> x_distr(-15.0, 15.0); // define the range
-    std::uniform_real_distribution<float> y_distr(2.0, 7.0); // define the range
-    std::uniform_real_distribution<float> z_distr(-15.0, 15.0); // define the range
+
+    std::uniform_real_distribution<float> x_distr(-15.0f, 15.0f); // define the range
+    std::uniform_real_distribution<float> y_distr(2.0f, 7.0f); // define the range
+    std::uniform_real_distribution<float> z_distr(-15.0f, 15.0f); // define the range
 
     for(int i = 0; i < n_body; ++i)
     {
-      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(x_distr(gen), y_distr(gen), z_distr(gen)), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5});
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(x_distr(gen), y_distr(gen), z_distr(gen)), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5f, .friction = 0.5f});
     }
   }
 
   void scene_3() {
     materials = {
       {
-        .albedo = daxa_f32vec3(0.1, 0.1, 0.1),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.0, 0.0),
-        .emission = daxa_f32vec3(10.0, 10.0, 10.0),
+        .albedo = daxa_f32vec3(1.0f, 0.0f, 0.0f),
+        .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.0, 1.0, 0.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.0, 0.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 1.0, 0.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.0, 1.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.5, 0.5),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 0.5f, 0.5f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.5, 1.0, 0.5),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.5f, 1.0f, 0.5f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.5, 0.5, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.5f, 0.5f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(0.5, 1.0, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(0.5f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 0.5, 1.0),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 0.5f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
       {
-        .albedo = daxa_f32vec3(1.0, 1.0, 0.5),
-        .emission = daxa_f32vec3(0.0, 0.0, 0.0),
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.5f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
-      
+
     };
 
     auto const n_body = 50u;
@@ -328,7 +328,7 @@ public:
     rigid_bodies.reserve(n_body);
 
     rigid_bodies = {
-      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0, -50.0, 0.0), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-50.0, -50.0, -50.0), .maximum = daxa_f32vec3(50.0, 50.0, 50.0), .mass = 0.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5}
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5f, .friction = 0.5f}
     };
 
     // stack of boxes over main box
@@ -336,17 +336,17 @@ public:
 
     for(int i = 0; i < 7; ++i)
     {
-      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5, 0.5 + i, -0.5), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5});
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-0.5f, 0.5f + i, -0.5f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5f, .friction = 0.5f});
     }
 
     for(int i = 0; i < 7; ++i)
     {
-      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-2.5, 0.5 + i, -0.5), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5});
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-2.5f, 0.5f + i, -0.5f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5f, .friction = 0.5f});
     }
 
     for(int i = 0; i < 7; ++i)
     {
-      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(1.5, 0.5 + i, -0.5), .rotation = Quaternion(0.0, 0.0, 0.0, 1.0), .minimum = daxa_f32vec3(-0.5, -0.5, -0.5), .maximum = daxa_f32vec3(0.5, 0.5, 0.5), .mass = 5.0, .inv_mass = 1.0, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5, .friction = 0.5});
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(1.5f, 0.5f + i, -0.5f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 1.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.5f, .friction = 0.5f});
     }
 
   }
@@ -357,15 +357,15 @@ public:
     {
       return false;
     }
-    
+
     std::random_device rd; // obtain a random number from hardware
     gen = std::mt19937(rd()); // seed the generator
-  
-    scene_1();
-    // scene_2();
+
+    // scene_1();
+    scene_2();
     // scene_3();
 
-    std::uniform_int_distribution<> distr(1, materials.size()-1); // define the range
+    std::uniform_int_distribution<> distr(1, static_cast<int>(materials.size() - 1)); // define the range
 
     aabb.clear();
     aabb.reserve(rigid_bodies.size());
@@ -380,7 +380,7 @@ public:
       rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);
       aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
       rigid_body.material_index = rigid_body.inv_mass == 0 ? 0 : distr(gen);
-      if(materials.at(rigid_body.material_index).emission != daxa_f32vec3(0.0, 0.0, 0.0))
+      if(materials.at(rigid_body.material_index).emission != daxa_f32vec3(0.0f, 0.0f, 0.0f))
       {
         lights.push_back(Light(rigid_body.id));
       }
@@ -433,7 +433,7 @@ public:
   }
   daxa_u32 get_light_count()
   {
-    return lights.size();
+    return static_cast<daxa_u32>(lights.size());
   }
 
   std::vector<ActiveRigidBody> get_active_rigid_bodies() {
@@ -460,7 +460,7 @@ private:
   // Initialization flag
   bool initialized = false;
 
-  
+
   daxa_u32 id_generator = 0;
   daxa_u32 rigid_body_count = 0;
   daxa_u32 rigid_body_active_count = 0;

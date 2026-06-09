@@ -19,7 +19,7 @@
 
 using namespace beatbox;
 
-int main(int argc, char const *argv[])
+int main()
 {
   try {
     // Input manager

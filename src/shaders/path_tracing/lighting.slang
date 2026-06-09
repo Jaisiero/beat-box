@@ -462,7 +462,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     daxa_u32 instance_index,
     RigidBodyEntry* rigid_body_map,
     RigidBody* rigid_bodies,
-    Ptr<Material> materials,
+    Material* materials,
     RaytracingAccelerationStructure tlas,
     daxa_f32vec3 position, // world space position
     daxa_f32vec3 normal,
@@ -493,12 +493,12 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     daxa::u32 rigid_body_index = rigid_body_map[rigid_body_id].index;
     
     // Step 2: Retrieve rigid body properties (position, rotation, material index)rigid_bodies
-    RigidBody* r = (RigidBody*)(&rigid_bodies[rigid_body_index]);
-    Material m = materials[r->material_index];
+    RigidBody* r = &rigid_bodies[rigid_body_index];
+    Material* material = &materials[r->material_index];
 
-    if(all(m.emission <= 0.0f))
+    if(all(material->emission <= 0.0f))
     {
-        printf("Light is non-emissive. Instance Index: %u, Light Count: %u, Rigid Body Index: %u emission: %f %f %f\n", instance_index, light_count, rigid_body_index, m.emission.x, m.emission.y, m.emission.z);
+        printf("Light is non-emissive. Instance Index: %u, Light Count: %u, Rigid Body Index: %u emission: %f %f %f\n", instance_index, light_count, rigid_body_index, material->emission.x, material->emission.y, material->emission.z);
         // Light is non-emissive; skip processing
         pdf_light = 0.0f;
         return daxa_f32vec3(0.0);
@@ -580,7 +580,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     //    - Lambertian BRDF = (albedo / PI)
     //    - Emission from the cube's material
     daxa_f32vec3 brdf     = albedo / PI;
-    daxa_f32vec3 emission = m.emission;
+    daxa_f32vec3 emission = material->emission;
 
     // geometry factor = (N_dot_L * cos_theta_light) / distance^2
     daxa_f32 geometry_factor = (N_dot_L * cos_theta_light) / distance_squared;
@@ -702,8 +702,7 @@ daxa::f32vec3 get_color(RayTracingConfig* config, daxa::f32vec3 normal, daxa::f3
     {
         if (r->has_flag(RigidBodyFlag::COLLIDING))
         {
-            // get face by normal
-            BoxFace face = get_face_by_normal(normal);
+            BoxFace face = get_face_by_normal(r->rotate_vector_inverse(normal));
             if (r->is_face_colliding(face))
             {
                 color = collision_material_color;

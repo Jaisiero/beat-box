@@ -111,7 +111,11 @@ struct StatusManager
   void switch_simulating()
   {
     simulating = !simulating;
-    if(!simulating)
+    if(simulating)
+    {
+      rigid_body_manager->skip_warm_starting_once();
+    }
+    else
     {
       update_sim_buffer = true;
       double_buffering_counter = 2;

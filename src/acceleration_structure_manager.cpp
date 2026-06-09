@@ -8,7 +8,10 @@ AccelerationStructureManager::AccelerationStructureManager(daxa::Device &device,
 {
   if (device.is_valid())
   {
-    acceleration_structure_scratch_offset_alignment = device.properties().acceleration_structure_properties.value().min_acceleration_structure_scratch_offset_alignment;
+    auto const &properties = device.properties();
+    acceleration_structure_scratch_offset_alignment = properties.acceleration_structure_properties.has_value()
+      ? properties.acceleration_structure_properties.value().min_acceleration_structure_scratch_offset_alignment
+      : ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT;
 
     update_pipeline = task_manager->create_compute(UpdateAccelerationStructures{}.info);
   }
@@ -115,9 +118,11 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
     AS_build_TG.submit();
     AS_build_TG.complete();
 
-    record_update_TLAS_tasks(TLAS_update_TG, update_pipeline);
+    record_update_TLAS_tasks(TLAS_update_TG, TLAS_build_TG, update_pipeline);
     TLAS_update_TG.submit();
     TLAS_update_TG.complete();
+    TLAS_build_TG.submit();
+    TLAS_build_TG.complete();
 
     record_update_AS_buffers_tasks(AS_update_buffers_TG);
     AS_update_buffers_TG.submit();
@@ -281,7 +286,7 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   clear_build_AS();
 
   /// Alignments:
-  auto get_aligned = [&](u32 operand, u32 granularity) -> u32
+  auto get_aligned = [&](u64 operand, u64 granularity) -> u64
   {
     return ((operand + (granularity - 1)) & ~(granularity - 1));
   };
@@ -441,6 +446,8 @@ void AccelerationStructureManager::update_TLAS()
   update_buffers();
   update();
   TLAS_update_TG.execute();
+  device.wait_idle();
+  TLAS_build_TG.execute();
 }
 
 bool AccelerationStructureManager::update()
@@ -469,13 +476,11 @@ bool AccelerationStructureManager::update()
   proc_blas_scratch_offset = 0;
 
   /// Alignments:
-  auto get_aligned = [&](u32 operand, u32 granularity) -> u32
+  auto get_aligned = [&](u64 operand, u64 granularity) -> u64
   {
     return ((operand + (granularity - 1)) & ~(granularity - 1));
   };
 
-  auto sim_config = device.buffer_host_address_as<SimConfig>(rigid_body_manager->get_sim_config_host_buffer()).value();
-  
   daxa_u32 total_instances = current_rigid_body_count;
 
   // Generate LBVH BLAS
@@ -648,7 +653,7 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
   daxa::InlineTaskInfo task2({
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_aabb_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, task_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_WRITE, task_blas),
       },
       .task = [this](daxa::TaskInterface const &ti)
@@ -662,6 +667,7 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
   });
   daxa::InlineTaskInfo task3({
       .attachments = {
+          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, task_blas_instance_data),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_READ, task_blas),
           daxa::inl_attachment(daxa::TaskTlasAccess::BUILD_WRITE, task_tlas),
       },
@@ -682,24 +688,25 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
       task3,
   };
 
-  std::array<daxa::TaskBuffer, 3> buffers = {
+  std::array<daxa::TaskBuffer, 4> buffers = {
       rigid_body_manager->task_rigid_bodies,
       rigid_body_manager->task_next_rigid_bodies,
       task_aabb_buffer,
+      task_blas_instance_data,
   };
   std::array<daxa::TaskBlas, 1> blas = {
       task_blas,
   };
-  std::array<daxa::TaskTlas, 1> tlas = {
+  std::array<daxa::TaskTlas, 1> task_tlases = {
       task_tlas,
   };
 
-  AS_TG = task_manager->create_task_graph("Build Acceleration Structures", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(tlas));
+  AS_TG = task_manager->create_task_graph("Build Acceleration Structures", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(task_tlases));
 }
 
-void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline)
+void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances_TG, TaskGraph &build_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline)
 {
-  auto user_callback_UI = [update_AS_pipeline](daxa::TaskInterface ti, auto &self)
+  auto user_callback_UI = [update_AS_pipeline](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*update_AS_pipeline);
     ti.recorder.push_constant(UpdateInstancesPushConstants{.task_head = ti.attachment_shader_blob});
@@ -723,7 +730,7 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
   daxa::InlineTaskInfo task_BB({
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_aabb_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, task_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_WRITE, task_blas),
       },
       .task = [this](daxa::TaskInterface const &ti)
@@ -742,6 +749,7 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_aabb_buffer),
+          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, task_blas_instance_data),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_READ, task_blas),
           daxa::inl_attachment(daxa::TaskTlasAccess::BUILD_WRITE, task_tlas),
       },
@@ -755,7 +763,7 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
       .name = "tlas update",
   });
 
-  std::array<daxa::TaskBuffer, 6> buffers = {
+  std::array<daxa::TaskBuffer, 6> instance_buffers = {
       task_dispatch_buffer,
       rigid_body_manager->task_sim_config,
       task_blas_instance_data,
@@ -763,18 +771,24 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &TLAS_TG, 
       rigid_body_manager->task_rigid_bodies,
       task_aabb_buffer,
   };
+  instances_TG = task_manager->create_task_graph("Update TLAS Instances", std::span<daxa::TaskBuffer>(instance_buffers), {}, {}, {});
+  instances_TG.add_task(task_UI);
+
+  std::array<daxa::TaskBuffer, 3> build_buffers = {
+      rigid_body_manager->task_rigid_bodies,
+      task_aabb_buffer,
+      task_blas_instance_data,
+  };
   std::array<daxa::TaskBlas, 1> blas = {
       task_blas,
   };
-  std::array<daxa::TaskTlas, 1> tlas = {
+  std::array<daxa::TaskTlas, 1> task_tlases = {
       task_tlas,
   };
 
-  TLAS_TG = task_manager->create_task_graph("Update TLAS", std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(tlas));
-
-  TLAS_TG.add_task(task_UI);
-  TLAS_TG.add_task(task_BB);
-  TLAS_TG.add_task(task_BT);
+  build_TG = task_manager->create_task_graph("Build TLAS", std::span<daxa::TaskBuffer>(build_buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(task_tlases));
+  build_TG.add_task(task_BB);
+  build_TG.add_task(task_BT);
 }
 
 void AccelerationStructureManager::update_buffers()
@@ -798,6 +812,16 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_sim_config_host),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_sim_config),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_old_sim_config),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_rigid_bodies),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_body_entries),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_rigid_body_entries),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_lbvh_nodes),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_lbvh_nodes),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_islands),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_islands),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_contact_islands),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_contact_islands),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, gui_manager->task_vertex_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, gui_manager->task_previous_vertex_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, gui_manager->task_line_vertex_buffer),
@@ -808,16 +832,56 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
       .task = [this](daxa::TaskInterface const &ti)
       {
         auto sim_config = device.buffer_host_address_as<SimConfig>(ti.get(rigid_body_manager->task_sim_config_host).id).value();
-        auto current_frame_index = renderer_manager->get_frame_index();
-        auto previous_frame_index = renderer_manager->get_previous_frame_index();
-
         ti.recorder.copy_buffer_to_buffer({
             .src_buffer = ti.get(rigid_body_manager->task_sim_config).id,
             .dst_buffer = ti.get(rigid_body_manager->task_old_sim_config).id,
             .size = sizeof(SimConfig),
         });
 
-        auto point_count = sim_config->g_c_info.collision_point_count;
+        auto rigid_body_count = renderer_manager->get_rigid_body_count();
+        if(rigid_body_count > MAX_RIGID_BODY_COUNT) {
+          rigid_body_count = MAX_RIGID_BODY_COUNT;
+        }
+
+        if(rigid_body_count > 0) {
+          ti.recorder.copy_buffer_to_buffer({
+              .src_buffer = ti.get(rigid_body_manager->task_rigid_bodies).id,
+              .dst_buffer = ti.get(rigid_body_manager->task_previous_rigid_bodies).id,
+              .size = rigid_body_count * sizeof(RigidBody),
+          });
+
+          ti.recorder.copy_buffer_to_buffer({
+              .src_buffer = ti.get(rigid_body_manager->task_rigid_body_entries).id,
+              .dst_buffer = ti.get(rigid_body_manager->task_previous_rigid_body_entries).id,
+              .size = rigid_body_count * sizeof(RigidBodyEntry),
+          });
+
+          auto lbvh_node_count = rigid_body_count * 2 - 1;
+          if(lbvh_node_count > MAX_LBVH_NODE_COUNT) {
+            lbvh_node_count = MAX_LBVH_NODE_COUNT;
+          }
+          ti.recorder.copy_buffer_to_buffer({
+              .src_buffer = ti.get(rigid_body_manager->task_lbvh_nodes).id,
+              .dst_buffer = ti.get(rigid_body_manager->task_previous_lbvh_nodes).id,
+              .size = lbvh_node_count * sizeof(LBVHNode),
+          });
+
+          ti.recorder.copy_buffer_to_buffer({
+              .src_buffer = ti.get(rigid_body_manager->task_islands).id,
+              .dst_buffer = ti.get(rigid_body_manager->task_previous_islands).id,
+              .size = rigid_body_count * sizeof(Island),
+          });
+
+          ti.recorder.copy_buffer_to_buffer({
+              .src_buffer = ti.get(rigid_body_manager->task_contact_islands).id,
+              .dst_buffer = ti.get(rigid_body_manager->task_previous_contact_islands).id,
+              .size = rigid_body_count * sizeof(ContactIsland),
+          });
+        }
+
+        auto point_count = sim_config->g_c_info.collision_point_count > BB_MAX_DEBUG_CONTACT_POINT_COUNT
+                             ? BB_MAX_DEBUG_CONTACT_POINT_COUNT
+                             : sim_config->g_c_info.collision_point_count;
         if(renderer_manager->is_gui_enabled()) {
           if(point_count > 0) {
             ti.recorder.copy_buffer_to_buffer({
@@ -827,7 +891,7 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
             });
           }
 
-          auto line_count = sim_config->rigid_body_count * 2;
+          auto line_count = point_count * 2;
           if(line_count > 0) {
             ti.recorder.copy_buffer_to_buffer({
                 .src_buffer = ti.get(gui_manager->task_line_vertex_buffer).id,
@@ -836,6 +900,7 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
             });
           }
           auto axes_count = sim_config->rigid_body_count * 6;
+          axes_count = axes_count > MAX_AXIS_COUNT ? MAX_AXIS_COUNT : axes_count;
           if(axes_count > 0) {
             ti.recorder.copy_buffer_to_buffer({
                 .src_buffer = ti.get(gui_manager->task_axes_vertex_buffer).id,
@@ -852,8 +917,18 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
     task0,
   };
 
-  std::array<daxa::TaskBuffer, 9> buffers = {
+  std::array<daxa::TaskBuffer, 19> buffers = {
     rigid_body_manager->task_sim_config_host,
+    rigid_body_manager->task_rigid_bodies,
+    rigid_body_manager->task_previous_rigid_bodies,
+    rigid_body_manager->task_rigid_body_entries,
+    rigid_body_manager->task_previous_rigid_body_entries,
+    rigid_body_manager->task_lbvh_nodes,
+    rigid_body_manager->task_previous_lbvh_nodes,
+    rigid_body_manager->task_islands,
+    rigid_body_manager->task_previous_islands,
+    rigid_body_manager->task_contact_islands,
+    rigid_body_manager->task_previous_contact_islands,
     gui_manager->task_previous_vertex_buffer,
     gui_manager->task_vertex_buffer,
     rigid_body_manager->task_old_sim_config,

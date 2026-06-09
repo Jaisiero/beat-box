@@ -177,7 +177,7 @@ void InputManager::on_key(i32 key, i32 action)
   }
 }
 
-void InputManager::on_scroll(f32 x, f32 y)
+void InputManager::on_scroll(f32, f32)
 {
 }
 

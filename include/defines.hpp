@@ -738,6 +738,7 @@ struct RigidBodySingleRadixSortInfo {
           .defines = {
               {"BB_RADIX_SORT", "1"},
           },
+          .required_subgroup_size = SUBGROUP_SIZE,
       },
   };
 

@@ -76,8 +76,13 @@ func radix_sort(daxa_u32 lid, daxa_u32 wid, daxa_u32 lsid, daxa_u32 sid, daxa_u3
 
     if (lid < RADIX_SORT_BINS)
     {
+        daxa::u32 subgroup_sum = 0u;
+        if (lsid < (RADIX_SORT_BINS / SUBGROUP_SIZE))
+        {
+            subgroup_sum = sums[lsid].load();
+        }
         // Perform an exclusive prefix sum within the wave (subgroup)
-        let sums_prefix_sum = WavePrefixSum(sums[lsid].load());
+        let sums_prefix_sum = WavePrefixSum(subgroup_sum);
         // Broadcast the prefix sum result to all lanes of the current subgroup (wave)
         let global_histogram = WaveReadLaneAt(sums_prefix_sum, sid) + prefix_sum;
 
@@ -218,7 +223,8 @@ struct LBVH {
     static void broad_phase(SimConfig* sim_config, daxa::u32 primitive_index, Aabb query_aabb, LBVHNode* lbvh_nodes, BroadPhaseCollision* bp_collisions) {
         
         // Allocate stack for traversal
-        daxa::u32 stack[64];
+        static const daxa::u32 LBVH_TRAVERSAL_STACK_SIZE = 256u;
+        daxa::u32 stack[LBVH_TRAVERSAL_STACK_SIZE];
         daxa::u32 stack_size = 0;
         stack[stack_size++] = 0;
 
@@ -239,7 +245,9 @@ struct LBVH {
             if(overlap_left && child_left.is_leaf()) {
                 if(child_left.check_index(primitive_index) ) {
                     InterlockedAdd(sim_config->broad_phase_collision_count, 1U, bp_collision_index);
-                    bp_collisions[bp_collision_index] = BroadPhaseCollision(primitive_index, child_left.get_index());
+                    if(bp_collision_index < BB_MAX_COLLISION_COUNT) {
+                        bp_collisions[bp_collision_index] = BroadPhaseCollision(primitive_index, child_left.get_index());
+                    }
                 }
             }
 
@@ -247,7 +255,9 @@ struct LBVH {
             if(overlap_right && child_right.is_leaf()) {
                 if(child_right.check_index(primitive_index) ) {
                     InterlockedAdd(sim_config->broad_phase_collision_count, 1U, bp_collision_index);
-                    bp_collisions[bp_collision_index] = BroadPhaseCollision(primitive_index, child_right.get_index());
+                    if(bp_collision_index < BB_MAX_COLLISION_COUNT) {
+                        bp_collisions[bp_collision_index] = BroadPhaseCollision(primitive_index, child_right.get_index());
+                    }
                 }
             }
 
@@ -265,7 +275,7 @@ struct LBVH {
             } else {
                 // Push the other child node to the stack
                 if(traverse_left && traverse_right) {
-                    stack[stack_size++] = node->right;
+                    if (stack_size < LBVH_TRAVERSAL_STACK_SIZE) { stack[stack_size++] = node->right; }
                 }
                 // Traverse the child node
                 node = traverse_left ? child_left : child_right;

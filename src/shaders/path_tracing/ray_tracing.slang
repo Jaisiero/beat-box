@@ -76,13 +76,13 @@
     }
 
     let r = &rigid_bodies[rigid_body_map[payload.instance_index].index];
-    Material m = materials[r->material_index];
+    Material* material = &materials[r->material_index];
 
     // Update throughput
     daxa_f32vec3 position = payload.position;
     daxa_f32vec3 normal = payload.normal;
-    daxa_f32vec3 albedo = get_color(ray_tracing_config, normal, m.albedo, r);
-    daxa::f32vec3 emission = m.emission;
+    daxa_f32vec3 albedo = get_color(ray_tracing_config, normal, material->albedo, r);
+    daxa::f32vec3 emission = material->emission;
     daxa_u32 instance_index = payload.instance_index;
 
     // **Accumulate Emission**
@@ -203,8 +203,9 @@
   daxa::u32 prim_index = PrimitiveIndex();
 
   RigidBodyEntry* rigid_body_map = (RigidBodyEntry*)(p.task_head.rigid_body_map);
+  RigidBody* rigid_bodies = (RigidBody*)(p.task_head.rigid_bodies);
 
-  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[rigid_body_map[instance_index].index]);
+  RigidBody* r = &rigid_bodies[rigid_body_map[instance_index].index];
   // Material m = p.task_head.materials[r->material_index];
 
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
@@ -230,8 +231,9 @@
   daxa::u32 prim_index = PrimitiveIndex();
 
   RigidBodyEntry* rigid_body_map = (RigidBodyEntry*)(p.task_head.rigid_body_map);
+  RigidBody* rigid_bodies = (RigidBody*)(p.task_head.rigid_bodies);
 
-  RigidBody* r = (RigidBody*)(&p.task_head.rigid_bodies[rigid_body_map[instance_index].index]);
+  RigidBody* r = &rigid_bodies[rigid_body_map[instance_index].index];
 
   Ptr<Aabb> aabbs = Ptr<Aabb>(p.task_head.aabbs);
   Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);
@@ -303,7 +305,10 @@ daxa::f32 get_opaque_factor(daxa::f32vec3 hit_pos, Aabb aabb)
   // printf("instance_index: %d, primitive_index: %d\n", InstanceID(), PrimitiveIndex());
 
   let lbvh_nodes = (LBVHNode*)(p.task_head.lbvh_nodes);
-  Aabb aabb = lbvh_nodes[params.primitive_index].aabb;
+  LBVHNode* node = &lbvh_nodes[params.primitive_index];
+  Aabb aabb;
+  aabb.minimum = node->aabb.minimum;
+  aabb.maximum = node->aabb.maximum;
 
   Ray ray = {WorldRayOrigin(), WorldRayDirection()};
   // ray.origin = r->world_to_object(ray.origin);
