@@ -856,6 +856,10 @@ struct BodyLinkManifold {
     // Add manifold to buffer
     daxa_u32 node_index = 0;
     InterlockedAdd(*manifold_node_count, 1u, node_index);
+    if (node_index >= BB_MAX_MANIFOLD_NODE_COUNT)
+    {
+      return;
+    }
 
     // Fill the node
     manifold_nodes[node_index].manifold_id = manifold_id;
@@ -872,17 +876,25 @@ struct BodyLinkManifold {
     }
   }
 
-  static daxa_b32 find_old_collision(daxa_u32 a, daxa_u32 b, daxa_u32 first_manifold_node_index, CollisionEntry* collision_map, ManifoldNode* manifold_nodes, Ptr<Manifold> old_collisions, out Manifold collision_found, out daxa_u32 old_index) {
+  static daxa_b32 find_old_collision(daxa_u32 a, daxa_u32 b, daxa_u32 first_manifold_node_index, daxa_u32 manifold_node_count, daxa_u32 collision_count, CollisionEntry* collision_map, ManifoldNode* manifold_nodes, Manifold* old_collisions, out daxa_u32 old_index) {
     daxa_u32 current = first_manifold_node_index;
-    while (current != MAX_U32) {
+    daxa_u32 steps = 0u;
+    while (current != MAX_U32 && current < manifold_node_count && steps < manifold_node_count) {
       daxa_u32 id = manifold_nodes[current].manifold_id;
+      if (id >= collision_count) {
+        return false;
+      }
       daxa::u32 index = collision_map[id].index;
+      if (index >= collision_count) {
+        return false;
+      }
       if (old_collisions[index].obb1_index == a && old_collisions[index].obb2_index == b) {
         old_index = index;
-        collision_found = old_collisions[index];
         return true;
       }
-      current = manifold_nodes[current].next;
+      daxa_i32 next = manifold_nodes[current].next;
+      current = next < 0 ? MAX_U32 : daxa_u32(next);
+      ++steps;
     }
     return false;
   }
@@ -894,8 +906,8 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   daxa::u32 rba_index = broad_phase_collision.body_a_index;
   daxa::u32 rbb_index = broad_phase_collision.body_b_index;
 
-  RigidBody* r = (RigidBody*)(&rigid_bodies[rba_index]);
-  RigidBody* r2 = (RigidBody*)(&rigid_bodies[rbb_index]);
+  RigidBody* r = &rigid_bodies[rba_index];
+  RigidBody* r2 = &rigid_bodies[rbb_index];
 
   IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count, body_links);
 
@@ -919,6 +931,10 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   {
     daxa_u32 index = 0;
     InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
+    if (index >= BB_MAX_COLLISION_COUNT)
+    {
+      return;
+    }
     manifold.compute_basis();
 
     // Add collision to collision map
@@ -929,27 +945,29 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     BodyLinkManifold::body_link_manifold(index, rbb_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
 
     daxa::u32 rba_prev_index = previous_rigid_body_map[r->id].index;
-    bool rba_prev_exists = rba_prev_index != MAX_U32;
+    bool rba_prev_exists = rba_prev_index < previous_sim_config.rigid_body_count;
     daxa::u32 rbb_prev_index = previous_rigid_body_map[r2->id].index;
-    bool rbb_prev_exists = rbb_prev_index != MAX_U32;
+    bool rbb_prev_exists = rbb_prev_index < previous_sim_config.rigid_body_count;
 
     daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
     if(warm_starting && rba_prev_exists && rbb_prev_exists) {
-      Manifold old_manifold;
       daxa_u32 old_index = 0;
+      RigidBody* prev_rba = &previous_rigid_bodies[rba_prev_index];
+      daxa_u32 previous_manifold_node_count = min(previous_sim_config.manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+      daxa_u32 previous_collision_count = min(previous_sim_config.g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
       
 #if defined(BB_SIM_DEBUG)
-      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, previous_rigid_bodies[rba_prev_index].manifold_node_index, collision_map_prev, previous_manifold_nodes, old_collisions, old_manifold, old_index))
+      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index))
       {
 #else
-      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, previous_rigid_bodies[rba_prev_index].manifold_node_index, collision_map_prev, previous_manifold_nodes, old_collisions, old_manifold, old_index)) {
+      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index)) {
 #endif
-        manifold.update(old_manifold);
+        manifold.update_from_old(&old_collisions[old_index]);
       } 
     }
 
     // Add collision to buffer
-    collisions[index] = manifold;
+    write_manifold_fields_from_value(&collisions[index], manifold);
 
 #if !defined(BB_SIM_DEBUG)
     // ISLAND BUILDER

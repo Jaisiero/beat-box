@@ -219,6 +219,10 @@ private
     {
       daxa_u32 island_index = 0u;
       InterlockedAdd(*atomic_island_count, 1, island_index);
+      if (island_index >= BB_MAX_RIGID_BODY_COUNT)
+      {
+        return;
+      }
       body_link.island_index = island_index;
       // unknow start index yet, reset counter
       islands[island_index] = Island(MAX_U32, 0, 0, MAX_U32, 0);
@@ -429,6 +433,10 @@ private
     // increment atomic counter from island
     daxa_u32 old_count = 0;
     InterlockedAdd(*contact_island_count, 1, old_count);
+    if (old_count >= BB_MAX_RIGID_BODY_COUNT)
+    {
+      return;
+    }
     // write contact island inside range in atomic counter from island
     daxa_u32 contact_island_index = old_count;
     contact_islands[contact_island_index] = ContactIsland(MAX_U64, island_index, MAX_U32, manifold_count, 0);
@@ -437,7 +445,8 @@ private
 
   daxa_u32 manifold_prefix_sum_islands()
   {
-    if (*contact_island_count == 0)
+    daxa_u32 safe_contact_island_count = min(*contact_island_count, BB_MAX_RIGID_BODY_COUNT);
+    if (safe_contact_island_count == 0)
       return 0;
 
     // Prefix sum the island sizes
@@ -459,7 +468,7 @@ private
 #endif // BB_DEBUG
 
     // Calculate the start index for each island
-    for (daxa_u32 i = 1; i < *contact_island_count; i++)
+    for (daxa_u32 i = 1; i < safe_contact_island_count; i++)
     {
       contact_islands[i].start_index = contact_islands[i - 1].start_index + contact_islands[i - 1].max_count;
 #if defined(BB_DEBUG)
@@ -496,14 +505,17 @@ private
     {
       daxa_u32 contact_island_index = islands[island_index].contact_island_index;
 
-      if(contact_island_index >= *contact_island_count)
+      daxa_u32 safe_contact_island_count = min(*contact_island_count, BB_MAX_RIGID_BODY_COUNT);
+      if(contact_island_index >= safe_contact_island_count)
         return manifold_link_index;
       
       daxa_u32 old_count = 0;
       InterlockedAdd(contact_islands[contact_island_index].count, 1, old_count);
+      if(old_count >= contact_islands[contact_island_index].max_count)
+        return manifold_link_index;
       // write body link inside range in atomic counter from island
       manifold_link_index = contact_islands[contact_island_index].start_index + old_count;
-      if (manifold_index < max_manifold_count)
+      if (manifold_index < max_manifold_count && manifold_link_index < max_manifold_count)
       {
         daxa_u32 max_index = max(body_a_index, body_b_index);
         manifold_indices[manifold_link_index] = ManifoldLinkIsland(manifold_index, min_index, max_index);
@@ -540,7 +552,8 @@ private
   void sort_manifold_links_in_island(daxa_u32 contact_island_index)
   {
 
-    if (contact_island_index >= *contact_island_count)
+    daxa_u32 safe_contact_island_count = min(*contact_island_count, BB_MAX_RIGID_BODY_COUNT);
+    if (contact_island_index >= safe_contact_island_count)
       return;
 
     daxa_u32 start_index = contact_islands[contact_island_index].start_index;

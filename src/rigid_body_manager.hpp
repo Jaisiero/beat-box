@@ -6,8 +6,8 @@
 
 BB_NAMESPACE_BEGIN
 
-class RendererManager;
-class GUIManager;
+struct RendererManager;
+struct GUIManager;
 
 struct RigidBodyManager{
 
@@ -26,6 +26,9 @@ struct RigidBodyManager{
   bool update_resources();
   // NOTE: this function reset simulation configuration
   bool update_sim();
+  void skip_warm_starting_once() {
+    suppress_warm_starting_once = true;
+  }
   
   bool update_active_rigid_body_list();
 
@@ -75,6 +78,7 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_radix_sort_histograms{{.buffer = {}, .name = "RB_radix_sort_histogram_task"}};
   daxa::TaskBuffer task_rigid_bodies{{.buffer = {}, .name = "RB_task"}};
   daxa::TaskBuffer task_lbvh_nodes{{.buffer = {}, .name = "RB_lbvh_node_task"}};
+  daxa::TaskBuffer task_previous_lbvh_nodes{{.buffer = {}, .name = "RB_previous_lbvh_node_task"}};
   daxa::TaskBuffer task_lbvh_construction_info{{.buffer = {}, .name = "RB_lbvh_construction_info_task"}};
   daxa::TaskBuffer task_rigid_body_entries{{.buffer = {}, .name = "RB_rigid_body_entry_task"}};
   daxa::TaskBuffer task_previous_rigid_body_entries{{.buffer = {}, .name = "RB_previous_rigid_body_entry_task"}};
@@ -94,11 +98,13 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_body_links{{.buffer = {}, .name = "RB_body_link_task"}};
   daxa::TaskBuffer task_manifold_links{{.buffer = {}, .name = "RB_manifold_link_task"}};
   daxa::TaskBuffer task_islands{{.buffer = {}, .name = "RB_island_task"}};
+  daxa::TaskBuffer task_previous_islands{{.buffer = {}, .name = "RB_previous_island_task"}};
   daxa::TaskBuffer task_contact_islands{{.buffer = {}, .name = "RB_contact_island_task"}};
+  daxa::TaskBuffer task_previous_contact_islands{{.buffer = {}, .name = "RB_previous_contact_island_task"}};
 
 private: 
-  void record_read_back_sim_config_tasks(TaskGraph &readback_SC_TG);
-  void record_update_sim_config_tasks(TaskGraph &update_SC_TG);
+  void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
+  void record_update_sim_config_tasks(TaskGraph &out_update_SC_TG);
   void record_active_rigid_body_list_upload_tasks(TaskGraph &ARB_TG);
   void update_buffers();
   
@@ -125,6 +131,7 @@ private:
   ;
   // simulating flag update 
   bool sim_flag_dirty[DOUBLE_BUFFERING] = {};
+  bool suppress_warm_starting_once = false;
 
   // Compute pipeline reference
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBD;

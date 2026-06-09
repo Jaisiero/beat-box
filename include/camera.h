@@ -8,8 +8,8 @@ const glm::vec3 INIT_CAMERA_POS = {0, 1, -4.5};
 const glm::vec3 INIT_CAMERA_UP = {0, 1, 0};
 
 const float INIT_CAMERA_FOV = 45.0f;
-const float INIT_CAMERA_WIDTH = 800.0f;
-const float INIT_CAMERA_HEIGHT = 600.0f;
+const unsigned int INIT_CAMERA_WIDTH = 800;
+const unsigned int INIT_CAMERA_HEIGHT = 600;
 const float INIT_CAMERA_NEAR = 0.001f;
 const float INIT_CAMERA_FAR = 1000.0f;
 const float CAMERA_SPEED = 0.1f;
@@ -145,7 +145,7 @@ FORCE_INLINE const float& camera_get_fov(const Camera& cam) {
 }
 
 FORCE_INLINE const float camera_get_aspect(const Camera& cam) {
-    return cam.width / cam.height;
+    return static_cast<float>(cam.width) / static_cast<float>(cam.height);
 }
 
 FORCE_INLINE const unsigned int& camera_get_width(const Camera& cam) {

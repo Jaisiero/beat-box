@@ -82,19 +82,19 @@ class BBImageTexture : public BBTexture<BBImageTexture> {
 
     BBImageTexture(std::string filename, const char* path = TEXTURES_PATH) : image(filename, path) {}
 
-    daxa_f32vec3 value(float u, float v, const daxa_f32vec3& p) const override {
+    daxa_f32vec3 value(float u, float v, const daxa_f32vec3&) const override {
         // If we have no texture data, then return solid cyan as a debugging aid.
-        if (image.height() <= 0) return daxa_f32vec3(0,1,1);
+        if (image.height() <= 0) return daxa_f32vec3(0.0f, 1.0f, 1.0f);
 
         // Clamp input texture coordinates to [0,1] x [1,0]
         u = interval(0,1).clamp(u);
-        v = 1.0 - interval(0,1).clamp(v);  // Flip V to image coordinates
+        v = 1.0f - interval(0,1).clamp(v);  // Flip V to image coordinates
 
         auto i = static_cast<int>(u * image.width());
         auto j = static_cast<int>(v * image.height());
         auto pixel = image.pixel_data(i,j);
 
-        auto color_scale = 1.0 / 255.0;
+        auto color_scale = 1.0f / 255.0f;
         return daxa_f32vec3(color_scale*pixel[0], color_scale*pixel[1], color_scale*pixel[2]);
     }
 

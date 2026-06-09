@@ -5,9 +5,9 @@
 
 BB_NAMESPACE_BEGIN
 
-class RendererManager;
-class RigidBodyManager;
-class GUIManager;
+struct RendererManager;
+struct RigidBodyManager;
+struct GUIManager;
 
 struct AccelerationStructureManager
 {
@@ -23,6 +23,8 @@ struct AccelerationStructureManager
   TaskGraph AS_build_TG;
   // TaskGraph for updating acceleration structures
   TaskGraph TLAS_update_TG;
+  // TaskGraph for rebuilding the TLAS after instance data has been updated
+  TaskGraph TLAS_build_TG;
   // TaskGraph for updating acceleration structures
   TaskGraph AS_update_buffers_TG;
 
@@ -71,7 +73,7 @@ private:
   // Compute pipeline for updating acceleration structures
   std::shared_ptr<daxa::ComputePipeline> update_pipeline;
   // Alignment of the scratch buffer
-  u32 acceleration_structure_scratch_offset_alignment = 0;
+  u64 acceleration_structure_scratch_offset_alignment = 0;
 
   // Offset for the scratch buffer for RigidBodies
   u32 rigid_body_scratch_offset = 0;
@@ -96,11 +98,11 @@ private:
   daxa::BufferId primitive_buffer = {};
 
   // Offset for the BLAS scratch buffer
-  u32 proc_blas_scratch_offset = 0;
+  u64 proc_blas_scratch_offset = 0;
   // Scratch buffer for the BLAS
   daxa::BufferId proc_blas_scratch_buffer = {};
   // Offset for the BLAS buffer
-  u32 proc_blas_buffer_offset = 0;
+  u64 proc_blas_buffer_offset = 0;
   // Buffer for the BLAS
   daxa::BufferId proc_blas_buffer = {};
   // Sub-allocated buffer for the BLAS
@@ -139,7 +141,7 @@ private:
 
   bool update();
   void record_accel_struct_tasks(TaskGraph &AS_TG);
-  void record_update_TLAS_tasks(TaskGraph &TLAS_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline);
+  void record_update_TLAS_tasks(TaskGraph &instances_TG, TaskGraph &build_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline);
   void record_update_AS_buffers_tasks(TaskGraph &AS_buffers_TG);
   void update_buffers();
 

@@ -363,13 +363,15 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
   // get the morton code rigid body index
   let rb_index = morton_codes[index].index;
+  RigidBody* src_body = &rigid_bodies[rb_index];
+  RigidBody* dst_body = &sorted_rigid_bodies[index];
   // get the rigid body id
-  let rb_id = rigid_bodies[rb_index].id;
+  let rb_id = src_body->id;
 
   // update the rigid body map
   rigid_body_map[rb_id] = RigidBodyEntry(index);
   // put the rigid body in the sorted array by morton codes
-  sorted_rigid_bodies[index] = rigid_bodies[rb_index];
+  copy_rigid_body_fields(dst_body, src_body);
   // update the lbvh node
   lbvh_nodes[rb_count - 1 + index].primitive_idx = index;
 }
@@ -435,12 +437,13 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   }
 
   SimConfig* sim_config =
-      (SimConfig*)(RBD.task_head.sim_config);
+      (SimConfig*)(NPD.task_head.sim_config);
 
   DispatchBuffer* dispatch_buffer =
-      (DispatchBuffer*)(RBD.task_head.dispatch_buffer);
+      (DispatchBuffer*)(NPD.task_head.dispatch_buffer);
 
-  let np_count = (sim_config->broad_phase_collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  let broad_phase_collision_count = min(sim_config->broad_phase_collision_count, BB_MAX_COLLISION_COUNT);
+  let np_count = (broad_phase_collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
   dispatch_buffer->narrow_phase_dispatch = daxa_u32vec3(np_count, 1, 1);
 }
 
@@ -451,7 +454,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       (SimConfig*)(NP.task_head.sim_config);
 
   daxa_u32 index = compute_i.x;
-  daxa_u32 collision_count = sim_config->broad_phase_collision_count;
+  daxa_u32 collision_count = min(sim_config->broad_phase_collision_count, BB_MAX_COLLISION_COUNT);
   if (index >= collision_count)
   {
     return;
@@ -511,8 +514,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
         return;
       }
 
-      RigidBody* r =
-          (RigidBody*)(&RB_sim.task_head.rigid_bodies[index]);
+      RigidBody* rigid_bodies = (RigidBody*)(RB_sim.task_head.rigid_bodies);
+      RigidBody* r = &rigid_bodies[index];
 
       if (sim_config->has_flag(SimFlag::ADVECTION))
       {
@@ -582,7 +585,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   DispatchBuffer* dispatch_buffer =
       (DispatchBuffer*)(CSD.task_head.dispatch_buffer);
 
-  var collision_c = (sim_config->g_c_info.collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+  var collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  var collision_c = (collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
   dispatch_buffer->collision_dispatch = daxa_u32vec3(collision_c, 1, 1);
 }
 
@@ -694,16 +698,17 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
       daxa_u32 index = compute_i.x;
 
-      if (index >= sim_config->g_c_info.collision_count)
+      daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+      if (index >= collision_count)
       {
         return;
       }
 
-      Manifold m =
-          MIB.task_head.collisions[index];
+      Manifold* manifolds = (Manifold*)(MIB.task_head.collisions);
+      Manifold* m = &manifolds[index];
 
-      daxa_u32 body_a_index = m.obb1_index;
-      daxa_u32 body_b_index = m.obb2_index;
+      daxa_u32 body_a_index = m->obb1_index;
+      daxa_u32 body_b_index = m->obb2_index;
 
       if (body_a_index >= sim_config->rigid_body_count || body_b_index >= sim_config->rigid_body_count || body_a_index == body_b_index)
       {
@@ -773,7 +778,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       DispatchBuffer* dispatch_buffer =
           (DispatchBuffer*)(CID.task_head.dispatch_buffer);
 
-      var ci_count = (sim_config->contact_island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
+      var contact_island_count = min(sim_config->contact_island_count, BB_MAX_RIGID_BODY_COUNT);
+      var ci_count = (contact_island_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
       dispatch_buffer->contact_island_dispatch = daxa_u32vec3(ci_count, 1, 1);
     }
 
@@ -800,9 +806,10 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   let contact_collision_count = builder.manifold_prefix_sum_islands();
 
 #if defined(BB_DEBUG)
-  if (contact_collision_count != sim_config->g_c_info.collision_count)
+  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (contact_collision_count != collision_count)
   {
-    printf("Manifold prefix sum failed, contact_collision_count: %d, collision_count: %d\n", contact_collision_count, sim_config->g_c_info.collision_count);
+    printf("Manifold prefix sum failed, contact_collision_count: %d, collision_count: %d\n", contact_collision_count, collision_count);
   }
 #endif // BB_DEBUG
 }
@@ -814,16 +821,17 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
           (SimConfig*)(MLI.task_head.sim_config);
 
       daxa_u32 index = compute_i.x;
-      if (index >= sim_config->g_c_info.collision_count)
+      daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+      if (index >= collision_count)
       {
         return;
       }
 
-      Manifold m =
-          MLI.task_head.collisions[index];
+      Manifold* manifolds = (Manifold*)(MLI.task_head.collisions);
+      Manifold* m = &manifolds[index];
 
-      daxa_u32 body_a_index = m.obb1_index;
-      daxa_u32 body_b_index = m.obb2_index;
+      daxa_u32 body_a_index = m->obb1_index;
+      daxa_u32 body_b_index = m->obb2_index;
 
       if (body_a_index >= sim_config->rigid_body_count || body_b_index >= sim_config->rigid_body_count || body_a_index == body_b_index)
       {
@@ -857,12 +865,12 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
       var collision_sorted = (Manifold*)(MLI.task_head.collision_sorted);
 
-      ContactIslandBuilder builder = ContactIslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands, sim_config->g_c_info.collision_count, manifold_links);
+      ContactIslandBuilder builder = ContactIslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands, collision_count, manifold_links);
 
       let manifold_index = builder.manifold_link_to_island(index, a_active_body_index, b_active_body_index);
 
       if(manifold_index != MAX_U32) {
-        collision_sorted[manifold_index] = m;
+        copy_manifold_fields(&collision_sorted[manifold_index], m);
         collision_map[index].index = manifold_index;
       }
     }
@@ -874,7 +882,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       (SimConfig*)(MBLI.task_head.sim_config);
 
   daxa_u32 index = compute_i.x;
-  if (index >= sim_config->contact_island_count)
+  daxa_u32 contact_island_count = min(sim_config->contact_island_count, BB_MAX_RIGID_BODY_COUNT);
+  if (index >= contact_island_count)
   {
     return;
   }
@@ -885,7 +894,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   ContactIsland* islands =
       (ContactIsland*)(MBLI.task_head.contact_islands);
 
-  ContactIslandBuilder builder = ContactIslandBuilder(&sim_config->contact_island_count, islands, sim_config->g_c_info.collision_count, manifold_links);
+  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  ContactIslandBuilder builder = ContactIslandBuilder(&sim_config->contact_island_count, islands, collision_count, manifold_links);
 
 //   builder.sort_manifold_links_in_island(index);
 }
@@ -900,14 +910,16 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 #if defined(BB_SIM_DEBUG)
       if (index >= 1)
 #else
-  if (index >= sim_config->contact_island_count)
+  daxa_u32 contact_island_count = min(sim_config->contact_island_count, BB_MAX_RIGID_BODY_COUNT);
+  if (index >= contact_island_count)
 #endif // BB_SIM_DEBUG
       {
         return;
       }
 
 #if defined(BB_SIM_DEBUG)
-      for (daxa_u32 manifold_index = 0; manifold_index < sim_config->g_c_info.collision_count; ++manifold_index)
+      daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+      for (daxa_u32 manifold_index = 0; manifold_index < collision_count; ++manifold_index)
       {
 #else
   ContactIsland* islands =
@@ -922,7 +934,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
 
-  if (start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
+  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (start_index + max_count > collision_count || max_count == 0)
   {
 #if defined(BB_DEBUG)
     printf("Collision pre solver failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
@@ -974,14 +987,16 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 #if defined(BB_SIM_DEBUG)
   if (index >= 1)
 #else
-  if (index >= sim_config->contact_island_count)
+  daxa_u32 contact_island_count = min(sim_config->contact_island_count, BB_MAX_RIGID_BODY_COUNT);
+  if (index >= contact_island_count)
 #endif // BB_SIM_DEBUG
   {
     return;
   }
 
 #if defined(BB_SIM_DEBUG)
-  for (daxa_u32 manifold_index = 0; manifold_index < sim_config->g_c_info.collision_count; ++manifold_index)
+  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  for (daxa_u32 manifold_index = 0; manifold_index < collision_count; ++manifold_index)
   {
 #else
   ContactIsland* islands =
@@ -996,7 +1011,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
 
-  if (start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
+  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (start_index + max_count > collision_count || max_count == 0)
   {
 #if defined(BB_DEBUG)
     printf("Collision solver failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
@@ -1053,8 +1069,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       daxa_u32 index = compute_i.x;
 
       // FIXME: split between static and dynamic objects
-      RigidBody* r =
-          (RigidBody*)(&RB_integrate.task_head.rigid_bodies[index]);
+      RigidBody* rigid_bodies = (RigidBody*)(RB_integrate.task_head.rigid_bodies);
+      RigidBody* r = &rigid_bodies[index];
 
       // Integrate positions
       if (sim_config->has_flag(SimFlag::ADVECTION))
@@ -1074,14 +1090,16 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 #if defined(BB_SIM_DEBUG)
   if (index >= 1)
 #else
-  if (index >= sim_config->contact_island_count)
+  daxa_u32 contact_island_count = min(sim_config->contact_island_count, BB_MAX_RIGID_BODY_COUNT);
+  if (index >= contact_island_count)
 #endif // BB_SIM_DEBUG
   {
     return;
   }
 
 #if defined(BB_SIM_DEBUG)
-  for (daxa_u32 manifold_index = 0; manifold_index < sim_config->g_c_info.collision_count; ++manifold_index)
+  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  for (daxa_u32 manifold_index = 0; manifold_index < collision_count; ++manifold_index)
   {
 #else
   ContactIsland* islands =
@@ -1096,7 +1114,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   daxa_u32 start_index = islands[index].start_index;
   daxa_u32 max_count = islands[index].count;
 
-  if (start_index + max_count > sim_config->g_c_info.collision_count || max_count == 0)
+  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (start_index + max_count > collision_count || max_count == 0)
   {
 #if defined(BB_DEBUG)
     printf("Collision solver relaxation failed index %d, start_index %d, max_count %d\n", index, start_index, max_count);
@@ -1145,32 +1164,44 @@ const static daxa::f32 LINE_SIZE = 0.5f;
   SimConfig* sim_config =
       (SimConfig*)(CP.task_head.sim_config);
 
-  if (compute_i.x >= sim_config->g_c_info.collision_count)
+  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (compute_i.x >= collision_count)
   {
     return;
   }
 
-  Manifold m =
-      CP.task_head.collisions[compute_i.x];
+  Manifold* manifolds = (Manifold*)(CP.task_head.collisions);
+  Manifold* m = &manifolds[compute_i.x];
+
+  daxa_u32 contact_count = m->contact_count > 0 ? (daxa_u32)m->contact_count : 0u;
+  if(contact_count == 0u)
+  {
+    return;
+  }
 
   daxa_u32 index = 0;
-  InterlockedAdd(sim_config->g_c_info.collision_point_count, m.contact_count, index);
+  InterlockedAdd(sim_config->g_c_info.collision_point_count, contact_count, index);
+  if(index >= BB_MAX_DEBUG_CONTACT_POINT_COUNT)
+  {
+    return;
+  }
+  contact_count = min(contact_count, BB_MAX_DEBUG_CONTACT_POINT_COUNT - index);
 
   if (sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
     var vertex_buffer = (GUIVertex*)(CP.task_head.vertex_buffer);
     var line_vertex_buffer = (GUIVertexLine*)(CP.task_head.line_vertex_buffer);
 
-    for (int i = 0; i < m.contact_count; i++)
+    for (daxa_u32 i = 0; i < contact_count; i++)
     {
       daxa_u32 current_index = index + i;
-      vertex_buffer[current_index].position = m.contacts[i].position;
-      daxa::f32 blue = (daxa::f32)(255 - m.contacts[i].warm_start) / 255.0f;
+      vertex_buffer[current_index].position = m->contacts[i].position;
+      daxa::f32 blue = (daxa::f32)(255 - m->contacts[i].warm_start) / 255.0f;
       daxa::f32 red = 1.0f - blue;
       vertex_buffer[current_index].color = daxa::f32vec3(red, 0.0f, blue);
 
-      line_vertex_buffer[current_index * LINE_POINT_COUNT].position = m.contacts[i].position;
-      line_vertex_buffer[current_index * LINE_POINT_COUNT + 1].position = m.contacts[i].position + m.normal * LINE_SIZE;
+      line_vertex_buffer[current_index * LINE_POINT_COUNT].position = m->contacts[i].position;
+      line_vertex_buffer[current_index * LINE_POINT_COUNT + 1].position = m->contacts[i].position + m->normal * LINE_SIZE;
     }
   }
 }
@@ -1192,24 +1223,26 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   daxa_u32 index = compute_i.x;
 
   // FIXME: split between static and dynamic objects?
-  RigidBody r = RB_update.task_head.rigid_bodies[index];
-
-  RigidBody r_copy = r;
-  r_copy.island_index = MAX_U32;
-  r_copy.active_index = MAX_U32;
-  r_copy.manifold_node_index = MAX_U32;
+  RigidBody* rigid_bodies = (RigidBody*)(RB_update.task_head.rigid_bodies);
+  RigidBody* rigid_bodies_update = (RigidBody*)(RB_update.task_head.rigid_bodies_update);
+  RigidBody* r = &rigid_bodies[index];
+  RigidBody* r_copy = &rigid_bodies_update[index];
+  copy_rigid_body_fields(r_copy, r);
+  r_copy->island_index = MAX_U32;
+  r_copy->active_index = MAX_U32;
+  r_copy->manifold_node_index = MAX_U32;
 
   if (sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
-    daxa::f32vec3 _min = r.minimum;
-    daxa::f32vec3 _max = r.maximum;
+    daxa::f32vec3 _min = r->minimum;
+    daxa::f32vec3 _max = r->maximum;
     daxa::f32vec3 center = (_min + _max) * 0.5f;
     var axes_vertex_buffer = (GUIVertexLine*)(RB_update.task_head.axes_vertex_buffer);
-    let x_axis = r.rotate_vector(daxa::f32vec3(1.0f, 0.0f, 0.0f));
-    let y_axis = r.rotate_vector(daxa::f32vec3(0.0f, 1.0f, 0.0f));
-    let z_axis = r.rotate_vector(daxa::f32vec3(0.0f, 0.0f, 1.0f));
+    let x_axis = r->rotate_vector(daxa::f32vec3(1.0f, 0.0f, 0.0f));
+    let y_axis = r->rotate_vector(daxa::f32vec3(0.0f, 1.0f, 0.0f));
+    let z_axis = r->rotate_vector(daxa::f32vec3(0.0f, 0.0f, 1.0f));
 
-    center = r.object_to_world(center);
+    center = r->object_to_world(center);
 
     axes_vertex_buffer[index * AXES_POINT_COUNT].position = center;
     axes_vertex_buffer[index * AXES_POINT_COUNT + 1].position = center + x_axis;
@@ -1218,8 +1251,6 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     axes_vertex_buffer[index * AXES_POINT_COUNT + 4].position = center;
     axes_vertex_buffer[index * AXES_POINT_COUNT + 5].position = center + z_axis;
   }
-
-  RB_update.task_head.rigid_bodies_update[index] = r_copy;
 
 #if defined(BB_DEBUG)
   // printf("Updating rigid body %d sim frame: %lu c frame: %lu\n", index, r.frame_count, r_copy.frame_count);

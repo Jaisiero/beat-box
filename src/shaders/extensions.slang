@@ -1,5 +1,118 @@
 #include "shared.inl"
 
+void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
+{
+  dst->id = src->id;
+  dst->flags = src->flags;
+  dst->island_index = src->island_index;
+  dst->active_index = src->active_index;
+  dst->manifold_node_index = src->manifold_node_index;
+  dst->material_index = src->material_index;
+#if defined(BB_DEBUG)
+  dst->face_collided = src->face_collided;
+#endif // BB_DEBUG
+  dst->primitive_count = src->primitive_count;
+  dst->primitive_offset = src->primitive_offset;
+  dst->position = src->position;
+  dst->rotation.v = src->rotation.v;
+  dst->rotation.w = src->rotation.w;
+  dst->minimum = src->minimum;
+  dst->maximum = src->maximum;
+  dst->mass = src->mass;
+  dst->inv_mass = src->inv_mass;
+  dst->velocity = src->velocity;
+  dst->omega = src->omega;
+  dst->inv_inertia[0][0] = src->inv_inertia[0][0];
+  dst->inv_inertia[0][1] = src->inv_inertia[0][1];
+  dst->inv_inertia[0][2] = src->inv_inertia[0][2];
+  dst->inv_inertia[1][0] = src->inv_inertia[1][0];
+  dst->inv_inertia[1][1] = src->inv_inertia[1][1];
+  dst->inv_inertia[1][2] = src->inv_inertia[1][2];
+  dst->inv_inertia[2][0] = src->inv_inertia[2][0];
+  dst->inv_inertia[2][1] = src->inv_inertia[2][1];
+  dst->inv_inertia[2][2] = src->inv_inertia[2][2];
+  dst->restitution = src->restitution;
+  dst->friction = src->friction;
+}
+
+void copy_contact_fields(Contact* dst, Contact* src)
+{
+  dst->position = src->position;
+  dst->penetration = src->penetration;
+  dst->normal_impulse = src->normal_impulse;
+  dst->tangent_impulse[0] = src->tangent_impulse[0];
+  dst->tangent_impulse[1] = src->tangent_impulse[1];
+  dst->bias_factor = src->bias_factor;
+  dst->impulse_coefficient = src->impulse_coefficient;
+  dst->mass_coefficient = src->mass_coefficient;
+  dst->normal_mass = src->normal_mass;
+  dst->tangent_mass[0] = src->tangent_mass[0];
+  dst->tangent_mass[1] = src->tangent_mass[1];
+  dst->fp.in_reference = src->fp.in_reference;
+  dst->fp.out_reference = src->fp.out_reference;
+  dst->fp.in_incident = src->fp.in_incident;
+  dst->fp.out_incident = src->fp.out_incident;
+  dst->warm_start = src->warm_start;
+}
+
+void write_contact_fields_from_value(Contact* dst, Contact src)
+{
+  dst->position = src.position;
+  dst->penetration = src.penetration;
+  dst->normal_impulse = src.normal_impulse;
+  dst->tangent_impulse[0] = src.tangent_impulse[0];
+  dst->tangent_impulse[1] = src.tangent_impulse[1];
+  dst->bias_factor = src.bias_factor;
+  dst->impulse_coefficient = src.impulse_coefficient;
+  dst->mass_coefficient = src.mass_coefficient;
+  dst->normal_mass = src.normal_mass;
+  dst->tangent_mass[0] = src.tangent_mass[0];
+  dst->tangent_mass[1] = src.tangent_mass[1];
+  dst->fp.in_reference = src.fp.in_reference;
+  dst->fp.out_reference = src.fp.out_reference;
+  dst->fp.in_incident = src.fp.in_incident;
+  dst->fp.out_incident = src.fp.out_incident;
+  dst->warm_start = src.warm_start;
+}
+
+void copy_manifold_fields(Manifold* dst, Manifold* src)
+{
+  dst->obb1_index = src->obb1_index;
+  dst->obb2_index = src->obb2_index;
+  dst->anchor_a = src->anchor_a;
+  dst->anchor_b = src->anchor_b;
+  dst->key = src->key;
+  dst->error = src->error;
+  dst->frame_count = src->frame_count;
+  dst->normal = src->normal;
+  dst->tangent_vectors[0] = src->tangent_vectors[0];
+  dst->tangent_vectors[1] = src->tangent_vectors[1];
+  dst->contact_count = src->contact_count;
+  for (daxa_u32 i = 0u; i < MAX_CONTACT_POINT_COUNT; ++i)
+  {
+    copy_contact_fields(&dst->contacts[i], &src->contacts[i]);
+  }
+}
+
+void write_manifold_fields_from_value(Manifold* dst, Manifold src)
+{
+  dst->obb1_index = src.obb1_index;
+  dst->obb2_index = src.obb2_index;
+  dst->anchor_a = src.anchor_a;
+  dst->anchor_b = src.anchor_b;
+  dst->key = src.key;
+  dst->error = src.error;
+  dst->frame_count = src.frame_count;
+  dst->normal = src.normal;
+  dst->tangent_vectors[0] = src.tangent_vectors[0];
+  dst->tangent_vectors[1] = src.tangent_vectors[1];
+  dst->contact_count = src.contact_count;
+  for (daxa_u32 i = 0u; i < MAX_CONTACT_POINT_COUNT; ++i)
+  {
+    write_contact_fields_from_value(&dst->contacts[i], src.contacts[i]);
+  }
+}
+
 extension RigidBody
 {
   [mutating] void advect(Ptr<SimConfig> sim_config)
@@ -151,10 +264,10 @@ extension Manifold {
 
 static const daxa_f32 POSITION_TOLERANCE = 0.01f;
 
-  bool is_same_contact(Contact c1, Contact c2)
+  bool is_same_contact(Contact* old_contact, FeaturePair contact_fp)
 {
-    bool features_match = (c1.fp.in_incident == c2.fp.in_incident) &&
-                          (c1.fp.out_incident == c2.fp.out_incident);
+    bool features_match = (old_contact->fp.in_incident == contact_fp.in_incident) &&
+                          (old_contact->fp.out_incident == contact_fp.out_incident);
     // bool positions_close = length(c1.position - c2.position) < POSITION_TOLERANCE;
 
     return features_match 
@@ -174,24 +287,25 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
   }
 
   [mutating]
-  void update(Manifold old_manifold) {
-    daxa_f32vec3 otv0  = old_manifold.tangent_vectors[0];
-    daxa_f32vec3 otv1  = old_manifold.tangent_vectors[1];
+  void update_from_old(Manifold* old_manifold) {
+    daxa_f32vec3 otv0  = old_manifold->tangent_vectors[0];
+    daxa_f32vec3 otv1  = old_manifold->tangent_vectors[1];
 
     // bool _found[4] = {false, false, false, false};
     for(daxa_u32 i = 0u; i < contact_count; i++) {
       // bool found = false;
-      for(daxa_u32 j = 0u; j < old_manifold.contact_count; j++) {
-        if(is_same_contact(old_manifold.contacts[j], contacts[i])) {
+      for(daxa_u32 j = 0u; j < old_manifold->contact_count; j++) {
+        Contact* old_contact = &old_manifold->contacts[j];
+        if(is_same_contact(old_contact, contacts[i].fp)) {
           // found = true;
           // _found[j] = true;
           // printf("update - old fp %d %d %d %d fp %d %d %d %d ws: %d\n", old_manifold.contacts[j].fp.in_reference, old_manifold.contacts[j].fp.out_reference, old_manifold.contacts[j].fp.in_incident, old_manifold.contacts[j].fp.out_incident, contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, old_manifold.contacts[j].warm_start);
 
-            contacts[i].normal_impulse = old_manifold.contacts[j].normal_impulse;
-            contacts[i].tangent_impulse[0] = old_manifold.contacts[j].tangent_impulse[0];
-            contacts[i].tangent_impulse[1] = old_manifold.contacts[j].tangent_impulse[1];
+            contacts[i].normal_impulse = old_contact->normal_impulse;
+            contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0];
+            contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
 
-            contacts[i].warm_start = min(255, old_manifold.contacts[j].warm_start + 1u);
+            contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
           break;
         } 
       }
@@ -204,10 +318,9 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
 };
 
 
-func find_old_collision(daxa_u32 body_a_index, daxa_u32 body_b_index, daxa_u32 old_collision_count, Ptr<Manifold> old_collisions, out Manifold old_manifold, out daxa_u32 old_index) -> daxa_b32 {
+func find_old_collision(daxa_u32 body_a_index, daxa_u32 body_b_index, daxa_u32 old_collision_count, Manifold* old_collisions, out daxa_u32 old_index) -> daxa_b32 {
   for(daxa_u32 i = 0u; i < old_collision_count; ++i) {
     if(old_collisions[i].obb1_index == body_a_index && old_collisions[i].obb2_index == body_b_index) {
-      old_manifold = old_collisions[i];
       old_index = i;
       return true;
     }

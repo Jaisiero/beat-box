@@ -8,7 +8,7 @@
 
 BB_NAMESPACE_BEGIN
 
-class RendererManager;
+struct RendererManager;
 
 struct GUIDrawTask
 {
@@ -50,7 +50,9 @@ struct GUIDrawTask
       render_recorder.push_constant(GUIPushConstants{
         .task_head = ti.attachment_shader_blob,
       });
-      auto const vertex_count = sim_config.g_c_info.collision_point_count;
+      auto const vertex_count = sim_config.g_c_info.collision_point_count > BB_MAX_DEBUG_CONTACT_POINT_COUNT
+                                  ? BB_MAX_DEBUG_CONTACT_POINT_COUNT
+                                  : sim_config.g_c_info.collision_point_count;
       render_recorder.draw({.vertex_count = vertex_count});
       ti.recorder = std::move(render_recorder).end_renderpass();
     }
@@ -97,7 +99,10 @@ struct GUILineDrawTask
       render_recorder.push_constant(GUILinePushConstants{
         .task_head = ti.attachment_shader_blob,
       });
-      auto const vertex_count = sim_config.g_c_info.collision_point_count * 2;
+      auto const point_count = sim_config.g_c_info.collision_point_count > BB_MAX_DEBUG_CONTACT_POINT_COUNT
+                                 ? BB_MAX_DEBUG_CONTACT_POINT_COUNT
+                                 : sim_config.g_c_info.collision_point_count;
+      auto const vertex_count = point_count * 2;
       render_recorder.draw({.vertex_count = vertex_count});
       ti.recorder = std::move(render_recorder).end_renderpass();
     }

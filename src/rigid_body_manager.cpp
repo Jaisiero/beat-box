@@ -144,7 +144,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .name = "active_rigid_bodies" + std::to_string(i),
     });
     rigid_body_link_manifolds[i] = device.create_buffer({
-        .size = sizeof(ManifoldNode) * MAX_COLLISION_COUNT,
+        .size = sizeof(ManifoldNode) * BB_MAX_MANIFOLD_NODE_COUNT,
         .name = "rigid_body_link_manifolds" + std::to_string(i),
     });
     scratch_body_links[i] = device.create_buffer({
@@ -233,6 +233,14 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         auto broad_phase_collision_count = 0;
         allocate_fill_copy(ti, broad_phase_collision_count, ti.get(task_sim_config), offsetof(SimConfig, broad_phase_collision_count));
 
+        auto frame_flags = sim_flags;
+        if (suppress_warm_starting_once)
+        {
+          frame_flags &= ~SimFlag::WARM_STARTING;
+          suppress_warm_starting_once = false;
+        }
+        allocate_fill_copy(ti, frame_flags, ti.get(task_sim_config), offsetof(SimConfig, flags));
+
         shift = 0;
         allocate_fill_copy(ti, shift, ti.get(task_sim_config), offsetof(SimConfig, radix_shift));
 
@@ -262,7 +270,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   
   // Calculate first dispatch count for rigid body dispatcher
-  auto user_callback_RBD = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_RBD = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_RBD);
     ti.recorder.push_constant(RigidBodyDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
@@ -278,7 +286,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_RBD);
 
-  auto user_callback_GMC = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_GMC = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_GMC);
     ti.recorder.push_constant(RigidBodyGenerateMortonCodePushConstants{.task_head = ti.attachment_shader_blob});
@@ -298,7 +306,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   
 
-  auto user_callback_RBSRH = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_RBSRH = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_RBRSH);
     ti.recorder.push_constant(RigidBodyRadixSortHistogramPushConstants{.task_head = ti.attachment_shader_blob});
@@ -326,7 +334,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_RBSRH);
 
-  auto user_callback_RBSRS = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_RBSRS = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_RBSRS);
     ti.recorder.push_constant(RigidBodySingleRadixSortPushConstants{.task_head = ti.attachment_shader_blob});
@@ -369,7 +377,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   });
 
   // Task for Generating Hierarchy for Linear Bounding Volume Hierarchy
-  auto user_callback_RBLBVHGH = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_RBLBVHGH = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_RBLBVHGH);
     ti.recorder.push_constant(RigidBodyGenerateHierarchyLinearBVHPushConstants{.task_head = ti.attachment_shader_blob});
@@ -390,7 +398,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    user_callback_RBLBVHGH);
 
   // Task for Building Bounding Boxes for Linear Bounding Volume Hierarchy
-  auto user_callback_BBBLBVHGH = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_BBBLBVHGH = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_BBBLBVHGH);
     ti.recorder.push_constant(RigidBodyBuildBoundingBoxesLBVHPushConstants{.task_head = ti.attachment_shader_blob});
@@ -409,7 +417,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    user_callback_BBBLBVHGH);
 
   // Task for Converting integer-mapped LBVH bounds back into float AABBs (internal nodes)
-  auto user_callback_CBBLBVHGH = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_CBBLBVHGH = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_CBBLBVHGH);
     ti.recorder.push_constant(RigidBodyConvertBoundingBoxesLBVHPushConstants{.task_head = ti.attachment_shader_blob});
@@ -427,7 +435,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    user_callback_CBBLBVHGH);
 
   // Task for Reordering Rigid Bodies
-  auto user_callback_RBR = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_RBR = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_RBR);
     ti.recorder.push_constant(RigidBodyReorderingPushConstants{.task_head = ti.attachment_shader_blob});
@@ -450,7 +458,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
 
   // Task for reseting body links for islands
-  auto user_callback_RBL = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_RBL = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_RBL);
     ti.recorder.push_constant(ResetBodyLinkPushConstants{.task_head = ti.attachment_shader_blob});
@@ -471,7 +479,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_RBL);
 
-  auto user_callback_BP = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_BP = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_BP);
     ti.recorder.push_constant(BroadPhasePushConstants{.task_head = ti.attachment_shader_blob});
@@ -492,7 +500,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    user_callback_BP);
 
   // Calculate first dispatch count for 
-  auto user_callback_NPD = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_NPD = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_NPD);
     ti.recorder.push_constant(NarrowPhaseDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
@@ -508,7 +516,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_NPD);
 
-  auto user_callback_NP = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_NP = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_NP);
     ti.recorder.push_constant(NarrowPhasePushConstants{.task_head = ti.attachment_shader_blob});
@@ -537,7 +545,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_NP);
 
-  auto user_callback_advect = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_advect = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_advect);
     ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob});
@@ -554,7 +562,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_advect);
 
-  auto user_callback_IC = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_IC = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_IC);
     ti.recorder.push_constant(IslandCounterPushConstants{.task_head = ti.attachment_shader_blob});
@@ -572,7 +580,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_IC);
 
-  auto user_callback_CS_dispatcher = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_CS_dispatcher = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_CS_dispatcher);
     ti.recorder.push_constant(CollisionSolverDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
@@ -588,7 +596,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                                          },
                                          user_callback_CS_dispatcher);
 
-  auto user_callback_ID = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_ID = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_ID);
     ti.recorder.push_constant(IslandDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
@@ -604,7 +612,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_ID);
 
-  auto user_callback_IB = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_IB = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_IB);
     ti.recorder.push_constant(IslandBuilderPushConstants{.task_head = ti.attachment_shader_blob});
@@ -625,7 +633,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_IB);
 
-  auto user_callback_IPS = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_IPS = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_IPS);
     ti.recorder.push_constant(IslandPrefixSumPushConstants{.task_head = ti.attachment_shader_blob});
@@ -641,7 +649,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_IPS);
 
-  auto user_callback_IBL = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_IBL = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_IBL);
     ti.recorder.push_constant(IslandBuilderBodyLink2IslandPushConstants{.task_head = ti.attachment_shader_blob});
@@ -660,7 +668,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_IBL);
 
-  auto user_callback_SBLI = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_SBLI = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_SBLI);
     ti.recorder.push_constant(IslandBuilderSortBodyLinkInIslandPushConstants{.task_head = ti.attachment_shader_blob});
@@ -678,7 +686,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        },
                        user_callback_SBLI);
 
-  auto user_callback_MIB = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_MIB = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_MIB);
     ti.recorder.push_constant(ManifoldIslandBuilderPushConstants{.task_head = ti.attachment_shader_blob});
@@ -698,7 +706,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_MIB);
 
-  auto user_callback_CGI = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_CGI = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_CIG);
     ti.recorder.push_constant(ContactIslandGatherPushConstants{.task_head = ti.attachment_shader_blob});
@@ -716,7 +724,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_CGI);
 
-  auto user_callback_CID = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_CID = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_CID);
     ti.recorder.push_constant(ContactIslandDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
@@ -732,7 +740,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_CID);
 
-  auto user_callback_MIPS = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_MIPS = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_MIPS);
     ti.recorder.push_constant(ManifoldIslandPrefixSumPushConstants{.task_head = ti.attachment_shader_blob});
@@ -749,7 +757,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        },
                        user_callback_MIPS);
 
-  auto user_callback_IML = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_IML = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_IML);
     ti.recorder.push_constant(IslandBuilderManifoldLink2IslandPushConstants{.task_head = ti.attachment_shader_blob});
@@ -773,7 +781,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_IML);
 
-  auto user_callback_SMLI = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_SMLI = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_SMLI);
     ti.recorder.push_constant(IslandBuilderSortManifoldLinkInIslandPushConstants{.task_head = ti.attachment_shader_blob});
@@ -791,7 +799,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        },
                        user_callback_SMLI);
 
-  auto user_callback_CPS = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_CPS = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_CPS);
     ti.recorder.push_constant(CollisionPreSolverPushConstants{.task_head = ti.attachment_shader_blob});
@@ -812,7 +820,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_CPS);
 
-  auto user_callback_CS = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_CS = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_CS);
     ti.recorder.push_constant(CollisionSolverPushConstants{.task_head = ti.attachment_shader_blob});
@@ -833,7 +841,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_CS);
 
-  auto user_callback_IP = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_IP = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_IP);
     ti.recorder.push_constant(RigidBodyIntegratePositionsPushConstants{.task_head = ti.attachment_shader_blob});
@@ -850,7 +858,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_IP);
 
-  auto user_callback_CSR = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_CSR = [this](daxa::TaskInterface ti, auto &)
   {
     if (solver_type == SimSolverType::PGS_SOFT)
     {
@@ -875,12 +883,12 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_CSR);
 
-  auto user_callback_CP = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_CP = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*create_points_pipeline);
     ti.recorder.push_constant(CreatePointsPushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(CreatePointsTaskHead::AT.dispatch_buffer).id,
-                                   .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
+                                   .offset = sizeof(daxa_u32vec3) * COLLISION_DISPATCH_COUNT_OFFSET});
   };
 
   using TTaskCP = TaskTemplate<CreatePointsTaskHead::Task, decltype(user_callback_CP)>;
@@ -895,7 +903,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                   },
                   user_callback_CP);
 
-  auto user_callback_update = [this](daxa::TaskInterface ti, auto &self)
+  auto user_callback_update = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*update_pipeline);
     ti.recorder.push_constant(RigidBodyUpdatePushConstants{.task_head = ti.attachment_shader_blob});
@@ -1024,7 +1032,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   task_body_links.set_buffer(body_links[0]);
   task_manifold_links.set_buffer(manifold_links[0]);
   task_islands.set_buffer(island_buffer[0]);
+  task_previous_lbvh_nodes.set_buffer(lbvh_nodes[1]);
+  task_previous_islands.set_buffer(island_buffer[1]);
   task_contact_islands.set_buffer(contact_island_buffer[0]);
+  task_previous_contact_islands.set_buffer(contact_island_buffer[1]);
 
   // Placeholders for accel_struct_mngr task buffers which are compiled here but bound later
   accel_struct_mngr->task_dispatch_buffer.set_buffer(tmp_morton_codes);
@@ -1048,7 +1059,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   return initialized = true;
 }
 
-void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &readback_SC_TG)
+void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG)
 {
   daxa::InlineTaskInfo task_readback_SC({
       .attachments = {
@@ -1075,10 +1086,10 @@ void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &readback_SC_
       task_readback_SC,
   };
 
-  readback_SC_TG = task_manager->create_task_graph("Read back Simulation Configuration", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+  out_readback_SC_TG = task_manager->create_task_graph("Read back Simulation Configuration", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
 }
 
-void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &update_SC_TG)
+void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &out_update_SC_TG)
 {
   daxa::InlineTaskInfo task_update_SC({
       .attachments = {
@@ -1105,7 +1116,7 @@ void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &update_SC_TG)
       task_update_SC,
   };
 
-  update_SC_TG = task_manager->create_task_graph("Update Simulation Configuration", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+  out_update_SC_TG = task_manager->create_task_graph("Update Simulation Configuration", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
 }
 
 void RigidBodyManager::destroy()
@@ -1259,6 +1270,7 @@ void RigidBodyManager::update_buffers()
   task_rigid_bodies.set_buffer(accel_struct_mngr->get_rigid_body_buffer());
   task_next_rigid_bodies.set_buffer(accel_struct_mngr->get_next_rigid_body_buffer());
   task_lbvh_nodes.set_buffer(lbvh_nodes[current_frame]);
+  task_previous_lbvh_nodes.set_buffer(lbvh_nodes[previous_frame]);
   task_lbvh_construction_info.set_buffer(lbvh_construction_info);
   task_active_rigid_bodies.set_buffer(active_rigid_bodies[current_frame]);
   task_rigid_body_entries.set_buffer(rigid_body_entries[current_frame]);
@@ -1276,7 +1288,9 @@ void RigidBodyManager::update_buffers()
   task_body_links.set_buffer(body_links[current_frame]);
   task_manifold_links.set_buffer(manifold_links[current_frame]);
   task_islands.set_buffer(island_buffer[current_frame]);
+  task_previous_islands.set_buffer(island_buffer[previous_frame]);
   task_contact_islands.set_buffer(contact_island_buffer[current_frame]);
+  task_previous_contact_islands.set_buffer(contact_island_buffer[previous_frame]);
 }
 
 BB_NAMESPACE_END

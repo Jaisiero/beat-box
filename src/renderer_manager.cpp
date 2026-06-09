@@ -68,7 +68,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
       .name = "copy rigid bodies and primitives",
   });
 
-  auto user_callback = [this, SBT](daxa::TaskInterface ti, auto &self)
+  auto user_callback = [this, SBT](daxa::TaskInterface ti, auto &)
   {
     auto const image_info = ti.device.image_info(ti.get(RayTracingTaskHead::AT.swapchain).id).value();
     ti.recorder.set_pipeline(*RT_pipeline->pipeline);

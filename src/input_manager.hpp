@@ -5,7 +5,7 @@
 
 BB_NAMESPACE_BEGIN  
 
-class StatusManager;
+struct StatusManager;
 
 struct InputManager{
 
@@ -21,12 +21,12 @@ struct InputManager{
   ~InputManager() {};
 
   bool create(std::shared_ptr<CameraManager> camera_manager
-  , std::shared_ptr<StatusManager> status_mngr
+  , std::shared_ptr<StatusManager> status_manager
   ) {
     if (initialized) return false;
     initialized = true;
     this->camera_mngr = camera_manager;
-    this->status_mngr = status_mngr;
+    this->status_mngr = status_manager;
     return initialized;
   }
 

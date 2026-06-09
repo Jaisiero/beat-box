@@ -16,7 +16,7 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
 
   for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
     vertex_buffer[f] = gpu->device.create_buffer({
-      .size = sizeof(GUIVertex) * MAX_VERTEX_COUNT,
+      .size = sizeof(GUIVertex) * BB_MAX_DEBUG_CONTACT_POINT_COUNT,
       .name = "GUI vertex buffer " + std::to_string(f),
     });
 
@@ -40,12 +40,12 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
 
   for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
     vertex_line_buffer[f] = gpu->device.create_buffer({
-      .size = sizeof(GUIVertexLine) * MAX_VERTEX_COUNT,
+      .size = sizeof(GUIVertexLine) * BB_MAX_DEBUG_CONTACT_LINE_VERTEX_COUNT,
       .name = "GUI line vertex buffer " + std::to_string(f),
     });
 
-  task_line_vertex_buffer.set_buffer(vertex_buffer[0]);
-  task_previous_line_vertex_buffer.set_buffer(vertex_buffer[1]);
+  task_line_vertex_buffer.set_buffer(vertex_line_buffer[0]);
+  task_previous_line_vertex_buffer.set_buffer(vertex_line_buffer[1]);
 
   gui_line_task_info = GUILineDrawTask{
     .views = std::array{

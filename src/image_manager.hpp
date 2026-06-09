@@ -89,11 +89,11 @@ struct ImageManager
         });
         std::array<daxa::TaskBuffer, 1> buffers = {
             task_host_buffer};
-        std::array<daxa::TaskImage, 1> images = {
+        std::array<daxa::TaskImage, 1> task_images = {
             task_image};
         std::array<daxa::InlineTaskInfo, 1> tasks = {
             task_upload_image};
-        UI_TG = task_manager->create_task_graph("Upload Image Task Graph", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), std::span<daxa::TaskImage>(images), {}, {});
+        UI_TG = task_manager->create_task_graph("Upload Image Task Graph", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), std::span<daxa::TaskImage>(task_images), {}, {});
     }
 
     void destroy()
@@ -171,7 +171,7 @@ struct ImageManager
     }
 
     // Upload an image
-    void upload_image(std::shared_ptr<BBImageTexture> image, u32 image_index, usize& offset)
+    void upload_image(std::shared_ptr<BBImageTexture> image, u32, usize& offset)
     {
 
         auto image_size = image->get_size();
