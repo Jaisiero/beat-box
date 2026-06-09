@@ -234,6 +234,11 @@ void RendererManager::render()
     // Update the acceleration structures
     if(status_manager->is_simulating() || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
+      { static daxa_u64 _cf = 0; if ((_cf++ % 30) == 0) { auto const &sc = rigid_body_manager->get_sim_config_reference();
+        std::cout << "[COLOR] rb=" << sc.rigid_body_count << " manifolds=" << sc.g_c_info.collision_count
+                  << " contact_islands=" << sc.contact_island_count
+                  << " | colors=" << sc.graph_color_count << " violations=" << sc.graph_color_violations
+                  << "  (validator: violations MUST be 0)" << std::endl; } }
       // TODO: change for wait compute queue
       gpu->synchronize();
       if(status_manager->is_updating()) {

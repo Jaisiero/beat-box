@@ -52,6 +52,7 @@ BB_DAXA_TASK_ALIAS(CollisionSolverRelaxationTaskHead)
 BB_DAXA_TASK_ALIAS(RigidBodyUpdateTaskHead)
 BB_DAXA_TASK_ALIAS(UpdateInstancesTaskHead)
 BB_DAXA_TASK_ALIAS(CreatePointsTaskHead)
+BB_DAXA_TASK_ALIAS(GraphColorTaskHead)
 #undef BB_DAXA_TASK_ALIAS
 
 namespace daxa
@@ -408,6 +409,21 @@ const auto RT_shader_file_string = "ray_tracing.slang";
 const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
 
 const auto RB_sim_shader_file_string = "RB_sim.slang";
+const auto coloring_shader_file_string = "coloring.slang";
+
+// graph coloring (parallel contact-solver coloring)
+const auto entry_graph_color_dispatcher = "entry_graph_color_dispatcher";
+const auto graph_color_dispatcher_pipeline_name = "Graph Color Dispatcher";
+const auto entry_graph_color_reset = "entry_graph_color_reset";
+const auto graph_color_reset_pipeline_name = "Graph Color Reset";
+const auto entry_graph_color_owner_reset = "entry_graph_color_owner_reset";
+const auto graph_color_owner_reset_pipeline_name = "Graph Color Owner Reset";
+const auto entry_graph_color_assign_p1 = "entry_graph_color_assign_p1";
+const auto graph_color_assign_p1_pipeline_name = "Graph Color Assign P1";
+const auto entry_graph_color_assign_p2 = "entry_graph_color_assign_p2";
+const auto graph_color_assign_p2_pipeline_name = "Graph Color Assign P2";
+const auto entry_graph_color_validate = "entry_graph_color_validate";
+const auto graph_color_validate_pipeline_name = "Graph Color Validate";
 
 // rigid body dispatcher
 const auto entry_rigid_body_dispatcher = "entry_rigid_body_dispatcher";
@@ -912,6 +928,74 @@ struct IslandCounterInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(IslandCounterPushConstants),
       .name = island_counter_pipeline_name,
+  };
+};
+
+// ---- graph coloring pipelines (all share GraphColorPushConstants / GraphColorTaskHead) ----
+struct GraphColorDispatcherInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_graph_color_dispatcher, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyDispatcherPushConstants),
+      .name = graph_color_dispatcher_pipeline_name,
+  };
+};
+struct GraphColorResetInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_graph_color_reset, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorPushConstants),
+      .name = graph_color_reset_pipeline_name,
+  };
+};
+struct GraphColorOwnerResetInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_graph_color_owner_reset, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorPushConstants),
+      .name = graph_color_owner_reset_pipeline_name,
+  };
+};
+struct GraphColorAssignP1Info {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_graph_color_assign_p1, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorPushConstants),
+      .name = graph_color_assign_p1_pipeline_name,
+  };
+};
+struct GraphColorAssignP2Info {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_graph_color_assign_p2, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorPushConstants),
+      .name = graph_color_assign_p2_pipeline_name,
+  };
+};
+struct GraphColorValidateInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_graph_color_validate, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorPushConstants),
+      .name = graph_color_validate_pipeline_name,
   };
 };
 

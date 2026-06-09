@@ -154,6 +154,7 @@ enum SimFlag : daxa_u32
   WARM_STARTING = 1 << 2,
   ADVECTION = 1 << 3,
   DEBUG_INFO = 1 << 4,
+  USE_GRAPH_COLORING = 1 << 5, // solve contacts by graph color (parallel) instead of by contact-island (serial-per-island)
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 SimFlag  operator|(SimFlag a, SimFlag b)
@@ -569,6 +570,8 @@ struct SimConfig
   daxa_u32 manifold_node_count; // atomic add
   daxa_u32 broad_phase_collision_count; // atomic add
   daxa_u32 radix_shift;
+  daxa_u32 graph_color_count;      // graph-coloring: # colors used this frame (debug/validator)
+  daxa_u32 graph_color_violations; // graph-coloring: validator invariant violations (must be 0)
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
@@ -604,6 +607,7 @@ static const daxa_u32 COLLISION_DISPATCH_COUNT_OFFSET = 3;
 static const daxa_u32 CONTACT_ISLAND_DISPATCH_COUNT_OFFSET = 4;
 static const daxa_u32 RADIX_SORT_RIGID_BODY_DISPATCH_COUNT_OFFSET = 5;
 static const daxa_u32 NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET = 6;
+static const daxa_u32 GRAPH_COLOR_DISPATCH_COUNT_OFFSET = 7; // graph-coloring passes over manifolds (ceil(collision_count/X))
 
 struct DispatchBuffer
 {
@@ -614,6 +618,7 @@ struct DispatchBuffer
   daxa_u32vec3 contact_island_dispatch;
   daxa_u32vec3 radix_sort_rigid_body_dispatch;
   daxa_u32vec3 narrow_phase_dispatch;
+  daxa_u32vec3 graph_color_dispatch; // over manifolds (collision_count) for the coloring assign/validate passes
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
@@ -630,6 +635,11 @@ static const daxa::u32 BIT_SHIFT = BITS / ITERATIONS; // 8
 static const daxa_u32 BB_MAX_RIGID_BODY_COUNT = 1024;
 static const daxa_u32 BB_MAX_COLLISION_COUNT = BB_MAX_RIGID_BODY_COUNT * (BB_MAX_RIGID_BODY_COUNT - 1) / 2;
 static const daxa_u32 BB_MAX_MANIFOLD_NODE_COUNT = BB_MAX_COLLISION_COUNT * 2;
+// Graph-coloring solver: a contact gets one of BB_MAX_COLORS colors (bit per color in a u32 body mask);
+// within a color no body repeats, so all that color's contacts solve in parallel. Leftovers go to an
+// overflow bucket (index BB_MAX_COLORS) solved serially. 32 fits a u32 mask and a stacked box's degree.
+static const daxa_u32 BB_MAX_COLORS = 32;
+static const daxa_u32 BB_COLOR_OVERFLOW = BB_MAX_COLORS; // bucket index for contacts that didn't fit a color
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_POINT_COUNT = 8192;
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_LINE_VERTEX_COUNT = BB_MAX_DEBUG_CONTACT_POINT_COUNT * 2;
 
@@ -829,6 +839,30 @@ DAXA_DECL_TASK_HEAD_END
 struct RigidBodyGenerateHierarchyLinearBVHPushConstants
 {
   DAXA_TH_BLOB(RigidBodyGenerateHierarchyLinearBVHTaskHead, task_head)
+};
+
+// ===================== GRAPH COLORING (parallel contact-solver coloring) =====================
+// One consolidated head shared by every coloring pass (reset / owner-reset / assign-p1 / assign-p2 / validate).
+// Raw u32 color buffers:
+//   body_color_mask[body]                      bit c set = body already owns a contact of color c
+//   manifold_color[manifold]                   assigned color (0..BB_MAX_COLORS-1), MAX_U32 = uncolored, BB_COLOR_OVERFLOW = overflow
+//   body_color_owner[body*BB_MAX_COLORS + c]   per-round arbitration: lowest manifold id wanting (body,color); also reused as 'seen' by the validator
+//   color_count[BB_MAX_COLORS + 1]             contacts per color (+ overflow bucket); also the validator's colors-used scratch
+// All coloring passes dispatch over graph_color_dispatch = ceil(max(collision_count, rigid_body_count)/X) and guard each access by its own bound.
+DAXA_DECL_TASK_HEAD_BEGIN(GraphColorTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Manifold), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(daxa_u32), body_color_mask)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(daxa_u32), manifold_color)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(daxa_u32), body_color_owner)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(daxa_u32), color_count)
+DAXA_DECL_TASK_HEAD_END
+
+struct GraphColorPushConstants
+{
+  DAXA_TH_BLOB(GraphColorTaskHead, task_head)
 };
 
 // BUILD BOUNDING BOXES LBVH

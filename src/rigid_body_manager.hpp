@@ -101,8 +101,13 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_previous_islands{{.buffer = {}, .name = "RB_previous_island_task"}};
   daxa::TaskBuffer task_contact_islands{{.buffer = {}, .name = "RB_contact_island_task"}};
   daxa::TaskBuffer task_previous_contact_islands{{.buffer = {}, .name = "RB_previous_contact_island_task"}};
+  // graph coloring
+  daxa::TaskBuffer task_body_color_mask{{.buffer = {}, .name = "RB_body_color_mask_task"}};
+  daxa::TaskBuffer task_manifold_color{{.buffer = {}, .name = "RB_manifold_color_task"}};
+  daxa::TaskBuffer task_body_color_owner{{.buffer = {}, .name = "RB_body_color_owner_task"}};
+  daxa::TaskBuffer task_color_count{{.buffer = {}, .name = "RB_color_count_task"}};
 
-private: 
+private:
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
   void record_update_sim_config_tasks(TaskGraph &out_update_SC_TG);
   void record_active_rigid_body_list_upload_tasks(TaskGraph &ARB_TG);
@@ -164,6 +169,13 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_IP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CSR;
+  // graph coloring
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCD;  // dispatcher
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCR;  // reset
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCOR; // owner reset
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCP1; // assign phase 1
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCP2; // assign phase 2
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCV;  // validate
   std::shared_ptr<daxa::ComputePipeline> create_points_pipeline;
   std::shared_ptr<daxa::ComputePipeline> update_pipeline;
 
@@ -199,6 +211,11 @@ private:
   daxa::BufferId scratch_body_links[DOUBLE_BUFFERING] = {};
   daxa::BufferId island_buffer[DOUBLE_BUFFERING] = {};
   daxa::BufferId contact_island_buffer[DOUBLE_BUFFERING] = {};
+  // graph coloring
+  daxa::BufferId body_color_mask = {};
+  daxa::BufferId manifold_color = {};
+  daxa::BufferId body_color_owner = {};
+  daxa::BufferId color_count = {};
 
   // Simulation configuration
   SimSolverType solver_type = SimSolverType::PGS_SOFT;

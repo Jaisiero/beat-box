@@ -39,6 +39,13 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_CS = task_manager->create_compute(CollisionSolverInfo{}.info);
     pipeline_IP = task_manager->create_compute(IntegratePositionsInfo{}.info);
     pipeline_CSR = task_manager->create_compute(CollisionSolverRelaxationInfo{}.info);
+    // graph coloring
+    pipeline_GCD = task_manager->create_compute(GraphColorDispatcherInfo{}.info);
+    pipeline_GCR = task_manager->create_compute(GraphColorResetInfo{}.info);
+    pipeline_GCOR = task_manager->create_compute(GraphColorOwnerResetInfo{}.info);
+    pipeline_GCP1 = task_manager->create_compute(GraphColorAssignP1Info{}.info);
+    pipeline_GCP2 = task_manager->create_compute(GraphColorAssignP2Info{}.info);
+    pipeline_GCV = task_manager->create_compute(GraphColorValidateInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
     update_pipeline = task_manager->create_compute(UpdateRigidBodies{}.info);
   }
@@ -203,6 +210,23 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   collision_scratch = device.create_buffer({
       .size = sizeof(Manifold) * MAX_COLLISION_COUNT,
       .name = "collision_scratch",
+  });
+  // graph coloring buffers (raw u32 arrays)
+  body_color_mask = device.create_buffer({
+      .size = sizeof(daxa_u32) * MAX_RIGID_BODY_COUNT,
+      .name = "body_color_mask",
+  });
+  manifold_color = device.create_buffer({
+      .size = sizeof(daxa_u32) * MAX_COLLISION_COUNT,
+      .name = "manifold_color",
+  });
+  body_color_owner = device.create_buffer({
+      .size = sizeof(daxa_u32) * MAX_RIGID_BODY_COUNT * BB_MAX_COLORS,
+      .name = "body_color_owner",
+  });
+  color_count = device.create_buffer({
+      .size = sizeof(daxa_u32) * (BB_MAX_COLORS + 1),
+      .name = "color_count",
   });
 
   daxa::InlineTaskInfo task_RC({
@@ -922,7 +946,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 32> buffers = {
+  std::array<daxa::TaskBuffer, 36> buffers = {
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -955,9 +979,67 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       gui->task_vertex_buffer,
       gui->task_line_vertex_buffer,
       gui->task_axes_vertex_buffer,
+      task_body_color_mask,
+      task_manifold_color,
+      task_body_color_owner,
+      task_color_count,
   };
 
   RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+
+  // ---- graph coloring tasks (Phase 2: color + validate, coexisting with the island solver) ----
+  static const daxa_u32 GRAPH_COLOR_MAX_ROUNDS = 8u;
+
+  auto user_callback_GCD = [this](daxa::TaskInterface ti, auto &)
+  {
+    ti.recorder.set_pipeline(*pipeline_GCD);
+    ti.recorder.push_constant(RigidBodyDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+  using TTask_GCD = TaskTemplate<RigidBodyDispatcherTaskHead::Task, decltype(user_callback_GCD)>;
+  TTask_GCD task_GCD(std::array{
+                         daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                         daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.sim_config, task_sim_config),
+                     },
+                     user_callback_GCD);
+
+  // the 5 coloring passes share GraphColorTaskHead bindings and dispatch over graph_color_dispatch
+  auto gc_views = std::array{
+      daxa::attachment_view(GraphColorTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+      daxa::attachment_view(GraphColorTaskHead::AT.sim_config, task_sim_config),
+      daxa::attachment_view(GraphColorTaskHead::AT.collisions, task_collisions),
+      daxa::attachment_view(GraphColorTaskHead::AT.rigid_bodies, task_rigid_bodies),
+      daxa::attachment_view(GraphColorTaskHead::AT.body_color_mask, task_body_color_mask),
+      daxa::attachment_view(GraphColorTaskHead::AT.manifold_color, task_manifold_color),
+      daxa::attachment_view(GraphColorTaskHead::AT.body_color_owner, task_body_color_owner),
+      daxa::attachment_view(GraphColorTaskHead::AT.color_count, task_color_count),
+  };
+  auto gc_dispatch = [this](daxa::TaskInterface ti, std::shared_ptr<daxa::ComputePipeline> &pl)
+  {
+    ti.recorder.set_pipeline(*pl);
+    ti.recorder.push_constant(GraphColorPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(GraphColorTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * GRAPH_COLOR_DISPATCH_COUNT_OFFSET});
+  };
+
+  auto user_callback_GCR = [this, gc_dispatch](daxa::TaskInterface ti, auto &) { gc_dispatch(ti, pipeline_GCR); };
+  using TTask_GCR = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCR)>;
+  TTask_GCR task_GCR(gc_views, user_callback_GCR);
+
+  auto user_callback_GCOR = [this, gc_dispatch](daxa::TaskInterface ti, auto &) { gc_dispatch(ti, pipeline_GCOR); };
+  using TTask_GCOR = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCOR)>;
+  TTask_GCOR task_GCOR(gc_views, user_callback_GCOR);
+
+  auto user_callback_GCP1 = [this, gc_dispatch](daxa::TaskInterface ti, auto &) { gc_dispatch(ti, pipeline_GCP1); };
+  using TTask_GCP1 = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCP1)>;
+  TTask_GCP1 task_GCP1(gc_views, user_callback_GCP1);
+
+  auto user_callback_GCP2 = [this, gc_dispatch](daxa::TaskInterface ti, auto &) { gc_dispatch(ti, pipeline_GCP2); };
+  using TTask_GCP2 = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCP2)>;
+  TTask_GCP2 task_GCP2(gc_views, user_callback_GCP2);
+
+  auto user_callback_GCV = [this, gc_dispatch](daxa::TaskInterface ti, auto &) { gc_dispatch(ti, pipeline_GCV); };
+  using TTask_GCV = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCV)>;
+  TTask_GCV task_GCV(gc_views, user_callback_GCV);
 
   RB_TG.add_task(task_RC);
   RB_TG.add_task(task_CRB);
@@ -980,6 +1062,17 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_NPD);
   RB_TG.add_task(task_NP);
   RB_TG.add_task(task_advect);
+  // graph coloring (Phase 2: coexists with the island solver; produces manifold_color + validates the invariant)
+  RB_TG.add_task(task_GCD);
+  RB_TG.add_task(task_GCR);
+  for (auto r = 0u; r < GRAPH_COLOR_MAX_ROUNDS; ++r)
+  {
+    RB_TG.add_task(task_GCOR);
+    RB_TG.add_task(task_GCP1);
+    RB_TG.add_task(task_GCP2);
+  }
+  RB_TG.add_task(task_GCOR); // reset owner-as-seen for the validator
+  RB_TG.add_task(task_GCV);
   RB_TG.add_task(task_IC);
   RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_ID);
@@ -1021,6 +1114,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   task_previous_rigid_body_entries.set_buffer(rigid_body_entries[1]);
   task_broad_phase_collisions.set_buffer(broad_phase_collisions[0]);
   task_rigid_body_scratch.set_buffer(rigid_body_scratch);
+  task_body_color_mask.set_buffer(body_color_mask);
+  task_manifold_color.set_buffer(manifold_color);
+  task_body_color_owner.set_buffer(body_color_owner);
+  task_color_count.set_buffer(color_count);
   task_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[0]);
   task_collision_entries.set_buffer(collision_entries[0]);
   task_collisions.set_buffer(collisions[0]);
