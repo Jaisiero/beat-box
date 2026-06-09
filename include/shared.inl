@@ -866,6 +866,22 @@ struct GraphColorPushConstants
   DAXA_TH_BLOB(GraphColorTaskHead, task_head)
 };
 
+// Per-color solver: each dispatch (one per color) runs over all manifolds and processes only the
+// ones whose manifold_color == push-constant color. Within a color no body repeats => no race.
+DAXA_DECL_TASK_HEAD_BEGIN(GraphColorSolveTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(daxa_u32), manifold_color)
+DAXA_DECL_TASK_HEAD_END
+
+struct GraphColorSolvePushConstants
+{
+  DAXA_TH_BLOB(GraphColorSolveTaskHead, task_head)
+  daxa_u32 color; // which color this dispatch solves
+};
+
 // BUILD BOUNDING BOXES LBVH
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyBuildBoundingBoxesLinearBVHTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)

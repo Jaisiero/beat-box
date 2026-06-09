@@ -46,6 +46,9 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_GCP1 = task_manager->create_compute(GraphColorAssignP1Info{}.info);
     pipeline_GCP2 = task_manager->create_compute(GraphColorAssignP2Info{}.info);
     pipeline_GCV = task_manager->create_compute(GraphColorValidateInfo{}.info);
+    pipeline_GCS_CPS = task_manager->create_compute(GraphColorPreSolverInfo{}.info);
+    pipeline_GCS_CS = task_manager->create_compute(GraphColorSolverInfo{}.info);
+    pipeline_GCS_CSR = task_manager->create_compute(GraphColorRelaxInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
     update_pipeline = task_manager->create_compute(UpdateRigidBodies{}.info);
   }
@@ -1042,6 +1045,35 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_GCV = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCV)>;
   TTask_GCV task_GCV(gc_views, user_callback_GCV);
 
+  // ---- per-color solver tasks (Phase 3): one dispatch per color, each filters manifold_color==color ----
+  static const daxa_u32 MAX_COLORS_SOLVE = 16u; // colors above this fall to the island/overflow path; empty colors are cheap no-ops
+  auto gc_solve_views = std::array{
+      daxa::attachment_view(GraphColorSolveTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+      daxa::attachment_view(GraphColorSolveTaskHead::AT.sim_config, task_sim_config),
+      daxa::attachment_view(GraphColorSolveTaskHead::AT.collisions, task_collisions),
+      daxa::attachment_view(GraphColorSolveTaskHead::AT.rigid_bodies, task_rigid_bodies),
+      daxa::attachment_view(GraphColorSolveTaskHead::AT.manifold_color, task_manifold_color),
+  };
+  auto make_gcs = [this](std::shared_ptr<daxa::ComputePipeline> pl, daxa_u32 c) {
+    return [this, pl, c](daxa::TaskInterface ti, auto &) {
+      ti.recorder.set_pipeline(*pl);
+      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = c});
+      ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(GraphColorSolveTaskHead::AT.dispatch_buffer).id,
+                                     .offset = sizeof(daxa_u32vec3) * COLLISION_DISPATCH_COUNT_OFFSET});
+    };
+  };
+  using TTask_GCS = TaskTemplate<GraphColorSolveTaskHead::Task, decltype(make_gcs(pipeline_GCS_CS, 0u))>;
+  std::vector<TTask_GCS> task_GCS_CPS_vec, task_GCS_CS_vec, task_GCS_CSR_vec;
+  task_GCS_CPS_vec.reserve(MAX_COLORS_SOLVE);
+  task_GCS_CS_vec.reserve(MAX_COLORS_SOLVE);
+  task_GCS_CSR_vec.reserve(MAX_COLORS_SOLVE);
+  for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+  {
+    task_GCS_CPS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CPS, c));
+    task_GCS_CS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CS, c));
+    task_GCS_CSR_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CSR, c));
+  }
+
   RB_TG.add_task(task_RC);
   RB_TG.add_task(task_CRB);
   RB_TG.add_task(task_RBD);
@@ -1089,12 +1121,29 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_IML);
   // FIXME: that's a really expensive sort too
   // RB_TG.add_task(task_SMLI);
-  RB_TG.add_task(task_CPS);
-  for (auto i = 0u; i < iteration_count; ++i)
-    RB_TG.add_task(task_CS);
-  RB_TG.add_task(task_IP);
-  for (auto i = 0u; i < iteration_count; ++i)
-    RB_TG.add_task(task_CSR);
+  if (static_cast<daxa_u32>(sim_flags & SimFlag::USE_GRAPH_COLORING) != 0u)
+  {
+    // per-color solve (parallel: one dispatch per color, balanced, no atomics)
+    for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+      RB_TG.add_task(task_GCS_CPS_vec[c]);
+    for (auto i = 0u; i < iteration_count; ++i)
+      for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+        RB_TG.add_task(task_GCS_CS_vec[c]);
+    RB_TG.add_task(task_IP);
+    for (auto i = 0u; i < iteration_count; ++i)
+      for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+        RB_TG.add_task(task_GCS_CSR_vec[c]);
+  }
+  else
+  {
+    // per-island solve (serial within each contact island)
+    RB_TG.add_task(task_CPS);
+    for (auto i = 0u; i < iteration_count; ++i)
+      RB_TG.add_task(task_CS);
+    RB_TG.add_task(task_IP);
+    for (auto i = 0u; i < iteration_count; ++i)
+      RB_TG.add_task(task_CSR);
+  }
   RB_TG.add_task(task_CP);
   RB_TG.add_task(task_update);
 

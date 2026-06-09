@@ -53,6 +53,7 @@ BB_DAXA_TASK_ALIAS(RigidBodyUpdateTaskHead)
 BB_DAXA_TASK_ALIAS(UpdateInstancesTaskHead)
 BB_DAXA_TASK_ALIAS(CreatePointsTaskHead)
 BB_DAXA_TASK_ALIAS(GraphColorTaskHead)
+BB_DAXA_TASK_ALIAS(GraphColorSolveTaskHead)
 #undef BB_DAXA_TASK_ALIAS
 
 namespace daxa
@@ -424,6 +425,13 @@ const auto entry_graph_color_assign_p2 = "entry_graph_color_assign_p2";
 const auto graph_color_assign_p2_pipeline_name = "Graph Color Assign P2";
 const auto entry_graph_color_validate = "entry_graph_color_validate";
 const auto graph_color_validate_pipeline_name = "Graph Color Validate";
+// per-color solver passes (entries live in RB_sim.slang)
+const auto entry_collision_pre_solver_color = "entry_collision_pre_solver_color";
+const auto graph_color_pre_solver_pipeline_name = "Graph Color Pre Solver";
+const auto entry_collision_solver_color = "entry_collision_solver_color";
+const auto graph_color_solver_pipeline_name = "Graph Color Solver";
+const auto entry_collision_solver_relax_color = "entry_collision_solver_relax_color";
+const auto graph_color_relax_pipeline_name = "Graph Color Solver Relax";
 
 // rigid body dispatcher
 const auto entry_rigid_body_dispatcher = "entry_rigid_body_dispatcher";
@@ -996,6 +1004,40 @@ struct GraphColorValidateInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(GraphColorPushConstants),
       .name = graph_color_validate_pipeline_name,
+  };
+};
+// per-color solver pipelines (entries in RB_sim.slang; share GraphColorSolvePushConstants)
+struct GraphColorPreSolverInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = { .entry_point = entry_collision_pre_solver_color, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorSolvePushConstants),
+      .name = graph_color_pre_solver_pipeline_name,
+  };
+};
+struct GraphColorSolverInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = { .entry_point = entry_collision_solver_color, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorSolvePushConstants),
+      .name = graph_color_solver_pipeline_name,
+  };
+};
+struct GraphColorRelaxInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = { .entry_point = entry_collision_solver_relax_color, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorSolvePushConstants),
+      .name = graph_color_relax_pipeline_name,
   };
 };
 

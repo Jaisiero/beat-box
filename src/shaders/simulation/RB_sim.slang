@@ -35,6 +35,7 @@
 [[vk::push_constant]] CollisionSolverRelaxationPushConstants CSR;
 [[vk::push_constant]] CreatePointsPushConstants CP;
 [[vk::push_constant]] RigidBodyUpdatePushConstants RB_update;
+[[vk::push_constant]] GraphColorSolvePushConstants GCS; // per-color solver passes (CPS/CS/CSR)
 
 [shader("compute")]
     [numthreads(1, 1, 1)] void
@@ -1152,6 +1153,73 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
     // manifold + r1/r2 are pointers into the buffers; solve wrote contacts/velocity directly.
   }
+}
+
+// ===== per-color solver passes (graph coloring): each dispatch solves only manifolds of GCS.color =====
+// Dispatched over all manifolds (collision_dispatch); a thread returns unless manifold_color[m]==GCS.color.
+// Within a color no body repeats, so all kept manifolds write distinct bodies in parallel (no race).
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_pre_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
+  daxa_u32 m = compute_i.x;
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m >= coll) return;
+  daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
+  if (manifold_color[m] != GCS.color) return;
+  Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
+  if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) return;
+  RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
+  RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+  RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+  daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+  daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+  daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  daxa::f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
+  if (sim_config->solver_type == SimSolverType::PGS_SOFT)
+    PGS_SOFT.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
+  daxa_u32 m = compute_i.x;
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m >= coll) return;
+  daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
+  if (manifold_color[m] != GCS.color) return;
+  Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
+  if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) return;
+  RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
+  RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+  RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+  daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+  daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+  daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  if (sim_config->solver_type == SimSolverType::PGS_SOFT)
+    PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, inv_dt);
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_relax_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
+  daxa_u32 m = compute_i.x;
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m >= coll) return;
+  daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
+  if (manifold_color[m] != GCS.color) return;
+  Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
+  if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) return;
+  RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
+  RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+  RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+  daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+  daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+  daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  if (sim_config->solver_type == SimSolverType::PGS_SOFT)
+    PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
 }
 
 const static daxa_u32 LINE_POINT_COUNT = 2;

@@ -134,6 +134,7 @@ private:
   | SimFlag::ACCUM_IMPULSE
   | SimFlag::WARM_STARTING
   | SimFlag::DEBUG_GRAPH_COLORS
+  | SimFlag::USE_GRAPH_COLORING
   ;
   // simulating flag update 
   bool sim_flag_dirty[DOUBLE_BUFFERING] = {};
@@ -177,6 +178,9 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCP1; // assign phase 1
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCP2; // assign phase 2
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCV;  // validate
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CPS; // per-color pre-solver
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CS;  // per-color solver
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CSR; // per-color relax
   std::shared_ptr<daxa::ComputePipeline> create_points_pipeline;
   std::shared_ptr<daxa::ComputePipeline> update_pipeline;
 
