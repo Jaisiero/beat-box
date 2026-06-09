@@ -922,6 +922,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                       daxa::attachment_view(CreatePointsTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
                       daxa::attachment_view(CreatePointsTaskHead::AT.sim_config, task_sim_config),
                       daxa::attachment_view(CreatePointsTaskHead::AT.collisions, task_collisions),
+                      daxa::attachment_view(CreatePointsTaskHead::AT.manifold_color, task_manifold_color),
                       daxa::attachment_view(CreatePointsTaskHead::AT.vertex_buffer, gui->task_vertex_buffer),
                       daxa::attachment_view(CreatePointsTaskHead::AT.line_vertex_buffer, gui->task_line_vertex_buffer),
                   },

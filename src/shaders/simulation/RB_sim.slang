@@ -1192,13 +1192,34 @@ const static daxa::f32 LINE_SIZE = 0.5f;
     var vertex_buffer = (GUIVertex*)(CP.task_head.vertex_buffer);
     var line_vertex_buffer = (GUIVertexLine*)(CP.task_head.line_vertex_buffer);
 
+    // contact tint: by graph color (debug) or by warm-start
+    bool by_graph = sim_config->has_flag(SimFlag::DEBUG_GRAPH_COLORS);
+    daxa::f32vec3 gcol = daxa::f32vec3(1.0f, 1.0f, 1.0f); // uncolored/overflow => white
+    if (by_graph)
+    {
+      daxa_u32* manifold_color = (daxa_u32*)(CP.task_head.manifold_color);
+      daxa_u32 gc = manifold_color[compute_i.x];
+      if (gc < BB_MAX_COLORS)
+      {
+        daxa::f32 h = (daxa::f32)gc / (daxa::f32)BB_MAX_COLORS * 6.0f; // distinct hue per color
+        gcol = clamp(daxa::f32vec3(abs(h - 3.0f) - 1.0f, 2.0f - abs(h - 2.0f), 2.0f - abs(h - 4.0f)), 0.0f, 1.0f);
+      }
+    }
+
     for (daxa_u32 i = 0; i < contact_count; i++)
     {
       daxa_u32 current_index = index + i;
       vertex_buffer[current_index].position = m->contacts[i].position;
-      daxa::f32 blue = (daxa::f32)(255 - m->contacts[i].warm_start) / 255.0f;
-      daxa::f32 red = 1.0f - blue;
-      vertex_buffer[current_index].color = daxa::f32vec3(red, 0.0f, blue);
+      if (by_graph)
+      {
+        vertex_buffer[current_index].color = gcol;
+      }
+      else
+      {
+        daxa::f32 blue = (daxa::f32)(255 - m->contacts[i].warm_start) / 255.0f;
+        daxa::f32 red = 1.0f - blue;
+        vertex_buffer[current_index].color = daxa::f32vec3(red, 0.0f, blue);
+      }
 
       line_vertex_buffer[current_index * LINE_POINT_COUNT].position = m->contacts[i].position;
       line_vertex_buffer[current_index * LINE_POINT_COUNT + 1].position = m->contacts[i].position + m->normal * LINE_SIZE;
