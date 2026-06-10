@@ -192,6 +192,26 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .size = sizeof(ContactIsland) * MAX_RIGID_BODY_COUNT,
         .name = "contact_islands" + std::to_string(i),
     });
+    // voxel collision shape data (host-writable: filled once by the scene at load time;
+    // static afterwards, addressed through SimConfig - the NP head is at the push limit)
+    if (voxel_shapes.is_empty())
+    {
+      voxel_shapes = device.create_buffer({
+          .size = sizeof(VoxelShape) * BB_MAX_VOXEL_SHAPE_COUNT,
+          .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+          .name = "voxel_shapes",
+      });
+      voxel_occupancy = device.create_buffer({
+          .size = sizeof(daxa_u32) * BB_MAX_VOXEL_OCC_U32S,
+          .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+          .name = "voxel_occupancy",
+      });
+      voxel_surface = device.create_buffer({
+          .size = sizeof(daxa_u32) * BB_MAX_VOXEL_SURF_COUNT,
+          .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+          .name = "voxel_surface",
+      });
+    }
     *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[i]).value() = SimConfig{
         .solver_type = renderer_manager->get_solver(),
         .rigid_body_count = 0,
@@ -207,6 +227,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
             .collision_count = 0,
             .collision_point_count = 0},
         .frame_count = 0,
+        .voxel_shapes_addr = device.device_address(voxel_shapes).value(),
+        .voxel_occupancy_addr = device.device_address(voxel_occupancy).value(),
+        .voxel_surface_addr = device.device_address(voxel_surface).value(),
     };
   }
   tmp_morton_codes = device.create_buffer({
@@ -1497,6 +1520,9 @@ void RigidBodyManager::destroy()
   device.destroy_buffer(lbvh_construction_info);
   device.destroy_buffer(rigid_body_scratch);
   device.destroy_buffer(collision_scratch);
+  device.destroy_buffer(voxel_shapes);
+  device.destroy_buffer(voxel_occupancy);
+  device.destroy_buffer(voxel_surface);
 
   initialized = false;
 }
@@ -1581,6 +1607,9 @@ bool RigidBodyManager::update_sim()
             .collision_point_count = 0,
         },
         .frame_count = renderer_manager->get_frame_count(),
+        .voxel_shapes_addr = device.device_address(voxel_shapes).value(),
+        .voxel_occupancy_addr = device.device_address(voxel_occupancy).value(),
+        .voxel_surface_addr = device.device_address(voxel_surface).value(),
     };
 
     update_buffers(f);

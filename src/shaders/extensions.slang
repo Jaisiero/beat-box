@@ -14,6 +14,7 @@ void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
 #endif // BB_DEBUG
   dst->primitive_count = src->primitive_count;
   dst->primitive_offset = src->primitive_offset;
+  dst->shape_index = src->shape_index;
   dst->position = src->position;
   dst->rotation.v = src->rotation.v;
   dst->rotation.w = src->rotation.w;
