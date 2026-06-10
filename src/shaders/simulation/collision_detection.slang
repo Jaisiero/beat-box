@@ -1025,21 +1025,43 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       daxa_f32vec3 g = (l2 - s2->grid_origin) / vs2;
       daxa_i32vec3 c = daxa_i32vec3(daxa_i32(floor(g.x)), daxa_i32(floor(g.y)), daxa_i32(floor(g.z)));
       if (!voxel_occ_bit(occ, s2, c)) { continue; }
-      daxa_f32vec3 grad = voxel_occ_gradient(occ, s2, c);
-      if (dot(grad, grad) < 1e-6f)
+      // CELL-FACE contact (axis-aligned mini-SAT in B's grid): among the axes whose
+      // neighbor cell is EMPTY (outward-feasible directions), take the minimum overlap;
+      // its sign gives a crisp face normal and an exact depth. The previous occupancy
+      // GRADIENT gave diagonal normals at face edges/corners ((1,1,1)/sqrt(3) etc.) -
+      // and the per-octant winners ARE those edge/corner cells - so every face contact
+      // was tilted and depth-underestimated: mushy contacts that slowly sank under
+      // gravity (bodies half-buried in the floor / clumped into each other, then slept).
+      daxa_f32vec3 cc_l = s2->grid_origin + (daxa_f32vec3(daxa_f32(c.x), daxa_f32(c.y), daxa_f32(c.z)) + daxa_f32vec3(0.5f, 0.5f, 0.5f)) * vs2;
+      daxa_f32vec3 dl = l2 - cc_l;
+      daxa_f32 half_sum = 0.5f * (vs1 + vs2);
+      daxa_f32 best = 1e9f;
+      daxa_i32 best_axis = -1;
+      daxa_f32 best_sign = 1.0f;
+      [unroll]
+      for (daxa_u32 ax = 0u; ax < 3u; ++ax)
       {
-        // INTERIOR cell of B: the occupancy gradient is zero, so there is no reliable
-        // contact direction here. Inventing one (the old cell-center fallback) fed the
-        // solver garbage normals that pushed bodies INTO each other - the perpetual
-        // interpenetration fight. Count it and let the deep-penetration rescue handle it.
+        daxa_f32 di = ax == 0u ? dl.x : (ax == 1u ? dl.y : dl.z);
+        daxa_f32 sgn = di >= 0.0f ? 1.0f : -1.0f;
+        daxa_i32vec3 nb = c;
+        if (ax == 0u) { nb.x += daxa_i32(sgn); }
+        else if (ax == 1u) { nb.y += daxa_i32(sgn); }
+        else { nb.z += daxa_i32(sgn); }
+        if (voxel_occ_bit(occ, s2, nb)) { continue; } // that way is more solid: not an exit
+        daxa_f32 ov = half_sum - abs(di);
+        if (ov < best) { best = ov; best_axis = daxa_i32(ax); best_sign = sgn; }
+      }
+      if (best_axis < 0)
+      {
+        // surrounded on all axes: deep interior, no reliable direction
         red.interior_hits += 1u;
         continue;
       }
-      daxa_f32vec3 cell_center = s2->grid_origin + (daxa_f32vec3(daxa_f32(c.x), daxa_f32(c.y), daxa_f32(c.z)) + daxa_f32vec3(0.5f, 0.5f, 0.5f)) * vs2;
-      daxa_f32vec3 n_local = normalize(grad);
+      daxa_f32vec3 n_local = daxa_f32vec3(best_axis == 0 ? best_sign : 0.0f,
+                                          best_axis == 1 ? best_sign : 0.0f,
+                                          best_axis == 2 ? best_sign : 0.0f);
       n_out2 = r2->rotate_vector(n_local);
-      daxa_f32vec3 cw = r2->position + r2->rotate_vector(cell_center);
-      pe = dot(pw - cw, n_out2) - 0.5f * (vs1 + vs2);
+      pe = -best;
       fb = daxa_u32(c.x & 0xFF) | (daxa_u32(c.y & 0xFF) << 8u) | (daxa_u32(c.z & 0xFF) << 16u);
     }
     else
@@ -1064,9 +1086,11 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
     if (pe >= 0.0f) { continue; } // grazing sample: occupied cell but no overlap along n
     if (mode == 1u && dot(n_out2, ref_n) < 0.0f) { continue; }
     if (mode == 2u && dot(n_out2, ref_n) >= 0.0f) { continue; }
-    // cap at HALF a voxel: pen feeds AVBD's positional post-stab sweep directly, and a
-    // full-voxel correction per step visibly pops the bodies apart
-    pe = max(pe, -0.5f * vs1);
+    // depth caps: half a voxel between voxel bodies (pen feeds AVBD's positional sweep -
+    // full-voxel corrections pop), but a FULL voxel against statics/OBBs: fast spawns
+    // tunnel into the floor and a half-voxel extraction rate loses to gravity, leaving
+    // bodies half-buried (where the sleep test then froze them)
+    pe = max(pe, s2_is_voxel ? -0.5f * vs1 : -vs1);
     red.add(pw, pe, n_out2, e & 0xFFFFFFu, fb, r1->position, 0.5f * vs1);
     ++found;
   }
