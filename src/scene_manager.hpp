@@ -327,7 +327,10 @@ public:
     // Box-pillar stability test: three towers of increasing height (5 / 8 / 12). Long
     // constraint chains are the classic solver-convergence stress: soft/iterative solvers
     // bulge and topple tall stacks, a converging block solver keeps them rigid. Towers
-    // spawn with a 5mm settle gap per level; one color per tower (green/yellow/cyan).
+    // spawn with a 1mm settle gap per level (gentler landing than 5mm); one color per
+    // tower (green/yellow/cyan). NOTE: from the pitched default camera, off-center
+    // vertical towers PROJECT slightly tilted (perspective keystone) - the center tower
+    // renders perfectly vertical, which is the reference for judging real lean.
     // View note: the default camera looks along +z, so the 12-tower (+x) is screen-LEFT.
     rigid_bodies = {
       {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.5f}
@@ -340,7 +343,7 @@ public:
     auto push_tower = [&](daxa_f32 x, daxa_f32 z, int height, daxa_u32 mat) {
       for (int i = 0; i < height; ++i)
       {
-        rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(x, 0.5f + i * 1.005f, z), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = 0.5f});
+        rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(x, 0.5f + i * 1.001f, z), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = 0.5f});
         rigid_bodies.back().material_index = mat;
       }
     };
