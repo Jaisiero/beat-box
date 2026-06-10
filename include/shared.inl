@@ -211,6 +211,7 @@ enum SimSolverType : daxa_u32
 {
   PGS = 0,
   PGS_SOFT = 1,
+  AVBD = 2, // Augmented Vertex Block Descent: per-body 6x6 block descent + augmented Lagrangian
   INVALID_SOLVER = 0xFFFFFFFF,
 };
 
@@ -353,6 +354,7 @@ struct RigidBody
   daxa_f32 inv_mass;
   daxa_f32vec3 velocity;
   daxa_f32vec3 omega;
+  daxa_f32vec3 prev_velocity; // last step's velocity (AVBD adaptive warm start; rides the row reorder)
   daxa_f32mat3x3 inv_inertia;
   daxa_f32 restitution;
   daxa_f32 friction;
@@ -579,6 +581,9 @@ struct SimConfig
   daxa_u32 graph_color_overflow;   // graph-coloring: # contacts the per-color solver skips (uncolored OR color>=BB_MAX_COLORS_SOLVE)
   daxa_u32 gc_round;               // graph-coloring: current round index (incremented by owner_reset; seeds the fair-arbitration priority)
   daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
+  daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)
+  daxa_u32 avbd_violations;        // AVBD: body-coloring invariant violations (adjacent same color; must be 0)
+  daxa_u32 avbd_stick_count;       // AVBD: # contacts whose sticking anchors were reused this step (diagnostics)
   daxa_u32 gc_max_degree;          // graph-coloring DIAG: max colored-degree = max popcount(body_color_mask) over bodies
   daxa_u32 gc_max_degree_body;     // graph-coloring DIAG: a body index whose mask saturated (popcount>=30)
   daxa_u32 gc_max_degree_flags;    // graph-coloring DIAG: that body's RigidBodyFlag bits as seen by the validator
@@ -755,6 +760,29 @@ static const daxa_f32 BB_SLEEP_ANG_VEL2 = 0.0225f; // (0.15 rad/s)^2
 static const daxa_u32 BB_SLEEP_STEPS = 30;
 static const daxa_u32 BB_SLEEP_VETO_BIT = 0x80000000u; // sleep_timer bit 31: a contact partner is not quiet
 static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
+// AVBD (Augmented Vertex Block Descent, Giles et al. SIGGRAPH 2025) — paper defaults:
+// warm-start scaling lambda <- ALPHA*GAMMA*lambda, penalty k <- max(K_MIN, GAMMA*k);
+// penalty growth k <- min(K_MAX, BETA*k) while a constraint stays violated.
+// Scheme transcribed from the reference implementation (savant117/avbd-demo2d, solver.cpp +
+// manifold.cpp) in POST-STABILIZATION mode: during the main iterations contacts solve only the
+// constraint DELTA (pre-existing penetration C0 excluded -> depenetration never injects
+// momentum); velocities are reconstructed BEFORE one extra stabilization sweep that corrects C0
+// positionally. lambda <= 0 (force convention), persisted fully across steps; the penalty grows
+// LINEARLY (k += BETA*|C|) while the contact is active and decays by GAMMA at warm-start.
+static const daxa_f32 BB_AVBD_BETA = 100000.0f;
+static const daxa_f32 BB_AVBD_GAMMA = 0.99f;
+static const daxa_f32 BB_AVBD_PENALTY_MIN = 1.0f;
+static const daxa_f32 BB_AVBD_PENALTY_MAX = 1000000000.0f;
+static const daxa_f32 BB_AVBD_MARGIN = 0.0005f;     // collision margin (avoids flickering contacts)
+static const daxa_f32 BB_AVBD_STICK_THRESH = 0.01f; // max anchor drift to keep static-friction anchors
+static const daxa_f32 BB_AVBD_STICK_SLOP = 0.001f;  // anchor drift deadband: below this no positional
+                                                    // pull-back (keeps the post-stab sweep from micro-
+                                                    // jittering resting piles, which blocks sleeping;
+                                                    // measured optimum: 0 -> sleeps 870, 1mm -> 920,
+                                                    // 2mm -> 820 of 1024 at rest)
+static const daxa_u32 BB_AVBD_ITERATIONS = 10;      // main sweeps (+1 post-stabilization sweep)
+static const daxa_u32 BB_AVBD_COLOR_ROUNDS = 16;    // Jones-Plassmann body-coloring rounds
+static const daxa_u32 BB_AVBD_MAX_BODY_COLORS = 32; // primal dispatches per sweep (empty = no-op)
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_POINT_COUNT = 8192;
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_LINE_VERTEX_COUNT = BB_MAX_DEBUG_CONTACT_POINT_COUNT * 2;
 
@@ -840,6 +868,16 @@ struct ManifoldNode {
     daxa_i32 next;                 // Index of next node or -1 if end
 };
 DAXA_DECL_BUFFER_PTR(ManifoldNode)
+
+// AVBD per-body step state: pose at step start (velocity reconstruction) + inertial target
+// (free-fall pose the descent pulls toward). GPU-only buffer, accessed via raw pointers.
+struct AvbdBodyState {
+  daxa_f32vec3 pos_start;
+  Quaternion rot_start;
+  daxa_f32vec3 pos_tilde;
+  Quaternion rot_tilde;
+};
+DAXA_DECL_BUFFER_PTR(AvbdBodyState)
 
 struct BodyLink 
 {
@@ -1095,6 +1133,33 @@ struct CollisionEntry
   daxa_u32 index;
 };
 DAXA_DECL_BUFFER_PTR(CollisionEntry)
+
+// ===================== AVBD (Augmented Vertex Block Descent) =====================
+// One consolidated head shared by every AVBD pass (body coloring rounds / validator / prepare /
+// per-color primal block solves / dual updates / finalize). Buffers:
+//   avbd_state[body]  pose at step start + inertial target (AvbdBodyState)
+//   body_color[body]  Jones-Plassmann vertex color (MAX_U32 = uncolored; statics never colored)
+// Adjacency = the narrow phase's per-body manifold linked lists (manifold_nodes + RigidBody::
+// manifold_node_index); manifold ids are SCRATCH ids, translated to the packed solver buffer via
+// collision_map (same indirection the per-island solver used), so persisted lambda/k flow through
+// the regular warm-start chain.
+DAXA_DECL_TASK_HEAD_BEGIN(AvbdTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Manifold), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(ManifoldNode), manifold_nodes)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(CollisionEntry), collision_map)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(AvbdBodyState), avbd_state)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(daxa_u32), body_color)
+DAXA_DECL_TASK_HEAD_END
+
+struct AvbdPushConstants
+{
+  DAXA_TH_BLOB(AvbdTaskHead, task_head)
+  daxa_u32 color;       // primal: which body color to solve; coloring rounds: the round number
+  daxa_f32 stab_alpha;  // 1.0 = main sweeps (constraint delta only), 0.0 = post-stabilization
+};
 
 
 // NARROW PHASE

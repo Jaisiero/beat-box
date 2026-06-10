@@ -55,6 +55,7 @@ BB_DAXA_TASK_ALIAS(CreatePointsTaskHead)
 BB_DAXA_TASK_ALIAS(GraphColorTaskHead)
 BB_DAXA_TASK_ALIAS(GraphColorSolveTaskHead)
 BB_DAXA_TASK_ALIAS(SleepTaskHead)
+BB_DAXA_TASK_ALIAS(AvbdTaskHead)
 #undef BB_DAXA_TASK_ALIAS
 
 namespace daxa
@@ -412,6 +413,7 @@ const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
 
 const auto RB_sim_shader_file_string = "RB_sim.slang";
 const auto coloring_shader_file_string = "coloring.slang";
+const auto avbd_shader_file_string = "avbd.slang";
 
 // graph coloring (parallel contact-solver coloring)
 const auto entry_graph_color_dispatcher = "entry_graph_color_dispatcher";
@@ -435,6 +437,23 @@ const auto entry_collision_solver_color = "entry_collision_solver_color";
 const auto graph_color_solver_pipeline_name = "Graph Color Solver";
 const auto entry_collision_solver_relax_color = "entry_collision_solver_relax_color";
 const auto graph_color_relax_pipeline_name = "Graph Color Solver Relax";
+// AVBD passes (entries in avbd.slang)
+const auto entry_avbd_color_reset = "entry_avbd_color_reset";
+const auto avbd_color_reset_pipeline_name = "AVBD Color Reset";
+const auto entry_avbd_color_round = "entry_avbd_color_round";
+const auto avbd_color_round_pipeline_name = "AVBD Color Round";
+const auto entry_avbd_color_validate = "entry_avbd_color_validate";
+const auto avbd_color_validate_pipeline_name = "AVBD Color Validate";
+const auto entry_avbd_prepare = "entry_avbd_prepare";
+const auto avbd_prepare_pipeline_name = "AVBD Prepare";
+const auto entry_avbd_finalize = "entry_avbd_finalize";
+const auto avbd_finalize_pipeline_name = "AVBD Finalize";
+const auto entry_avbd_warmstart = "entry_avbd_warmstart";
+const auto avbd_warmstart_pipeline_name = "AVBD Warmstart";
+const auto entry_avbd_primal = "entry_avbd_primal";
+const auto avbd_primal_pipeline_name = "AVBD Primal";
+const auto entry_avbd_dual = "entry_avbd_dual";
+const auto avbd_dual_pipeline_name = "AVBD Dual";
 // island sleeping (entries in RB_sim.slang)
 const auto entry_sleep_reduce = "entry_sleep_reduce";
 const auto sleep_reduce_pipeline_name = "Sleep Reduce";
@@ -1066,6 +1085,95 @@ struct GraphColorRelaxInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(GraphColorSolvePushConstants),
       .name = graph_color_relax_pipeline_name,
+  };
+};
+// AVBD pipelines (entries in avbd.slang; share AvbdPushConstants)
+struct AvbdColorResetInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_color_reset, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_color_reset_pipeline_name,
+  };
+};
+struct AvbdColorRoundInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_color_round, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_color_round_pipeline_name,
+  };
+};
+struct AvbdColorValidateInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_color_validate, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_color_validate_pipeline_name,
+  };
+};
+struct AvbdPrepareInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_prepare, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_prepare_pipeline_name,
+  };
+};
+struct AvbdFinalizeInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_finalize, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_finalize_pipeline_name,
+  };
+};
+struct AvbdWarmstartInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_warmstart, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_warmstart_pipeline_name,
+  };
+};
+struct AvbdPrimalInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_primal, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_primal_pipeline_name,
+  };
+};
+struct AvbdDualInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_dual, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_dual_pipeline_name,
   };
 };
 // island sleeping passes (entries in RB_sim.slang; share SleepPushConstants)

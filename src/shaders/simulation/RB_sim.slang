@@ -534,6 +534,13 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
         return;
       }
 
+      // AVBD folds gravity into its inertial target (entry_avbd_prepare) and reconstructs
+      // velocities itself; this advect pass belongs to the PGS family only.
+      if (sim_config->solver_type == SimSolverType::AVBD)
+      {
+        return;
+      }
+
       if (sim_config->has_flag(SimFlag::ADVECTION))
       {
         r->advect(sim_config);
@@ -1238,6 +1245,13 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       // Static bodies never integrate (they'd drift from solver-raced velocity writes);
       // sleeping bodies hold their pose until their island wakes.
       if (!rb_is_awake_dynamic(r))
+      {
+        return;
+      }
+
+      // AVBD writes positions directly during the primal descent; entry_avbd_finalize
+      // reconstructs velocities. This velocity-level integration is PGS-family only.
+      if (sim_config->solver_type == SimSolverType::AVBD)
       {
         return;
       }

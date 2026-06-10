@@ -4,3 +4,4 @@ lib/*
 .vscode/*
 shaders_debug/*
 assets/*
+scratch/

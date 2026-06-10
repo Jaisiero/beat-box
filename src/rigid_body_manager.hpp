@@ -106,6 +106,9 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_manifold_color{{.buffer = {}, .name = "RB_manifold_color_task"}};
   daxa::TaskBuffer task_body_color_owner{{.buffer = {}, .name = "RB_body_color_owner_task"}};
   daxa::TaskBuffer task_color_count{{.buffer = {}, .name = "RB_color_count_task"}};
+  // AVBD
+  daxa::TaskBuffer task_avbd_state{{.buffer = {}, .name = "RB_avbd_state_task"}};
+  daxa::TaskBuffer task_avbd_body_color{{.buffer = {}, .name = "RB_avbd_body_color_task"}};
 
 private:
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
@@ -186,6 +189,14 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_SLR; // sleep reduce (per-body quiet timer)
   std::shared_ptr<daxa::ComputePipeline> pipeline_SLV; // sleep veto (loud contact partners veto sleeping)
   std::shared_ptr<daxa::ComputePipeline> pipeline_SLA; // sleep apply (quiet + un-vetoed -> SLEEPING flag)
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CR;   // AVBD body-color reset
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CRND; // AVBD body-color JP round
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CV;   // AVBD body-color validate
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_PRE;  // AVBD prepare (inertial target)
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_FIN;  // AVBD finalize (velocity reconstruction)
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_WS;   // AVBD lambda/k warm-start scaling
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_PRIM; // AVBD per-color primal 6x6 block solve
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DUAL; // AVBD dual lambda/penalty updates
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CPS_OV; // overflow pre-solver (serial)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CS_OV;  // overflow solver (serial)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CSR_OV; // overflow relax (serial)
@@ -229,6 +240,9 @@ private:
   daxa::BufferId manifold_color = {};
   daxa::BufferId body_color_owner = {};
   daxa::BufferId color_count = {};
+  // AVBD
+  daxa::BufferId avbd_state = {};
+  daxa::BufferId avbd_body_color = {};
 
   // Simulation configuration
   SimSolverType solver_type = SimSolverType::PGS_SOFT;

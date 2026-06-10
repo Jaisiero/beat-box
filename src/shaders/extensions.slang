@@ -23,6 +23,7 @@ void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
   dst->inv_mass = src->inv_mass;
   dst->velocity = src->velocity;
   dst->omega = src->omega;
+  dst->prev_velocity = src->prev_velocity;
   dst->inv_inertia[0][0] = src->inv_inertia[0][0];
   dst->inv_inertia[0][1] = src->inv_inertia[0][1];
   dst->inv_inertia[0][2] = src->inv_inertia[0][2];
@@ -49,6 +50,9 @@ void copy_contact_fields(Contact* dst, Contact* src)
   dst->normal_mass = src->normal_mass;
   dst->tangent_mass[0] = src->tangent_mass[0];
   dst->tangent_mass[1] = src->tangent_mass[1];
+  dst->anchor_a = src->anchor_a;
+  dst->anchor_b = src->anchor_b;
+  dst->stick = src->stick;
   dst->fp.in_reference = src->fp.in_reference;
   dst->fp.out_reference = src->fp.out_reference;
   dst->fp.in_incident = src->fp.in_incident;
@@ -69,6 +73,9 @@ void write_contact_fields_from_value(Contact* dst, Contact src)
   dst->normal_mass = src.normal_mass;
   dst->tangent_mass[0] = src.tangent_mass[0];
   dst->tangent_mass[1] = src.tangent_mass[1];
+  dst->anchor_a = src.anchor_a;
+  dst->anchor_b = src.anchor_b;
+  dst->stick = src.stick;
   dst->fp.in_reference = src.fp.in_reference;
   dst->fp.out_reference = src.fp.out_reference;
   dst->fp.in_incident = src.fp.in_incident;
@@ -313,6 +320,19 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
             contacts[i].normal_impulse = old_contact->normal_impulse;
             contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0];
             contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
+            // AVBD: the penalty parameters must persist across steps (PGS overwrites these
+            // fields in pre_step, so copying them is harmless for the PGS family)
+            contacts[i].mass_coefficient = old_contact->mass_coefficient;
+            contacts[i].tangent_mass[0] = old_contact->tangent_mass[0];
+            contacts[i].tangent_mass[1] = old_contact->tangent_mass[1];
+            // AVBD sticking (reference initialize()): if the contact was sticking last step,
+            // keep its anchored contact points for true static friction
+            contacts[i].stick = old_contact->stick;
+            if (old_contact->stick != 0u)
+            {
+              contacts[i].anchor_a = old_contact->anchor_a;
+              contacts[i].anchor_b = old_contact->anchor_b;
+            }
 
             contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
           break;
