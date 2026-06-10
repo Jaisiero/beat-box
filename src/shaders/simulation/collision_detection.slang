@@ -958,6 +958,7 @@ struct VoxelManifoldReducer
   daxa_u32 fp_b[8];
   daxa_f32vec3 normal_sum;
   daxa_u32 sample_count;
+  daxa_u32 interior_hits; // samples landing in zero-gradient interior cells (deep overlap)
 
   [mutating] void init()
   {
@@ -965,6 +966,7 @@ struct VoxelManifoldReducer
     for (daxa_u32 i = 0u; i < 8u; ++i) { pen[i] = 0.0f; fp_a[i] = 0u; }
     normal_sum = daxa_f32vec3(0.0f, 0.0f, 0.0f);
     sample_count = 0u;
+    interior_hits = 0u;
   }
 
   // Winner per octant: depth quantized to half a voxel, ties broken by LOWEST voxel id.
@@ -1013,8 +1015,17 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       daxa_i32vec3 c = daxa_i32vec3(daxa_i32(floor(g.x)), daxa_i32(floor(g.y)), daxa_i32(floor(g.z)));
       if (!voxel_occ_bit(occ, s2, c)) { continue; }
       daxa_f32vec3 grad = voxel_occ_gradient(occ, s2, c);
+      if (dot(grad, grad) < 1e-6f)
+      {
+        // INTERIOR cell of B: the occupancy gradient is zero, so there is no reliable
+        // contact direction here. Inventing one (the old cell-center fallback) fed the
+        // solver garbage normals that pushed bodies INTO each other - the perpetual
+        // interpenetration fight. Count it and let the deep-penetration rescue handle it.
+        red.interior_hits += 1u;
+        continue;
+      }
       daxa_f32vec3 cell_center = s2->grid_origin + (daxa_f32vec3(daxa_f32(c.x), daxa_f32(c.y), daxa_f32(c.z)) + daxa_f32vec3(0.5f, 0.5f, 0.5f)) * vs2;
-      daxa_f32vec3 n_local = dot(grad, grad) > 1e-6f ? normalize(grad) : normalize(l2 - cell_center);
+      daxa_f32vec3 n_local = normalize(grad);
       n_out2 = r2->rotate_vector(n_local);
       daxa_f32vec3 cw = r2->position + r2->rotate_vector(cell_center);
       pe = dot(pw - cw, n_out2) - 0.5f * (vs1 + vs2);
@@ -1040,7 +1051,9 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       fb = k;
     }
     if (pe >= 0.0f) { continue; } // grazing sample: occupied cell but no overlap along n
-    pe = max(pe, -vs1);           // clamp runaway depths (deep interior samples)
+    // cap at HALF a voxel: pen feeds AVBD's positional post-stab sweep directly, and a
+    // full-voxel correction per step visibly pops the bodies apart
+    pe = max(pe, -0.5f * vs1);
     red.add(pw, pe, n_out2, e & 0xFFFFFFu, fb, r1->position, 0.5f * vs1);
     ++found;
   }
@@ -1113,6 +1126,28 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
   voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red);
   if (red.sample_count == 0u)
   {
+    if (red.interior_hits > 0u)
+    {
+      // deep-interpenetration rescue: every sample fell in interior cells (no surface
+      // signal anywhere) - emit a single center-to-center contact so the bodies separate
+      // along a sane direction instead of sinking further
+      daxa_f32vec3 d = r1->position - r2->position;
+      daxa_f32vec3 n_res = dot(d, d) > 1e-8f ? normalize(d) : daxa_f32vec3(0.0f, 1.0f, 0.0f);
+      manifold.normal = flip ? n_res : -n_res;
+      manifold.contacts[0].position = (r1->position + r2->position) * 0.5f;
+      manifold.contacts[0].penetration = -0.5f * s1->voxel_size;
+      manifold.contacts[0].normal_impulse = 0.0f;
+      manifold.contacts[0].tangent_impulse[0] = 0.0f;
+      manifold.contacts[0].tangent_impulse[1] = 0.0f;
+      manifold.contacts[0].warm_start = 0u;
+      manifold.contacts[0].stick = 0u;
+      manifold.contacts[0].fp.in_reference = 0xFFFFFFu;
+      manifold.contacts[0].fp.out_reference = 0xFFFFFFu;
+      manifold.contacts[0].fp.in_incident = 0xFFFFFFu;
+      manifold.contacts[0].fp.out_incident = 0xFFFFFFu;
+      manifold.contact_count = 1;
+      return true;
+    }
     return false;
   }
 
