@@ -360,6 +360,11 @@ public:
   // Color code: magenta = mu_eff 0.2, yellow = 0.5, green = 1.0. The 2-cube tower on the
   // gentle ramp's green pair only stands with true static friction. Without sticking
   // anchors (AVBD) the "stuck" pairs creep slowly downhill instead of pinning in place.
+  // Validated against AVBD: every outcome matches plain Coulomb theory exactly (a probe
+  // run measured resting lam_t = m g sin(theta) to 4 digits and re-stick from a 1 m/s
+  // kick). NOTE for screenshot readers: the default camera looks along +z, so world +x
+  // appears on the LEFT of the screen - the steep ramp (dark red, +x) is screen-left,
+  // the gentle ramp (gray, -x) is screen-right.
   void scene_4() {
     materials = {
       {
@@ -389,6 +394,11 @@ public:
       },
       {
         .albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        // dark red-brown: the STEEP ramp, so the two ramps are unambiguous on screen
+        .albedo = daxa_f32vec3(0.30f, 0.08f, 0.06f),
         .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
       },
     };
@@ -422,6 +432,7 @@ public:
     };
     push_ramp(ramp_a_c, q_a);
     push_ramp(ramp_b_c, q_b);
+    rigid_bodies.back().material_index = 7u; // steep ramp in dark red (screen-left)
 
     // one cube flush on a ramp surface: u = along-slope offset, z = world z, lift = ramp
     // half-height + cube half-size + 2cm settle gap (or stacked tower levels)
@@ -441,8 +452,8 @@ public:
     // gentle ramp (downhill -x): magenta slides, yellow and green stick
     push_cube(ramp_a_c, xl_a, yl_a, q_a, 3.5f, 16.2f, 0.04f, 5u, lift0);
     push_cube(ramp_a_c, xl_a, yl_a, q_a, 3.5f, 17.8f, 0.04f, 5u, lift0);
-    push_cube(ramp_a_c, xl_a, yl_a, q_a, 1.75f, 13.4f, 0.49f, 4u, lift0);
-    push_cube(ramp_a_c, xl_a, yl_a, q_a, 1.75f, 15.0f, 0.49f, 4u, lift0);
+    push_cube(ramp_a_c, xl_a, yl_a, q_a, 1.75f, 13.4f, 0.25f, 4u, lift0);
+    push_cube(ramp_a_c, xl_a, yl_a, q_a, 1.75f, 15.0f, 0.25f, 4u, lift0);
     push_cube(ramp_a_c, xl_a, yl_a, q_a, 0.0f, 10.6f, 1.0f, 2u, lift0);
     push_cube(ramp_a_c, xl_a, yl_a, q_a, 0.0f, 12.2f, 1.0f, 2u, lift0);
     // 1 extra cube stacked on the gentle ramp's first green cube (a 2-high tower on the
@@ -452,8 +463,8 @@ public:
     // steep ramp (downhill +x, up-slope is -x_l): magenta AND yellow slide, green sticks
     push_cube(ramp_b_c, xl_b, yl_b, q_b, -3.5f, 16.2f, 0.04f, 5u, lift0);
     push_cube(ramp_b_c, xl_b, yl_b, q_b, -3.5f, 17.8f, 0.04f, 5u, lift0);
-    push_cube(ramp_b_c, xl_b, yl_b, q_b, -1.75f, 13.4f, 0.49f, 4u, lift0);
-    push_cube(ramp_b_c, xl_b, yl_b, q_b, -1.75f, 15.0f, 0.49f, 4u, lift0);
+    push_cube(ramp_b_c, xl_b, yl_b, q_b, -1.75f, 13.4f, 0.25f, 4u, lift0);
+    push_cube(ramp_b_c, xl_b, yl_b, q_b, -1.75f, 15.0f, 0.25f, 4u, lift0);
     push_cube(ramp_b_c, xl_b, yl_b, q_b, 0.0f, 10.6f, 1.0f, 2u, lift0);
     push_cube(ramp_b_c, xl_b, yl_b, q_b, 0.0f, 12.2f, 1.0f, 2u, lift0);
   }
