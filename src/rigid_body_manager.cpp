@@ -1116,17 +1116,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_NPD);
   RB_TG.add_task(task_NP);
   RB_TG.add_task(task_advect);
-  // graph coloring (Phase 2: coexists with the island solver; produces manifold_color + validates the invariant)
-  RB_TG.add_task(task_GCD);
-  RB_TG.add_task(task_GCR);
-  for (auto r = 0u; r < GRAPH_COLOR_MAX_ROUNDS; ++r)
-  {
-    RB_TG.add_task(task_GCOR);
-    RB_TG.add_task(task_GCP1);
-    RB_TG.add_task(task_GCP2);
-  }
-  RB_TG.add_task(task_GCOR); // reset owner-as-seen for the validator
-  RB_TG.add_task(task_GCV);
   RB_TG.add_task(task_IC);
   RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_ID);
@@ -1142,6 +1131,24 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_IML);
   // FIXME: that's a really expensive sort too
   // RB_TG.add_task(task_SMLI);
+  // graph coloring. MUST run after task_IML: the coloring, the validator AND the per-color solver
+  // all index `task_collisions`, which task_IML (re)writes in island-sorted order THIS frame.
+  // Coloring earlier (e.g. right after the narrow phase) reads the previous content of the buffer
+  // (2 frames old under double buffering), so the colors describe a different manifold->body
+  // mapping than the one the per-color solver dispatches over. Two same-body manifolds can then
+  // land in one color and solve concurrently -> racy Jacobi-style overcorrection -> a resting
+  // body gets ejected at thousands of m/s within one CS sweep (and the validator stays at 0
+  // violations because it validated the SAME stale data the colorer saw).
+  RB_TG.add_task(task_GCD);
+  RB_TG.add_task(task_GCR);
+  for (auto r = 0u; r < GRAPH_COLOR_MAX_ROUNDS; ++r)
+  {
+    RB_TG.add_task(task_GCOR);
+    RB_TG.add_task(task_GCP1);
+    RB_TG.add_task(task_GCP2);
+  }
+  RB_TG.add_task(task_GCOR); // reset owner-as-seen for the validator
+  RB_TG.add_task(task_GCV);
   if (static_cast<daxa_u32>(sim_flags & SimFlag::USE_GRAPH_COLORING) != 0u)
   {
     // per-color solve (parallel: one dispatch per color, balanced, no atomics)
