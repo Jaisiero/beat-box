@@ -518,8 +518,24 @@ struct OBBvsOBBCollision {
         return;
     }
 
+    // Closest points between the edge SEGMENTS, not the infinite lines (Ericson 5.1.9).
+    // The parameters must be clamped to [0,1]: for nearly-parallel edges (settled neighbor
+    // cubes jiggle below the SAT `parallel` guard) denom ~ sin^2(theta) -> the unclamped
+    // line-line solution puts the contact point hundreds of units off-body. A warm-started
+    // impulse applied at that lever arm injects enormous angular velocity and the rest of
+    // the contact sweep converts it into a velocity explosion (bodies ejected/tunneling).
     daxa_f32 TA = (b * f - c * e) / denom;
+    TA = clamp(TA, 0.0f, 1.0f);
     daxa_f32 TB = (b * TA + f) / e;
+
+    // Re-project after clamping TB so the pair is the true segment-segment closest pair.
+    if (TB < 0.0f) {
+        TB = 0.0f;
+        TA = clamp(-c / a, 0.0f, 1.0f);
+    } else if (TB > 1.0f) {
+        TB = 1.0f;
+        TA = clamp((b - c) / a, 0.0f, 1.0f);
+    }
 
     CA = PA + DA * TA;
     CB = PB + DB * TB;

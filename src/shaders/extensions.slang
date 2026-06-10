@@ -288,6 +288,14 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
 
   [mutating]
   void update_from_old(Manifold* old_manifold) {
+    // Impulses are only transferable when both manifolds came from the same SAT axis. With a
+    // different key the normal/feature interpretation changed — and the contact feature ids are
+    // not globally unique across types (face contacts use Edge ids 0..11, edge-edge contacts use
+    // axis keys 6..14), so a cross-axis feature match is a false positive that warm-starts a
+    // contact with an impulse measured along a different direction.
+    if (key != old_manifold->key) {
+      return;
+    }
     daxa_f32vec3 otv0  = old_manifold->tangent_vectors[0];
     daxa_f32vec3 otv1  = old_manifold->tangent_vectors[1];
 
