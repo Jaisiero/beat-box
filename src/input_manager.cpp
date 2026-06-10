@@ -132,6 +132,12 @@ void InputManager::on_key(i32 key, i32 action)
       status_mngr->set_solver(SimSolverType::PGS_SOFT);
     }
     break;
+  case GLFW_KEY_3:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->set_solver(SimSolverType::AVBD);
+    }
+    break;
   case GLFW_KEY_7:
     if (action == GLFW_PRESS)
     {

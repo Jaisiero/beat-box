@@ -56,6 +56,9 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_SLR = task_manager->create_compute(SleepReduceInfo{}.info);
     pipeline_SLV = task_manager->create_compute(SleepVetoInfo{}.info);
     pipeline_SLA = task_manager->create_compute(SleepApplyInfo{}.info);
+    pipeline_AVBD_CR = task_manager->create_compute(AvbdColorResetInfo{}.info);
+    pipeline_AVBD_CRND = task_manager->create_compute(AvbdColorRoundInfo{}.info);
+    pipeline_AVBD_CV = task_manager->create_compute(AvbdColorValidateInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
     update_pipeline = task_manager->create_compute(UpdateRigidBodies{}.info);
   }
@@ -237,6 +240,15 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   color_count = device.create_buffer({
       .size = sizeof(daxa_u32) * (BB_MAX_COLORS + 1),
       .name = "color_count",
+  });
+  // AVBD buffers
+  avbd_state = device.create_buffer({
+      .size = sizeof(AvbdBodyState) * MAX_RIGID_BODY_COUNT,
+      .name = "avbd_state",
+  });
+  avbd_body_color = device.create_buffer({
+      .size = sizeof(daxa_u32) * MAX_RIGID_BODY_COUNT,
+      .name = "avbd_body_color",
   });
 
   daxa::InlineTaskInfo task_RC({
@@ -967,7 +979,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 36> buffers = {
+  std::array<daxa::TaskBuffer, 38> buffers = {
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -1004,6 +1016,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_manifold_color,
       task_body_color_owner,
       task_color_count,
+      task_avbd_state,
+      task_avbd_body_color,
   };
 
   // the whole sim runs on the async compute queue; the render graph waits the sim timeline
@@ -1094,6 +1108,44 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   auto user_callback_SLA = [this, sleep_dispatch](daxa::TaskInterface ti, auto &) { sleep_dispatch(ti, pipeline_SLA, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
   using TTask_SLA = TaskTemplate<SleepTaskHead::Task, decltype(user_callback_SLA)>;
   TTask_SLA task_SLA(sleep_views, user_callback_SLA);
+
+  // ---- AVBD tasks (F1: body vertex coloring + validator; runs after IML so manifold lists,
+  // collision_map and the packed manifolds are final for this step) ----
+  auto avbd_views = std::array{
+      daxa::attachment_view(AvbdTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+      daxa::attachment_view(AvbdTaskHead::AT.sim_config, task_sim_config),
+      daxa::attachment_view(AvbdTaskHead::AT.rigid_bodies, task_rigid_bodies),
+      daxa::attachment_view(AvbdTaskHead::AT.collisions, task_collisions),
+      daxa::attachment_view(AvbdTaskHead::AT.manifold_nodes, task_rigid_body_link_manifolds),
+      daxa::attachment_view(AvbdTaskHead::AT.collision_map, task_collision_entries),
+      daxa::attachment_view(AvbdTaskHead::AT.avbd_state, task_avbd_state),
+      daxa::attachment_view(AvbdTaskHead::AT.body_color, task_avbd_body_color),
+  };
+  auto avbd_dispatch = [this](daxa::TaskInterface ti, std::shared_ptr<daxa::ComputePipeline> &pl, daxa_u32 pc_color, daxa_u32 dispatch_offset)
+  {
+    ti.recorder.set_pipeline(*pl);
+    ti.recorder.push_constant(AvbdPushConstants{.task_head = ti.attachment_shader_blob, .color = pc_color});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(AvbdTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * dispatch_offset});
+  };
+  auto user_callback_AVBD_CR = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CR, 0u, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_CR = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_CR)>;
+  TTask_AVBD_CR task_AVBD_CR(avbd_views, user_callback_AVBD_CR);
+
+  auto make_avbd_round = [this, avbd_dispatch](daxa_u32 round)
+  {
+    return [this, avbd_dispatch, round](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CRND, round, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  };
+  using TTask_AVBD_CRND = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_round(0u))>;
+  std::vector<TTask_AVBD_CRND> task_AVBD_CRND_vec;
+  task_AVBD_CRND_vec.reserve(BB_AVBD_COLOR_ROUNDS);
+  for (daxa_u32 rd = 0u; rd < BB_AVBD_COLOR_ROUNDS; ++rd)
+  {
+    task_AVBD_CRND_vec.emplace_back(avbd_views, make_avbd_round(rd));
+  }
+
+  auto user_callback_AVBD_CV = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CV, 0u, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_CV = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_CV)>;
+  TTask_AVBD_CV task_AVBD_CV(avbd_views, user_callback_AVBD_CV);
 
   // ---- per-color solver tasks (Phase 3): one dispatch per color, each filters manifold_color==color ----
   static const daxa_u32 MAX_COLORS_SOLVE = BB_MAX_COLORS_SOLVE; // shared.inl: per-color solver dispatch count; empty colors are cheap no-ops
@@ -1198,6 +1250,14 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_GCOR); // reset owner-as-seen for the validator
   RB_TG.add_task(task_GCV);
   RB_TG.add_task(task_GCV2); // TEMP diag: satbody degree/partners
+  // AVBD body coloring (independent of the contact coloring above; entries are cheap and the
+  // primal solve will only run when solver_type == AVBD)
+  RB_TG.add_task(task_AVBD_CR);
+  for (daxa_u32 rd = 0u; rd < BB_AVBD_COLOR_ROUNDS; ++rd)
+  {
+    RB_TG.add_task(task_AVBD_CRND_vec[rd]);
+  }
+  RB_TG.add_task(task_AVBD_CV);
   if (static_cast<daxa_u32>(sim_flags & SimFlag::USE_GRAPH_COLORING) != 0u)
   {
     // per-color solve (parallel: one dispatch per color, balanced, no atomics)
@@ -1253,6 +1313,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   task_manifold_color.set_buffer(manifold_color);
   task_body_color_owner.set_buffer(body_color_owner);
   task_color_count.set_buffer(color_count);
+  task_avbd_state.set_buffer(avbd_state);
+  task_avbd_body_color.set_buffer(avbd_body_color);
   task_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[0]);
   task_collision_entries.set_buffer(collision_entries[0]);
   task_collisions.set_buffer(collisions[0]);

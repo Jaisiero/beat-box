@@ -16,6 +16,8 @@ static std::string sim_solver_type_to_string(SimSolverType type)
     return "PGS";
   case SimSolverType::PGS_SOFT:
     return "PGS_SOFT";
+  case SimSolverType::AVBD:
+    return "AVBD";
   default:
     return "UNKNOWN";
   }
