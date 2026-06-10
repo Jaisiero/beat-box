@@ -7,6 +7,7 @@
 #include "acceleration_structure_manager.hpp"
 #include "status_manager.hpp"
 #include <random>
+#include <cmath>
 
 BB_NAMESPACE_BEGIN
 
@@ -351,6 +352,112 @@ public:
 
   }
 
+  // Sticking / static-friction test: two static ramps (friction 1.0) with cube pairs of
+  // increasing friction parked on them. The effective contact friction is
+  // sqrt(mu_cube * mu_ramp), to be compared against tan(theta):
+  //   gentle ramp 15 deg (tan = 0.268): mu_eff 0.2 SLIDES | 0.5 sticks | 1.0 sticks (+ tower)
+  //   steep ramp  30 deg (tan = 0.577): mu_eff 0.2 SLIDES | 0.5 SLIDES | 1.0 sticks
+  // Color code: magenta = mu_eff 0.2, yellow = 0.5, green = 1.0. The 2-cube tower on the
+  // gentle ramp's green pair only stands with true static friction. Without sticking
+  // anchors (AVBD) the "stuck" pairs creep slowly downhill instead of pinning in place.
+  void scene_4() {
+    materials = {
+      {
+        .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        // bluer magenta: resists the warm sky tint that washes (1,0,1) toward orange
+        .albedo = daxa_f32vec3(0.55f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+    };
+
+    // floor (same slab as the other scenes: top surface at y = 0)
+    rigid_bodies = {
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 1.0f}
+    };
+
+    // static emissive panel high above the ramps: stable lighting, out of the default
+    // camera frame and high enough not to bloom out the ramp tops
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 20.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-5.0f, -0.2f, -5.0f), .maximum = daxa_f32vec3(5.0f, 0.2f, 5.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 1.0f});
+    rigid_bodies.back().material_index = 1u; // emissive
+
+    auto const deg = 3.14159265f / 180.0f;
+    daxa_f32 const th_a = 15.0f * deg; // gentle ramp, downhill -x (tilt about +Z)
+    daxa_f32 const th_b = 30.0f * deg; // steep ramp, downhill +x (tilt about -Z)
+    Quaternion const q_a = Quaternion(0.0f, 0.0f, std::sin(th_a * 0.5f), std::cos(th_a * 0.5f));
+    Quaternion const q_b = Quaternion(0.0f, 0.0f, -std::sin(th_b * 0.5f), std::cos(th_b * 0.5f));
+    // ramp local axes in world space (x_l = up-slope-ish, y_l = surface normal)
+    daxa_f32vec3 const xl_a = daxa_f32vec3(std::cos(th_a), std::sin(th_a), 0.0f);
+    daxa_f32vec3 const yl_a = daxa_f32vec3(-std::sin(th_a), std::cos(th_a), 0.0f);
+    daxa_f32vec3 const xl_b = daxa_f32vec3(std::cos(th_b), -std::sin(th_b), 0.0f);
+    daxa_f32vec3 const yl_b = daxa_f32vec3(std::sin(th_b), std::cos(th_b), 0.0f);
+    // ramp centers chosen so each foot ends just above the floor
+    daxa_f32vec3 const ramp_a_c = daxa_f32vec3(-7.0f, 2.3f, 14.0f);
+    daxa_f32vec3 const ramp_b_c = daxa_f32vec3(7.0f, 3.9f, 14.0f);
+
+    auto push_ramp = [&](daxa_f32vec3 c, Quaternion q) {
+      rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = c, .rotation = q, .minimum = daxa_f32vec3(-7.0f, -0.4f, -4.5f), .maximum = daxa_f32vec3(7.0f, 0.4f, 4.5f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 1.0f});
+    };
+    push_ramp(ramp_a_c, q_a);
+    push_ramp(ramp_b_c, q_b);
+
+    // one cube flush on a ramp surface: u = along-slope offset, z = world z, lift = ramp
+    // half-height + cube half-size + 2cm settle gap (or stacked tower levels)
+    auto push_cube = [&](daxa_f32vec3 c, daxa_f32vec3 xl, daxa_f32vec3 yl, Quaternion q,
+                         daxa_f32 u, daxa_f32 z, daxa_f32 mu, daxa_u32 mat, daxa_f32 lift) {
+      daxa_f32vec3 p = daxa_f32vec3(c.x + u * xl.x + lift * yl.x,
+                                    c.y + u * xl.y + lift * yl.y,
+                                    z);
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = p, .rotation = q, .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = mu});
+      rigid_bodies.back().material_index = mat;
+    };
+    daxa_f32 const lift0 = 0.4f + 0.5f + 0.005f; // 5mm settle gap (2cm rocked the tower on spawn)
+    // friction pairs (mu_cube -> mu_eff against the friction-1 ramps): 0.04 -> 0.2 magenta,
+    // 0.25 -> 0.5 yellow, 1.0 -> 1.0 green. Each row owns a DISJOINT z band so sliding
+    // rows pass beside the sticking rows (sharing a z lane lets an upslope slider bowl
+    // the stickers downhill) and nothing hides behind anything from the default camera.
+    // gentle ramp (downhill -x): magenta slides, yellow and green stick
+    push_cube(ramp_a_c, xl_a, yl_a, q_a, 3.5f, 16.2f, 0.04f, 5u, lift0);
+    push_cube(ramp_a_c, xl_a, yl_a, q_a, 3.5f, 17.8f, 0.04f, 5u, lift0);
+    push_cube(ramp_a_c, xl_a, yl_a, q_a, 1.75f, 13.4f, 0.49f, 4u, lift0);
+    push_cube(ramp_a_c, xl_a, yl_a, q_a, 1.75f, 15.0f, 0.49f, 4u, lift0);
+    push_cube(ramp_a_c, xl_a, yl_a, q_a, 0.0f, 10.6f, 1.0f, 2u, lift0);
+    push_cube(ramp_a_c, xl_a, yl_a, q_a, 0.0f, 12.2f, 1.0f, 2u, lift0);
+    // 1 extra cube stacked on the gentle ramp's first green cube (a 2-high tower on the
+    // slope: tip lever 1.0*tan15 = 0.27 < 0.5 half-footprint, held by static friction;
+    // 3-high was marginal, 0.40, and toppled from the spawn settle)
+    push_cube(ramp_a_c, xl_a, yl_a, q_a, 0.0f, 10.6f, 1.0f, 2u, lift0 + 1.005f);
+    // steep ramp (downhill +x, up-slope is -x_l): magenta AND yellow slide, green sticks
+    push_cube(ramp_b_c, xl_b, yl_b, q_b, -3.5f, 16.2f, 0.04f, 5u, lift0);
+    push_cube(ramp_b_c, xl_b, yl_b, q_b, -3.5f, 17.8f, 0.04f, 5u, lift0);
+    push_cube(ramp_b_c, xl_b, yl_b, q_b, -1.75f, 13.4f, 0.49f, 4u, lift0);
+    push_cube(ramp_b_c, xl_b, yl_b, q_b, -1.75f, 15.0f, 0.49f, 4u, lift0);
+    push_cube(ramp_b_c, xl_b, yl_b, q_b, 0.0f, 10.6f, 1.0f, 2u, lift0);
+    push_cube(ramp_b_c, xl_b, yl_b, q_b, 0.0f, 12.2f, 1.0f, 2u, lift0);
+  }
+
   bool load_scene()
   {
     if (!initialized)
@@ -362,8 +469,9 @@ public:
     gen = std::mt19937(rd()); // seed the generator
 
     // scene_1();
-    scene_2();
+    // scene_2();
     // scene_3();
+    scene_4();
 
     std::uniform_int_distribution<> distr(1, static_cast<int>(materials.size() - 1)); // define the range
 
@@ -379,7 +487,11 @@ public:
       1.0f / rigid_body.mass;
       rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);
       aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
-      rigid_body.material_index = rigid_body.inv_mass == 0 ? 0 : distr(gen);
+      // scenes may pre-assign a material (e.g. scene_4 color-codes friction); 0 = unset
+      if (rigid_body.material_index == 0u)
+      {
+        rigid_body.material_index = rigid_body.inv_mass == 0 ? 0u : static_cast<daxa_u32>(distr(gen));
+      }
       if(materials.at(rigid_body.material_index).emission != daxa_f32vec3(0.0f, 0.0f, 0.0f))
       {
         lights.push_back(Light(rigid_body.id));
