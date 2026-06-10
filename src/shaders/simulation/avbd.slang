@@ -69,13 +69,6 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
     return;
   }
   daxa_u32 i = compute_i.x;
-  if (i == 0u)
-  {
-    // TEMP DIAG (zeroed here, accumulated by primal/dual dispatches later this step)
-    sim_config->avbd_dbg_max_dx = 0u;
-    sim_config->avbd_dbg_max_lam = 0u;
-    sim_config->avbd_dbg_active = 0u;
-  }
   if (i >= sim_config->rigid_body_count)
   {
     return;
@@ -531,10 +524,6 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   // no step limiting: the reference scheme relies on the inertia term + penalty curvature
   daxa_f32vec3 dlin = daxa_f32vec3(dx[0], dx[1], dx[2]);
   daxa_f32vec3 dang = daxa_f32vec3(dx[3], dx[4], dx[5]);
-  { // TEMP DIAG
-    daxa_u32 prevd;
-    InterlockedMax(sim_config->avbd_dbg_max_dx, asuint(length(dlin)), prevd);
-  }
 
   r->position += dlin;
   daxa_f32vec3 half = dang * 0.5f;
@@ -611,15 +600,6 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
       if (new_lam_t > -bound && new_lam_t < bound)
       {
         m->contacts[j].tangent_mass[t] = min(kt + BB_AVBD_BETA * abs(Ct), BB_AVBD_PENALTY_MAX);
-      }
-    }
-    { // TEMP DIAG (lambda <= 0: track its magnitude; only when strictly negative, since
-      // asuint(-0.0f) = 0x80000000 would dominate the unsigned InterlockedMax)
-      if (new_lam < 0.0f)
-      {
-        daxa_u32 prevd;
-        InterlockedMax(sim_config->avbd_dbg_max_lam, asuint(-new_lam), prevd);
-        InterlockedAdd(sim_config->avbd_dbg_active, 1u, prevd);
       }
     }
   }

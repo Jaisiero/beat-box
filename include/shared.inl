@@ -583,9 +583,6 @@ struct SimConfig
   daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
   daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)
   daxa_u32 avbd_violations;        // AVBD: body-coloring invariant violations (adjacent same color; must be 0)
-  daxa_u32 avbd_dbg_max_dx;        // TEMP DIAG: max |dlin| applied by a primal update this step (float bits)
-  daxa_u32 avbd_dbg_max_lam;       // TEMP DIAG: max contact lambda this step (float bits)
-  daxa_u32 avbd_dbg_active;        // TEMP DIAG: active contacts at the last dual update
   daxa_u32 gc_max_degree;          // graph-coloring DIAG: max colored-degree = max popcount(body_color_mask) over bodies
   daxa_u32 gc_max_degree_body;     // graph-coloring DIAG: a body index whose mask saturated (popcount>=30)
   daxa_u32 gc_max_degree_flags;    // graph-coloring DIAG: that body's RigidBodyFlag bits as seen by the validator
