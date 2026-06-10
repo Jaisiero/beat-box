@@ -214,6 +214,16 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
 void RendererManager::render()
 {
   double _sim_ms_accum = 0.0; daxa_u64 _sim_ms_n = 0;   // [PERF] isolated sim timing
+  // Fixed-timestep simulation, decoupled from the render rate: the sim advances TIME_STEP
+  // (1/60 s) of simulated time only when 1/60 s of real time has accumulated, so its speed is
+  // real-time at any fps (it used to step once per render frame: 2.4x too fast at 144 fps).
+  // At most ONE step per render frame: the double-buffered sim resources (rigid bodies,
+  // manifolds, sim_config) rotate with the render frame_index, so multi-step catch-up within
+  // one frame would re-read stale "previous" buffers; below 60 fps the sim therefore slows
+  // down instead of catching up. The accumulator is clamped so stalls don't queue a burst.
+  auto sim_clock_prev = std::chrono::steady_clock::now();
+  double sim_accum_s = 0.0;
+  constexpr double SIM_DT_S = static_cast<double>(TIME_STEP);
   while (!window.should_close())
   {
     // Update the GUI
@@ -224,22 +234,39 @@ void RendererManager::render()
       rigid_body_manager->update_sim();
     }
 
-    // Simulate rigid bodies
-    if(status_manager->is_simulating()) {
-      gpu->synchronize();                                          // [PERF] flush prior GPU work
-      auto _s0 = std::chrono::high_resolution_clock::now();        // [PERF]
-      rigid_body_manager->simulate();
-      gpu->synchronize();                                          // [PERF] wait sim GPU completion
-      _sim_ms_accum += std::chrono::duration<double, std::milli>(
-        std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
-      _sim_ms_n++;                                                 // [PERF]
+    // Simulate rigid bodies (fixed 60 Hz)
+    bool sim_stepped = false;
+    {
+      auto const sim_clock_now = std::chrono::steady_clock::now();
+      double const elapsed_s = std::chrono::duration<double>(sim_clock_now - sim_clock_prev).count();
+      sim_clock_prev = sim_clock_now;
+      if (status_manager->is_simulating())
+      {
+        sim_accum_s = std::min(sim_accum_s + elapsed_s, 2.0 * SIM_DT_S);
+        if (sim_accum_s >= SIM_DT_S)
+        {
+          sim_accum_s -= SIM_DT_S;
+          gpu->synchronize();                                          // [PERF] flush prior GPU work
+          auto _s0 = std::chrono::high_resolution_clock::now();        // [PERF]
+          rigid_body_manager->simulate();
+          gpu->synchronize();                                          // [PERF] wait sim GPU completion
+          _sim_ms_accum += std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
+          _sim_ms_n++;                                                 // [PERF]
+          sim_stepped = true;
+        }
+      }
+      else
+      {
+        sim_accum_s = 0.0; // don't burst-step on resume
+      }
     }
-
     if (!window.update())
       continue;
 
-    // Update the acceleration structures
-    if(status_manager->is_simulating() || status_manager->is_updating()) {
+    // Update the acceleration structures (only when the sim actually stepped — skipped frames
+    // render the unchanged state and avoid the full-pipeline synchronize + readback)
+    if(sim_stepped || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
       { static daxa_u64 _cf = 0; static auto _t0 = std::chrono::high_resolution_clock::now();
         // sample every 31 frames (odd) so the readback alternates between the two double-buffered
