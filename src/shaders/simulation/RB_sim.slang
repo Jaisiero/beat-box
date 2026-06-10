@@ -35,6 +35,7 @@
 [[vk::push_constant]] CollisionSolverRelaxationPushConstants CSR;
 [[vk::push_constant]] CreatePointsPushConstants CP;
 [[vk::push_constant]] RigidBodyUpdatePushConstants RB_update;
+[[vk::push_constant]] GraphColorSolvePushConstants GCS; // per-color solver passes (CPS/CS/CSR)
 
 [shader("compute")]
     [numthreads(1, 1, 1)] void
@@ -516,6 +517,13 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
       RigidBody* rigid_bodies = (RigidBody*)(RB_sim.task_head.rigid_bodies);
       RigidBody* r = &rigid_bodies[index];
+
+      // Static bodies never move: skip them so solver-injected velocity (e.g. concurrent impulse
+      // writes on a shared static body) can never accumulate or drift their state.
+      if (!r->has_flag(RigidBodyFlag::DYNAMIC))
+      {
+        return;
+      }
 
       if (sim_config->has_flag(SimFlag::ADVECTION))
       {
@@ -1068,9 +1076,14 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
       daxa_u32 index = compute_i.x;
 
-      // FIXME: split between static and dynamic objects
       RigidBody* rigid_bodies = (RigidBody*)(RB_integrate.task_head.rigid_bodies);
       RigidBody* r = &rigid_bodies[index];
+
+      // Static bodies never integrate (they'd drift from solver-raced velocity writes).
+      if (!r->has_flag(RigidBodyFlag::DYNAMIC))
+      {
+        return;
+      }
 
       // Integrate positions
       if (sim_config->has_flag(SimFlag::ADVECTION))
@@ -1154,6 +1167,158 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   }
 }
 
+// ===== per-color solver passes (graph coloring): each dispatch solves only manifolds of GCS.color =====
+// Dispatched over all manifolds (collision_dispatch); a thread returns unless manifold_color[m]==GCS.color.
+// Within a color no body repeats, so all kept manifolds write distinct bodies in parallel (no race).
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_pre_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
+  daxa_u32 m = compute_i.x;
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m >= coll) return;
+  daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
+  if (manifold_color[m] != GCS.color) return;
+  Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
+  if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) return;
+  RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
+  RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+  RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+  daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+  daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+  daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  daxa::f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
+  if (sim_config->solver_type == SimSolverType::PGS_SOFT)
+    PGS_SOFT.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
+  daxa_u32 m = compute_i.x;
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m >= coll) return;
+  daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
+  if (manifold_color[m] != GCS.color) return;
+  Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
+  if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) return;
+  RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
+  RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+  RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+  daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+  daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+  daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  if (sim_config->solver_type == SimSolverType::PGS_SOFT)
+    PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, inv_dt);
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_relax_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
+  daxa_u32 m = compute_i.x;
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m >= coll) return;
+  daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
+  if (manifold_color[m] != GCS.color) return;
+  Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
+  if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) return;
+  RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
+  RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+  RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+  daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+  daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+  daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  if (sim_config->solver_type == SimSolverType::PGS_SOFT)
+    PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
+}
+
+// ---- overflow bucket (mirrors Box2D's serial overflow set) ----
+// Solves the manifolds the per-color dispatches skip: uncolored after the coloring rounds, or
+// color >= BB_MAX_COLORS_SOLVE. Those manifolds may share bodies among themselves, so a single
+// thread solves them sequentially. Free on normal frames (graph_color_overflow == 0 -> early out);
+// only degenerate frames (e.g. a velocity-exploded body touching hundreds) pay the serial cost.
+
+// true if the per-color dispatches do NOT cover this manifold
+bool gc_overflowed(daxa_u32 c)
+{
+  return c == MAX_U32 || c >= BB_MAX_COLORS_SOLVE;
+}
+
+[shader("compute")]
+[numthreads(1, 1, 1)] void entry_collision_pre_solver_overflow(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  if (compute_i.x >= 1u) return;
+  SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
+  if (sim_config->graph_color_overflow == 0u) return;
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
+  RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
+  daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+  daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+  daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  daxa::f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
+  for (daxa_u32 m = 0u; m < coll; ++m)
+  {
+    if (!gc_overflowed(manifold_color[m])) continue;
+    Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
+    if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) continue;
+    RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+    RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+    if (sim_config->solver_type == SimSolverType::PGS_SOFT)
+      PGS_SOFT.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
+  }
+}
+
+[shader("compute")]
+[numthreads(1, 1, 1)] void entry_collision_solver_overflow(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  if (compute_i.x >= 1u) return;
+  SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
+  if (sim_config->graph_color_overflow == 0u) return;
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
+  RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
+  daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+  daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+  daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  for (daxa_u32 m = 0u; m < coll; ++m)
+  {
+    if (!gc_overflowed(manifold_color[m])) continue;
+    Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
+    if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) continue;
+    RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+    RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+    if (sim_config->solver_type == SimSolverType::PGS_SOFT)
+      PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, inv_dt);
+  }
+}
+
+[shader("compute")]
+[numthreads(1, 1, 1)] void entry_collision_solver_relax_overflow(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  if (compute_i.x >= 1u) return;
+  SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
+  if (sim_config->graph_color_overflow == 0u) return;
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
+  RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
+  daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
+  daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
+  daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  for (daxa_u32 m = 0u; m < coll; ++m)
+  {
+    if (!gc_overflowed(manifold_color[m])) continue;
+    Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
+    if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) continue;
+    RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
+    RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+    if (sim_config->solver_type == SimSolverType::PGS_SOFT)
+      PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
+  }
+}
+
 const static daxa_u32 LINE_POINT_COUNT = 2;
 const static daxa::f32 LINE_SIZE = 0.5f;
 
@@ -1192,13 +1357,34 @@ const static daxa::f32 LINE_SIZE = 0.5f;
     var vertex_buffer = (GUIVertex*)(CP.task_head.vertex_buffer);
     var line_vertex_buffer = (GUIVertexLine*)(CP.task_head.line_vertex_buffer);
 
+    // contact tint: by graph color (debug) or by warm-start
+    bool by_graph = sim_config->has_flag(SimFlag::DEBUG_GRAPH_COLORS);
+    daxa::f32vec3 gcol = daxa::f32vec3(1.0f, 1.0f, 1.0f); // uncolored/overflow => white
+    if (by_graph)
+    {
+      daxa_u32* manifold_color = (daxa_u32*)(CP.task_head.manifold_color);
+      daxa_u32 gc = manifold_color[compute_i.x];
+      if (gc < BB_MAX_COLORS)
+      {
+        daxa::f32 h = (daxa::f32)gc / (daxa::f32)BB_MAX_COLORS * 6.0f; // distinct hue per color
+        gcol = clamp(daxa::f32vec3(abs(h - 3.0f) - 1.0f, 2.0f - abs(h - 2.0f), 2.0f - abs(h - 4.0f)), 0.0f, 1.0f);
+      }
+    }
+
     for (daxa_u32 i = 0; i < contact_count; i++)
     {
       daxa_u32 current_index = index + i;
       vertex_buffer[current_index].position = m->contacts[i].position;
-      daxa::f32 blue = (daxa::f32)(255 - m->contacts[i].warm_start) / 255.0f;
-      daxa::f32 red = 1.0f - blue;
-      vertex_buffer[current_index].color = daxa::f32vec3(red, 0.0f, blue);
+      if (by_graph)
+      {
+        vertex_buffer[current_index].color = gcol;
+      }
+      else
+      {
+        daxa::f32 blue = (daxa::f32)(255 - m->contacts[i].warm_start) / 255.0f;
+        daxa::f32 red = 1.0f - blue;
+        vertex_buffer[current_index].color = daxa::f32vec3(red, 0.0f, blue);
+      }
 
       line_vertex_buffer[current_index * LINE_POINT_COUNT].position = m->contacts[i].position;
       line_vertex_buffer[current_index * LINE_POINT_COUNT + 1].position = m->contacts[i].position + m->normal * LINE_SIZE;
