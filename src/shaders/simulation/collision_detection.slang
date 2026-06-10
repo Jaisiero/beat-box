@@ -892,7 +892,10 @@ struct BodyLinkManifold {
     }
   }
 
-  static daxa_b32 find_old_collision(daxa_u32 a, daxa_u32 b, daxa_u32 first_manifold_node_index, daxa_u32 manifold_node_count, daxa_u32 collision_count, CollisionEntry* collision_map, ManifoldNode* manifold_nodes, Manifold* old_collisions, out daxa_u32 old_index) {
+  // want_key filters the per-pair search: voxel pairs carry up to TWO manifolds (keys
+  // 99/98, opposing-normal clusters), and matching the wrong one fails the key check in
+  // update_from_old, silently disabling warm-starting for the pair.
+  static daxa_b32 find_old_collision(daxa_u32 a, daxa_u32 b, daxa_i32 want_key, daxa_u32 first_manifold_node_index, daxa_u32 manifold_node_count, daxa_u32 collision_count, CollisionEntry* collision_map, ManifoldNode* manifold_nodes, Manifold* old_collisions, out daxa_u32 old_index) {
     daxa_u32 current = first_manifold_node_index;
     daxa_u32 steps = 0u;
     while (current != MAX_U32 && current < manifold_node_count && steps < manifold_node_count) {
@@ -904,7 +907,8 @@ struct BodyLinkManifold {
       if (index >= collision_count) {
         return false;
       }
-      if (old_collisions[index].obb1_index == a && old_collisions[index].obb2_index == b) {
+      if (old_collisions[index].obb1_index == a && old_collisions[index].obb2_index == b &&
+          old_collisions[index].key == want_key) {
         old_index = index;
         return true;
       }
@@ -957,6 +961,7 @@ struct VoxelManifoldReducer
   daxa_u32 fp_a[8];
   daxa_u32 fp_b[8];
   daxa_f32vec3 normal_sum;
+  daxa_f32 weight_sum; // sum of |pen| weights (detects opposing-normal cancellation)
   daxa_u32 sample_count;
   daxa_u32 interior_hits; // samples landing in zero-gradient interior cells (deep overlap)
 
@@ -965,6 +970,7 @@ struct VoxelManifoldReducer
     [unroll]
     for (daxa_u32 i = 0u; i < 8u; ++i) { pen[i] = 0.0f; fp_a[i] = 0u; }
     normal_sum = daxa_f32vec3(0.0f, 0.0f, 0.0f);
+    weight_sum = 0.0f;
     sample_count = 0u;
     interior_hits = 0u;
   }
@@ -986,14 +992,19 @@ struct VoxelManifoldReducer
       pos[oct] = p; pen[oct] = pe; nrm[oct] = n; fp_a[oct] = fa; fp_b[oct] = fb;
     }
     normal_sum += n * (-pe);
+    weight_sum += -pe;
     ++sample_count;
   }
 };
 
 // voxel body r1 (shape s1) sampled against: voxel body r2 (shape s2) when s2_is_voxel,
 // otherwise r2's OBB. Returns contact count; fills the reducer.
+// mode 0 = accept all samples; 1 = only those with dot(n, ref_n) >= 0; 2 = only dot < 0
+// (modes 1/2 split opposing-normal contact sets - e.g. both walls of a hole - into two
+// manifolds, because averaging opposing normals cancels to a degenerate direction)
 daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelShape* s2, bool s2_is_voxel,
-                           daxa_u32* occ, daxa_u32* surf, inout VoxelManifoldReducer red)
+                           daxa_u32* occ, daxa_u32* surf, inout VoxelManifoldReducer red,
+                           daxa_f32vec3 ref_n, daxa_u32 mode)
 {
   daxa_f32 vs1 = s1->voxel_size;
   daxa_u32 found = 0u;
@@ -1051,6 +1062,8 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       fb = k;
     }
     if (pe >= 0.0f) { continue; } // grazing sample: occupied cell but no overlap along n
+    if (mode == 1u && dot(n_out2, ref_n) < 0.0f) { continue; }
+    if (mode == 2u && dot(n_out2, ref_n) >= 0.0f) { continue; }
     // cap at HALF a voxel: pen feeds AVBD's positional post-stab sweep directly, and a
     // full-voxel correction per step visibly pops the bodies apart
     pe = max(pe, -0.5f * vs1);
@@ -1088,12 +1101,59 @@ daxa_b32 voxel_obb_prefilter(RigidBody* a, RigidBody* b)
 }
 
 // full voxel narrow phase for a candidate pair; emits the standard Manifold.
-// Manifold convention: normal points obb1 -> obb2, penetration < 0 = overlap.
-daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBody* rB, out Manifold manifold)
+// emit one reduced cluster as a standard Manifold (normal from the cluster's own
+// |pen|-weighted sample normals; key identifies the cluster for warm-start matching)
+daxa_b32 voxel_emit_manifold(VoxelManifoldReducer red, bool flip, daxa_i32 key, out Manifold manifold)
 {
   manifold.contact_count = 0;
-  manifold.key = 99; // constant voxel key: warm-start matching is by voxel feature ids
+  manifold.key = key;
   manifold.error = 0;
+  if (red.sample_count == 0u || dot(red.normal_sum, red.normal_sum) < 1e-10f)
+  {
+    return false;
+  }
+  daxa_f32vec3 n_sep = normalize(red.normal_sum); // separation direction for the SAMPLED body
+  manifold.normal = flip ? n_sep : -n_sep;
+  daxa_u32 out_n = 0u;
+  [unroll]
+  for (daxa_u32 o = 0u; o < 8u; ++o)
+  {
+    if (red.pen[o] >= 0.0f) { continue; }
+    manifold.contacts[out_n].position = red.pos[o];
+    manifold.contacts[out_n].penetration = red.pen[o];
+    manifold.contacts[out_n].normal_impulse = 0.0f;
+    manifold.contacts[out_n].tangent_impulse[0] = 0.0f;
+    manifold.contacts[out_n].tangent_impulse[1] = 0.0f;
+    manifold.contacts[out_n].warm_start = 0u;
+    manifold.contacts[out_n].stick = 0u;
+    // warm-start matching keys on the SAMPLED body's voxel id only (B-cell ids churn on
+    // micro-motion); the octant winner is depth-sticky, so the A id is stable
+    manifold.contacts[out_n].fp.in_reference = flip ? 1u : 0u;
+    manifold.contacts[out_n].fp.out_reference = red.fp_b[o];
+    manifold.contacts[out_n].fp.in_incident = red.fp_a[o];
+    manifold.contacts[out_n].fp.out_incident = red.fp_a[o];
+    ++out_n;
+  }
+  manifold.contact_count = daxa_i32(out_n);
+  return out_n > 0u;
+}
+
+// Manifold convention: normal points obb1 -> obb2, penetration < 0 = overlap.
+// Interlocked concave pairs (e.g. a cross inside a frame's hole) touch with OPPOSING
+// normals; averaging those into one manifold normal cancels to a degenerate direction
+// and the bodies random-walk INTO each other (the reported "collapse into one point").
+// When cancellation is detected, the samples are split into two clusters around the
+// deepest sample's normal and emitted as TWO manifolds (keys 99 / 98).
+daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBody* rB,
+                                   out Manifold manifold, out Manifold manifold2, out daxa_b32 has2)
+{
+  manifold.contact_count = 0;
+  manifold.key = 99;
+  manifold.error = 0;
+  manifold2.contact_count = 0;
+  manifold2.key = 98;
+  manifold2.error = 0;
+  has2 = false;
 
   if (!voxel_obb_prefilter(rA, rB))
   {
@@ -1123,7 +1183,7 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
 
   VoxelManifoldReducer red;
   red.init();
-  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red);
+  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red, daxa_f32vec3(0.0f, 1.0f, 0.0f), 0u);
   if (red.sample_count == 0u)
   {
     if (red.interior_hits > 0u)
@@ -1151,35 +1211,35 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
     return false;
   }
 
-  // dominant contact normal: |pen|-weighted sample normals (n_out2 points out of body2's
-  // solid = the direction body1 separates along). Manifold normal must point obb1->obb2.
-  daxa_f32vec3 n_sep = normalize(red.normal_sum); // separation direction for the SAMPLED body
-  manifold.normal = flip ? n_sep : -n_sep;
+  // coherent normals (resting on a face, leaning on a wall): one manifold suffices
+  if (length(red.normal_sum) > 0.5f * red.weight_sum)
+  {
+    return voxel_emit_manifold(red, flip, 99, manifold);
+  }
 
-  daxa_u32 out_n = 0u;
+  // opposing-normal cancellation: split around the deepest sample's normal
+  daxa_f32vec3 ref_n = daxa_f32vec3(0.0f, 1.0f, 0.0f);
+  daxa_f32 deepest = 0.0f;
   [unroll]
   for (daxa_u32 o = 0u; o < 8u; ++o)
   {
-    if (red.pen[o] >= 0.0f) { continue; }
-    manifold.contacts[out_n].position = red.pos[o];
-    manifold.contacts[out_n].penetration = red.pen[o];
-    manifold.contacts[out_n].normal_impulse = 0.0f;
-    manifold.contacts[out_n].tangent_impulse[0] = 0.0f;
-    manifold.contacts[out_n].tangent_impulse[1] = 0.0f;
-    manifold.contacts[out_n].warm_start = 0u;
-    manifold.contacts[out_n].stick = 0u;
-    // warm-start matching (is_same_contact compares the two incident ids): key on the
-    // SAMPLED body's voxel id only - the B cell under a voxel crosses cell boundaries on
-    // micro-motion at rest, which would reset lambda every step (observed astick ~1-4 of
-    // ~70 and permanent jitter). The octant winner is depth-sticky, so the A id is stable.
-    manifold.contacts[out_n].fp.in_reference = flip ? 1u : 0u;
-    manifold.contacts[out_n].fp.out_reference = red.fp_b[o];
-    manifold.contacts[out_n].fp.in_incident = red.fp_a[o];
-    manifold.contacts[out_n].fp.out_incident = red.fp_a[o];
-    ++out_n;
+    if (red.pen[o] < deepest) { deepest = red.pen[o]; ref_n = red.nrm[o]; }
   }
-  manifold.contact_count = daxa_i32(out_n);
-  return out_n > 0u;
+  VoxelManifoldReducer red1;
+  red1.init();
+  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red1, ref_n, 1u);
+  VoxelManifoldReducer red2;
+  red2.init();
+  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red2, ref_n, 2u);
+  daxa_b32 ok1 = voxel_emit_manifold(red1, flip, 99, manifold);
+  has2 = voxel_emit_manifold(red2, flip, 98, manifold2);
+  if (!ok1 && has2)
+  {
+    manifold = manifold2;
+    has2 = false;
+    ok1 = true;
+  }
+  return ok1;
 }
 
 func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rigid_boy_map, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, CollisionEntry* collision_map, Manifold* collisions, RigidBodyEntry* previous_rigid_body_map, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, CollisionEntry* collision_map_prev, Manifold* old_collisions, BodyLink* body_links) -> void
@@ -1193,21 +1253,31 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count, body_links);
 
   Manifold manifold;
+  Manifold manifold2;
+  daxa_b32 has2 = false;
 
   var obb1_faces = 0u;
   var obb2_faces = 0u;
 
-  // voxel bodies use the occupancy-bitmask narrow phase; OBB pairs keep the SAT path
+  // voxel bodies use the occupancy-bitmask narrow phase; OBB pairs keep the SAT path.
+  // Voxel pairs may emit TWO manifolds (opposing-normal clusters of interlocked shapes).
   var collision = false;
   if (r->shape_index != 0u || r2->shape_index != 0u)
   {
-    collision = voxel_collision_detection(sim_config, r, r2, manifold);
+    collision = voxel_collision_detection(sim_config, r, r2, manifold, manifold2, has2);
   }
   else
   {
     collision = OBBvsOBBCollision.collision_detection(r, r2, manifold, obb1_faces, obb2_faces);
   }
   
+  daxa_u32 emit_count = collision ? (has2 ? 2u : 1u) : 0u;
+  for (daxa_u32 emit_i = 0u; emit_i < emit_count; ++emit_i)
+  {
+  if (emit_i == 1u)
+  {
+    manifold = manifold2;
+  }
   manifold.obb1_index = rba_index;
   manifold.obb2_index = rbb_index;
   manifold.anchor_a = r->position;
@@ -1216,8 +1286,6 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   manifold.frame_count = sim_config.frame_count;
 #endif // BB_DEBUG
 
-  // 
-  if (collision)
   {
     daxa_u32 index = 0;
     InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
@@ -1247,10 +1315,10 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       daxa_u32 previous_collision_count = min(previous_sim_config.g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
       
 #if defined(BB_SIM_DEBUG)
-      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index))
+      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index))
       {
 #else
-      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index)) {
+      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index)) {
 #endif
         manifold.update_from_old(&old_collisions[old_index]);
       } 
@@ -1265,8 +1333,12 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     daxa_u32 in_first = r->has_flag(RigidBodyFlag::DYNAMIC) ? r->active_index : MAX_U32;
     daxa_u32 in_second = r2->has_flag(RigidBodyFlag::DYNAMIC) ? r2->active_index : MAX_U32;
 
-    // Link the bodies
-    island_builder.link_bodies(in_first, in_second);
+    // Link the bodies (once per PAIR: the union-find CAS loop is not safe to re-enter
+    // from the same thread for an already-merged pair - it hung the GPU on manifold 2)
+    if (emit_i == 0u)
+    {
+      island_builder.link_bodies(in_first, in_second);
+    }
     // ISLAND BUILDER
 #endif // BB_SIM_DEBUG
 
@@ -1281,5 +1353,6 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       r2->flags |= RigidBodyFlag::COLLIDING;
     }
 #endif // BB_DEBUG
-  } 
+  }
+  } // per-manifold emit loop
 }
