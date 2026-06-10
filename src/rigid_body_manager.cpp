@@ -46,6 +46,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_GCP1 = task_manager->create_compute(GraphColorAssignP1Info{}.info);
     pipeline_GCP2 = task_manager->create_compute(GraphColorAssignP2Info{}.info);
     pipeline_GCV = task_manager->create_compute(GraphColorValidateInfo{}.info);
+    pipeline_GCV2 = task_manager->create_compute(GraphColorValidate2Info{}.info);
     pipeline_GCS_CPS = task_manager->create_compute(GraphColorPreSolverInfo{}.info);
     pipeline_GCS_CS = task_manager->create_compute(GraphColorSolverInfo{}.info);
     pipeline_GCS_CSR = task_manager->create_compute(GraphColorRelaxInfo{}.info);
@@ -282,6 +283,16 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
             .collision_point_count = 0,
         };
         allocate_fill_copy(ti, reset_c_info, ti.get(task_sim_config), offsetof(SimConfig, g_c_info));
+
+        // DIAG: zero the explosion-latch fields once per config buffer (device memory starts
+        // undefined; the latch CAS needs a 0 start). Two frames cover both double-buffered configs.
+        static daxa_u32 dbg_latch_init_runs = 0;
+        if (dbg_latch_init_runs < 2)
+        {
+          ++dbg_latch_init_runs;
+          auto zeroes = std::array<daxa_u32, 8>{}; // dbg_ex_stage..dbg_id_sum are contiguous
+          allocate_fill_copy(ti, zeroes, ti.get(task_sim_config), offsetof(SimConfig, dbg_ex_stage));
+        }
       },
       .name = "reset sim config",
   });
@@ -1051,6 +1062,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_GCV = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCV)>;
   TTask_GCV task_GCV(gc_views, user_callback_GCV);
 
+  auto user_callback_GCV2 = [this, gc_dispatch](daxa::TaskInterface ti, auto &) { gc_dispatch(ti, pipeline_GCV2); };
+  using TTask_GCV2 = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCV2)>;
+  TTask_GCV2 task_GCV2(gc_views, user_callback_GCV2);
+
   // ---- per-color solver tasks (Phase 3): one dispatch per color, each filters manifold_color==color ----
   static const daxa_u32 MAX_COLORS_SOLVE = BB_MAX_COLORS_SOLVE; // shared.inl: per-color solver dispatch count; empty colors are cheap no-ops
   auto gc_solve_views = std::array{
@@ -1116,17 +1131,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_NPD);
   RB_TG.add_task(task_NP);
   RB_TG.add_task(task_advect);
-  // graph coloring (Phase 2: coexists with the island solver; produces manifold_color + validates the invariant)
-  RB_TG.add_task(task_GCD);
-  RB_TG.add_task(task_GCR);
-  for (auto r = 0u; r < GRAPH_COLOR_MAX_ROUNDS; ++r)
-  {
-    RB_TG.add_task(task_GCOR);
-    RB_TG.add_task(task_GCP1);
-    RB_TG.add_task(task_GCP2);
-  }
-  RB_TG.add_task(task_GCOR); // reset owner-as-seen for the validator
-  RB_TG.add_task(task_GCV);
   RB_TG.add_task(task_IC);
   RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_ID);
@@ -1142,6 +1146,25 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_IML);
   // FIXME: that's a really expensive sort too
   // RB_TG.add_task(task_SMLI);
+  // graph coloring. MUST run after task_IML: the coloring, the validator AND the per-color solver
+  // all index `task_collisions`, which task_IML (re)writes in island-sorted order THIS frame.
+  // Coloring earlier (e.g. right after the narrow phase) reads the previous content of the buffer
+  // (2 frames old under double buffering), so the colors describe a different manifold->body
+  // mapping than the one the per-color solver dispatches over. Two same-body manifolds can then
+  // land in one color and solve concurrently -> racy Jacobi-style overcorrection -> a resting
+  // body gets ejected at thousands of m/s within one CS sweep (and the validator stays at 0
+  // violations because it validated the SAME stale data the colorer saw).
+  RB_TG.add_task(task_GCD);
+  RB_TG.add_task(task_GCR);
+  for (auto r = 0u; r < GRAPH_COLOR_MAX_ROUNDS; ++r)
+  {
+    RB_TG.add_task(task_GCOR);
+    RB_TG.add_task(task_GCP1);
+    RB_TG.add_task(task_GCP2);
+  }
+  RB_TG.add_task(task_GCOR); // reset owner-as-seen for the validator
+  RB_TG.add_task(task_GCV);
+  RB_TG.add_task(task_GCV2); // TEMP diag: satbody degree/partners
   if (static_cast<daxa_u32>(sim_flags & SimFlag::USE_GRAPH_COLORING) != 0u)
   {
     // per-color solve (parallel: one dispatch per color, balanced, no atomics)

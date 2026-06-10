@@ -425,6 +425,8 @@ const auto entry_graph_color_assign_p2 = "entry_graph_color_assign_p2";
 const auto graph_color_assign_p2_pipeline_name = "Graph Color Assign P2";
 const auto entry_graph_color_validate = "entry_graph_color_validate";
 const auto graph_color_validate_pipeline_name = "Graph Color Validate";
+const auto entry_graph_color_validate2 = "entry_graph_color_validate2";
+const auto graph_color_validate2_pipeline_name = "Graph Color Validate2 (satbody diag)";
 // per-color solver passes (entries live in RB_sim.slang)
 const auto entry_collision_pre_solver_color = "entry_collision_pre_solver_color";
 const auto graph_color_pre_solver_pipeline_name = "Graph Color Pre Solver";
@@ -1011,6 +1013,17 @@ struct GraphColorValidateInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(GraphColorPushConstants),
       .name = graph_color_validate_pipeline_name,
+  };
+};
+struct GraphColorValidate2Info {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_graph_color_validate2, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorPushConstants),
+      .name = graph_color_validate2_pipeline_name,
   };
 };
 // per-color solver pipelines (entries in RB_sim.slang; share GraphColorSolvePushConstants)
