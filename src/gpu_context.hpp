@@ -2,6 +2,7 @@
 
 #include "defines.hpp"
 #include "window_manager.hpp"
+#include <iostream>
 
 BB_NAMESPACE_BEGIN
 
@@ -33,6 +34,10 @@ struct GPUcontext{
         // Create a device with the requested features
         return instance.create_device_2(info);
     }();
+
+    // async-queue availability (the async-compute sim path requires >= 1 compute queue)
+    std::cout << "[QUEUES] compute=" << device.queue_count(daxa::QueueType::COMPUTE)
+              << " transfer=" << device.queue_count(daxa::QueueType::TRANSFER) << std::endl;
 
     auto native_window_info = window.get_native_window_info();
     auto preferred_surface_formats = std::array{
