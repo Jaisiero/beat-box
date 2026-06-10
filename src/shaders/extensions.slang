@@ -309,10 +309,21 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
     // sample normals and can flap a few degrees frame-to-frame at rest, which re-excites
     // the contacts and blocks sleeping. While the rebuilt normal stays within ~25 deg of
     // last step's, reuse the old normal (and its tangent basis) verbatim.
-    if (key == 99 && dot(normal, old_manifold->normal) > 0.9f)
+    if (key == 99 || key == 98)
     {
-      normal = old_manifold->normal;
-      compute_basis();
+      daxa_f32 ndot = dot(normal, old_manifold->normal);
+      if (ndot > 0.9f)
+      {
+        normal = old_manifold->normal;
+        compute_basis();
+      }
+      else if (ndot < -0.5f)
+      {
+        // the cluster flipped sides since last step: carrying the persisted lambdas
+        // across the flip would apply them along the INVERTED normal (attraction).
+        // Treat the manifold as fresh instead.
+        return;
+      }
     }
     daxa_f32vec3 otv0  = old_manifold->tangent_vectors[0];
     daxa_f32vec3 otv1  = old_manifold->tangent_vectors[1];

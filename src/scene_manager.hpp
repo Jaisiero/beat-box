@@ -632,7 +632,7 @@ public:
         [](u32 x, u32 y, u32) { return (x >= 2 && x < 4) || (y >= 2 && y < 4); });
     // hollow frame: 6x6x2 with a 2x2 hole (64 voxels; the hole is 1x1 world units)
     auto frame_shape = build_voxel_shape(glm::uvec3(6, 6, 2), vs, density,
-        [](u32 x, u32 y, u32) { return !(x >= 2 && x < 4 && y >= 2 && y < 4); });
+        [](u32 x, u32 y, u32) { return !(x >= 2 && x < 6 && y >= 2 && y < 6); });
 
     Quaternion const q_id = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
     Quaternion const q_x90 = Quaternion(0.7071f, 0.0f, 0.0f, 0.7071f); // hole axis vertical

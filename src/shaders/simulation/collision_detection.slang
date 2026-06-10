@@ -1119,8 +1119,13 @@ daxa_b32 voxel_emit_manifold(VoxelManifoldReducer red, bool flip, daxa_i32 key, 
   for (daxa_u32 o = 0u; o < 8u; ++o)
   {
     if (red.pen[o] >= 0.0f) { continue; }
+    // depths were measured along each sample's own normal but get RESOLVED along the
+    // cluster normal: project them (and drop near-orthogonal stragglers, which would
+    // otherwise be squeezed sideways by the full unprojected depth)
+    daxa_f32 align = dot(red.nrm[o], n_sep);
+    if (align <= 0.1f) { continue; }
     manifold.contacts[out_n].position = red.pos[o];
-    manifold.contacts[out_n].penetration = red.pen[o];
+    manifold.contacts[out_n].penetration = red.pen[o] * align;
     manifold.contacts[out_n].normal_impulse = 0.0f;
     manifold.contacts[out_n].tangent_impulse[0] = 0.0f;
     manifold.contacts[out_n].tangent_impulse[1] = 0.0f;
@@ -1217,14 +1222,13 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
     return voxel_emit_manifold(red, flip, 99, manifold);
   }
 
-  // opposing-normal cancellation: split around the deepest sample's normal
-  daxa_f32vec3 ref_n = daxa_f32vec3(0.0f, 1.0f, 0.0f);
-  daxa_f32 deepest = 0.0f;
-  [unroll]
-  for (daxa_u32 o = 0u; o < 8u; ++o)
-  {
-    if (red.pen[o] < deepest) { deepest = red.pen[o]; ref_n = red.nrm[o]; }
-  }
+  // opposing-normal cancellation: split around a STABLE reference. The deepest sample's
+  // normal flip-flopped between steps, swapping which wall was "cluster 99" - and since
+  // warm-start persists lambda BY KEY, the persisted lambda then acted along the flipped
+  // normal and ATTRACTED the bodies (the observed collapse-into-one-point). The
+  // center-to-center direction never flips for a resting pair.
+  daxa_f32vec3 dc = r1->position - r2->position;
+  daxa_f32vec3 ref_n = dot(dc, dc) > 1e-8f ? normalize(dc) : daxa_f32vec3(0.0f, 1.0f, 0.0f);
   VoxelManifoldReducer red1;
   red1.init();
   voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red1, ref_n, 1u);
