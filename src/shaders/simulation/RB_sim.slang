@@ -36,6 +36,14 @@
 [[vk::push_constant]] CreatePointsPushConstants CP;
 [[vk::push_constant]] RigidBodyUpdatePushConstants RB_update;
 [[vk::push_constant]] GraphColorSolvePushConstants GCS; // per-color solver passes (CPS/CS/CSR)
+[[vk::push_constant]] SleepPushConstants SLP;            // island sleeping (reduce + apply)
+
+// A body takes part in dynamics this step iff it is dynamic and its island is awake.
+bool rb_is_awake_dynamic(RigidBody* r)
+{
+  return ((r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE) &&
+         ((r->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE);
+}
 
 [shader("compute")]
     [numthreads(1, 1, 1)] void
@@ -520,7 +528,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
       // Static bodies never move: skip them so solver-injected velocity (e.g. concurrent impulse
       // writes on a shared static body) can never accumulate or drift their state.
-      if (!r->has_flag(RigidBodyFlag::DYNAMIC))
+      // Sleeping bodies skip too: their island is at rest (velocities were zeroed at sleep onset).
+      if (!rb_is_awake_dynamic(r))
       {
         return;
       }
@@ -532,6 +541,135 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
       // p_r->manifold_node_index = MAX_U32;
     }
+
+// ----- NEIGHBORHOOD SLEEPING -----
+// entry_sleep_reduce: per-body quiet timer (bit 31 = partner veto, cleared here every step).
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_sleep_reduce(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(SLP.task_head.sim_config);
+
+  daxa_u32 index = compute_i.x;
+  if (index == 0u)
+  {
+    sim_config->sleeping_count = 0u; // recomputed by entry_sleep_apply (separate dispatch)
+  }
+  if (index >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+
+  RigidBody* rigid_bodies = (RigidBody*)(SLP.task_head.rigid_bodies);
+  RigidBody* r = &rigid_bodies[index];
+  if (!r->has_flag(RigidBodyFlag::DYNAMIC))
+  {
+    return;
+  }
+
+  if (!sim_config->has_flag(SimFlag::SLEEPING_ENABLED))
+  {
+    // feature disabled: everything stays awake
+    r->sleep_timer = 0u;
+    r->flags = RigidBodyFlag(daxa_u32(r->flags) & ~daxa_u32(RigidBodyFlag::SLEEPING));
+    return;
+  }
+
+  daxa_f32 lin2 = dot(r->velocity, r->velocity);
+  daxa_f32 ang2 = dot(r->omega, r->omega);
+  daxa_u32 timer = r->sleep_timer & BB_SLEEP_TIMER_MASK; // also clears last step's veto bit
+  r->sleep_timer = (lin2 < BB_SLEEP_LIN_VEL2 && ang2 < BB_SLEEP_ANG_VEL2) ? (timer + 1u) : 0u;
+}
+
+// entry_sleep_veto: one thread per manifold; a contact whose partner is not quiet vetoes the body
+// (bit 31 of sleep_timer). Runs over the narrow-phase manifolds (pre island-sort buffer).
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_sleep_veto(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(SLP.task_head.sim_config);
+  if (!sim_config->has_flag(SimFlag::SLEEPING_ENABLED))
+  {
+    return;
+  }
+
+  daxa_u32 m = compute_i.x;
+  daxa_u32 coll_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m >= coll_count)
+  {
+    return;
+  }
+
+  Manifold* manifolds = (Manifold*)(SLP.task_head.collisions);
+  daxa_u32 a = manifolds[m].obb1_index;
+  daxa_u32 b = manifolds[m].obb2_index;
+  if (a >= sim_config->rigid_body_count || b >= sim_config->rigid_body_count || a == b)
+  {
+    return;
+  }
+
+  RigidBody* rigid_bodies = (RigidBody*)(SLP.task_head.rigid_bodies);
+  RigidBody* ra = &rigid_bodies[a];
+  RigidBody* rb = &rigid_bodies[b];
+  bool a_dyn = ra->has_flag(RigidBodyFlag::DYNAMIC);
+  bool b_dyn = rb->has_flag(RigidBodyFlag::DYNAMIC);
+  // statics are always "quiet"; only a non-quiet DYNAMIC partner vetoes
+  bool a_loud = a_dyn && ((ra->sleep_timer & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
+  bool b_loud = b_dyn && ((rb->sleep_timer & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
+  daxa_u32 prev;
+  if (a_loud && b_dyn)
+  {
+    InterlockedOr(rb->sleep_timer, BB_SLEEP_VETO_BIT, prev);
+  }
+  if (b_loud && a_dyn)
+  {
+    InterlockedOr(ra->sleep_timer, BB_SLEEP_VETO_BIT, prev);
+  }
+}
+
+// entry_sleep_apply: a body sleeps when its own timer passed AND no contact partner vetoed it;
+// it wakes as soon as it is loud itself or any partner is.
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_sleep_apply(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(SLP.task_head.sim_config);
+
+  daxa_u32 index = compute_i.x;
+  if (index >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+  if (!sim_config->has_flag(SimFlag::SLEEPING_ENABLED))
+  {
+    return; // reduce already cleared the flags
+  }
+
+  RigidBody* rigid_bodies = (RigidBody*)(SLP.task_head.rigid_bodies);
+  RigidBody* r = &rigid_bodies[index];
+  if (!r->has_flag(RigidBodyFlag::DYNAMIC))
+  {
+    return;
+  }
+
+  bool vetoed = (r->sleep_timer & BB_SLEEP_VETO_BIT) != 0u;
+  bool quiet = (r->sleep_timer & BB_SLEEP_TIMER_MASK) >= BB_SLEEP_STEPS;
+  bool sleep = quiet && !vetoed;
+  bool was_sleeping = r->has_flag(RigidBodyFlag::SLEEPING);
+  if (sleep)
+  {
+    if (!was_sleeping)
+    {
+      // falling asleep: freeze residual motion so the body holds rock-solid and wakes cleanly
+      r->velocity = daxa_f32vec3(0.0f, 0.0f, 0.0f);
+      r->omega = daxa_f32vec3(0.0f, 0.0f, 0.0f);
+      r->flags = RigidBodyFlag(daxa_u32(r->flags) | daxa_u32(RigidBodyFlag::SLEEPING));
+    }
+    daxa_u32 prev;
+    InterlockedAdd(sim_config->sleeping_count, 1u, prev);
+  }
+  else if (was_sleeping)
+  {
+    r->flags = RigidBodyFlag(daxa_u32(r->flags) & ~daxa_u32(RigidBodyFlag::SLEEPING));
+  }
+}
 
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_island_counter(daxa_u32vec3 compute_i : SV_DispatchThreadID)
@@ -975,6 +1113,11 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
         RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
         RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
 
+        if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2))
+        {
+          continue; // sleeping/static pair: at rest
+        }
+
         daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
         daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
         daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
@@ -1053,6 +1196,11 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
     RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
 
+    if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2))
+    {
+      continue; // sleeping/static pair: at rest
+    }
+
     daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
     daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
@@ -1087,8 +1235,9 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       RigidBody* rigid_bodies = (RigidBody*)(RB_integrate.task_head.rigid_bodies);
       RigidBody* r = &rigid_bodies[index];
 
-      // Static bodies never integrate (they'd drift from solver-raced velocity writes).
-      if (!r->has_flag(RigidBodyFlag::DYNAMIC))
+      // Static bodies never integrate (they'd drift from solver-raced velocity writes);
+      // sleeping bodies hold their pose until their island wakes.
+      if (!rb_is_awake_dynamic(r))
       {
         return;
       }
@@ -1165,6 +1314,11 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
     RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
 
+    if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2))
+    {
+      continue; // sleeping/static pair: at rest
+    }
+
     daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
     daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
     daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
@@ -1196,6 +1350,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
   RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
   RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+  if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) return; // sleeping/static pair: at rest
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
@@ -1228,6 +1383,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
   RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
   RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+  if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) return; // sleeping/static pair: at rest
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
@@ -1249,6 +1405,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
   RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
   RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+  if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) return; // sleeping/static pair: at rest
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
@@ -1292,6 +1449,7 @@ bool gc_overflowed(daxa_u32 c)
     if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) continue;
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
     RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+    if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) continue; // sleeping/static pair: at rest
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)
       PGS_SOFT.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
   }
@@ -1316,6 +1474,7 @@ bool gc_overflowed(daxa_u32 c)
     if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) continue;
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
     RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+    if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) continue; // sleeping/static pair: at rest
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)
       PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, inv_dt);
   }
@@ -1340,6 +1499,7 @@ bool gc_overflowed(daxa_u32 c)
     if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) continue;
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
     RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
+    if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) continue; // sleeping/static pair: at rest
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)
       PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
   }

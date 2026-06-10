@@ -284,6 +284,7 @@ void RendererManager::render()
           _sim_ms_accum = 0.0; _sim_ms_n = 0;                                        // [PERF]
           auto const &sc = rigid_body_manager->get_sim_config_reference();
           std::cout << "[PERF] manifolds=" << sc.g_c_info.collision_count
+                    << " sleeping=" << sc.sleeping_count
                     << " colors=" << sc.graph_color_count << " violations=" << sc.graph_color_violations
                     << " overflow=" << sc.graph_color_overflow
                     << " maxdeg=" << sc.gc_max_degree

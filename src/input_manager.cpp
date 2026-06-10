@@ -162,6 +162,12 @@ void InputManager::on_key(i32 key, i32 action)
       status_mngr->switch_graph_color_debug();
     }
     break;
+  case GLFW_KEY_O:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->switch_sleeping();
+    }
+    break;
   case GLFW_KEY_LEFT_CONTROL:
     if (action == GLFW_PRESS)
     {

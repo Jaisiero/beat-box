@@ -135,6 +135,7 @@ private:
   | SimFlag::ACCUM_IMPULSE
   | SimFlag::WARM_STARTING
   | SimFlag::USE_GRAPH_COLORING
+  | SimFlag::SLEEPING_ENABLED
   ;
   // simulating flag update 
   bool sim_flag_dirty[DOUBLE_BUFFERING] = {};
@@ -182,6 +183,9 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CPS; // per-color pre-solver
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CS;  // per-color solver
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CSR; // per-color relax
+  std::shared_ptr<daxa::ComputePipeline> pipeline_SLR; // sleep reduce (per-body quiet timer)
+  std::shared_ptr<daxa::ComputePipeline> pipeline_SLV; // sleep veto (loud contact partners veto sleeping)
+  std::shared_ptr<daxa::ComputePipeline> pipeline_SLA; // sleep apply (quiet + un-vetoed -> SLEEPING flag)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CPS_OV; // overflow pre-solver (serial)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CS_OV;  // overflow solver (serial)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CSR_OV; // overflow relax (serial)

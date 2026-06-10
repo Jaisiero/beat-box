@@ -205,6 +205,27 @@ struct StatusManager
     }
   }
 
+  bool is_sleeping_enabled()
+  {
+    return sleeping_enabled;
+  }
+
+  // island sleeping: resting islands stop advecting/solving/integrating until disturbed
+  void switch_sleeping()
+  {
+    sleeping_enabled = !sleeping_enabled;
+    if(sleeping_enabled)
+    {
+      rigid_body_manager->set_sim_flags(SimFlag::SLEEPING_ENABLED);
+      std::cout << "Sleeping enabled" << std::endl;
+    }
+    else
+    {
+      rigid_body_manager->clear_sim_flags(SimFlag::SLEEPING_ENABLED);
+      std::cout << "Sleeping disabled" << std::endl;
+    }
+  }
+
   bool is_graph_color_debug()
   {
     return graph_color_debug;
@@ -369,6 +390,8 @@ private:
   bool warm_starting = true;
   // flag for graph-color contact debug tint
   bool graph_color_debug = false;
+  // flag for island sleeping
+  bool sleeping_enabled = true;
   // flag for accumulation
   bool accumulation = false;
   // flag for showing islands

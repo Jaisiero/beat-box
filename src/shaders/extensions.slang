@@ -7,6 +7,7 @@ void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
   dst->island_index = src->island_index;
   dst->active_index = src->active_index;
   dst->manifold_node_index = src->manifold_node_index;
+  dst->sleep_timer = src->sleep_timer;
   dst->material_index = src->material_index;
 #if defined(BB_DEBUG)
   dst->face_collided = src->face_collided;
