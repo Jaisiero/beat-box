@@ -444,6 +444,10 @@ const auto entry_avbd_color_round = "entry_avbd_color_round";
 const auto avbd_color_round_pipeline_name = "AVBD Color Round";
 const auto entry_avbd_color_validate = "entry_avbd_color_validate";
 const auto avbd_color_validate_pipeline_name = "AVBD Color Validate";
+const auto entry_avbd_prepare = "entry_avbd_prepare";
+const auto avbd_prepare_pipeline_name = "AVBD Prepare";
+const auto entry_avbd_finalize = "entry_avbd_finalize";
+const auto avbd_finalize_pipeline_name = "AVBD Finalize";
 // island sleeping (entries in RB_sim.slang)
 const auto entry_sleep_reduce = "entry_sleep_reduce";
 const auto sleep_reduce_pipeline_name = "Sleep Reduce";
@@ -1109,6 +1113,28 @@ struct AvbdColorValidateInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(AvbdPushConstants),
       .name = avbd_color_validate_pipeline_name,
+  };
+};
+struct AvbdPrepareInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_prepare, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_prepare_pipeline_name,
+  };
+};
+struct AvbdFinalizeInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_finalize, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_finalize_pipeline_name,
   };
 };
 // island sleeping passes (entries in RB_sim.slang; share SleepPushConstants)

@@ -55,6 +55,96 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   return ((x & 0xFFFu) << 20) | (body & 0xFFFFFu);
 }
 
+// ----- step setup / teardown (F2) -----
+
+// Saves the step-start pose, computes the inertial (free-fall) target, and INITIALIZES the
+// primal state at that target: with zero primal iterations bodies free-fall exactly, and the
+// descent pulls them back from x_tilde toward constraint satisfaction.
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_prepare(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  RigidBody* r = &rigid_bodies[i];
+  if (!avbd_is_dynamic(r) || (r->flags & RigidBodyFlag::SLEEPING) != RigidBodyFlag::NONE)
+  {
+    return; // statics anchor; sleeping bodies hold their pose
+  }
+
+  daxa_f32 dt = sim_config->dt;
+  AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
+  AvbdBodyState* s = &states[i];
+
+  s->pos_start = r->position;
+  s->rot_start.v = r->rotation.v;
+  s->rot_start.w = r->rotation.w;
+
+  daxa_f32vec3 v = r->velocity;
+  if ((r->flags & RigidBodyFlag::GRAVITY) != RigidBodyFlag::NONE)
+  {
+    v.y += sim_config->gravity * dt; // gravity folded into the inertial velocity
+  }
+  s->pos_tilde = r->position + v * dt;
+  Quaternion q_tilde = r->apply_angular_velocity(r->rotation, r->omega, dt);
+  s->rot_tilde.v = q_tilde.v;
+  s->rot_tilde.w = q_tilde.w;
+
+  // start the primal state at the inertial target
+  r->position = s->pos_tilde;
+  r->rotation.v = q_tilde.v;
+  r->rotation.w = q_tilde.w;
+  r->velocity = v; // keep the gravity-updated velocity for diagnostics/sleep thresholds mid-step
+}
+
+// Reconstructs velocities from the pose delta (BDF1): v = (x - x_start)/dt,
+// omega from the small-angle quaternion delta.
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_finalize(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  RigidBody* r = &rigid_bodies[i];
+  if (!avbd_is_dynamic(r) || (r->flags & RigidBodyFlag::SLEEPING) != RigidBodyFlag::NONE)
+  {
+    return;
+  }
+
+  daxa_f32 dt = sim_config->dt;
+  daxa_f32 inv_dt = dt > 0.0f ? 1.0f / dt : 0.0f;
+  AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
+  AvbdBodyState* s = &states[i];
+
+  r->velocity = (r->position - s->pos_start) * inv_dt;
+
+  // dq = q_cur * conjugate(q_start); small-angle: omega = 2*dq.v/dt (sign-fixed)
+  Quaternion qs = Quaternion(s->rot_start.v, s->rot_start.w);
+  Quaternion qc = Quaternion(r->rotation.v, r->rotation.w);
+  Quaternion qs_conj = Quaternion(-qs.v, qs.w);
+  Quaternion dq = qc * qs_conj;
+  daxa_f32 sign = dq.w < 0.0f ? -1.0f : 1.0f;
+  r->omega = dq.v * (2.0f * sign * inv_dt);
+}
+
 // ----- coloring passes -----
 
 [shader("compute")]

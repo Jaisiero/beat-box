@@ -192,6 +192,8 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CR;   // AVBD body-color reset
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CRND; // AVBD body-color JP round
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CV;   // AVBD body-color validate
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_PRE;  // AVBD prepare (inertial target)
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_FIN;  // AVBD finalize (velocity reconstruction)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CPS_OV; // overflow pre-solver (serial)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CS_OV;  // overflow solver (serial)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CSR_OV; // overflow relax (serial)
