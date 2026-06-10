@@ -582,6 +582,9 @@ struct SimConfig
   daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
   daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)
   daxa_u32 avbd_violations;        // AVBD: body-coloring invariant violations (adjacent same color; must be 0)
+  daxa_u32 avbd_dbg_max_dx;        // TEMP DIAG: max |dlin| applied by a primal update this step (float bits)
+  daxa_u32 avbd_dbg_max_lam;       // TEMP DIAG: max contact lambda this step (float bits)
+  daxa_u32 avbd_dbg_active;        // TEMP DIAG: active contacts at the last dual update
   daxa_u32 gc_max_degree;          // graph-coloring DIAG: max colored-degree = max popcount(body_color_mask) over bodies
   daxa_u32 gc_max_degree_body;     // graph-coloring DIAG: a body index whose mask saturated (popcount>=30)
   daxa_u32 gc_max_degree_flags;    // graph-coloring DIAG: that body's RigidBodyFlag bits as seen by the validator
@@ -761,9 +764,15 @@ static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
 // AVBD (Augmented Vertex Block Descent, Giles et al. SIGGRAPH 2025) — paper defaults:
 // warm-start scaling lambda <- ALPHA*GAMMA*lambda, penalty k <- max(K_MIN, GAMMA*k);
 // penalty growth k <- min(K_MAX, BETA*k) while a constraint stays violated.
-static const daxa_f32 BB_AVBD_ALPHA = 0.95f;
-static const daxa_f32 BB_AVBD_BETA = 10.0f;
+static const daxa_f32 BB_AVBD_ALPHA = 0.0f; // lambda persistence across steps. 0 for now: impact
+// frames legitimately build impact-sized lambdas (~100x rest force); persisting those onto the
+// next, resting step launches bodies. Revisit (paper uses 0.95) once a per-step lambda cap exists.
+static const daxa_f32 BB_AVBD_BETA = 2.0f;  // per-iteration growth; 10 iterations/step compound it
 static const daxa_f32 BB_AVBD_GAMMA = 0.99f;
+// Momentum-spike mitigation (paper): limit how much penetration a single step may correct, so
+// deep overlaps (e.g. interpenetrating spawns) depenetrate over several steps instead of
+// converting into huge reconstructed velocities (0.05 m/step @60Hz <= 3 m/s).
+static const daxa_f32 BB_AVBD_MAX_DEPEN = 0.05f;
 static const daxa_f32 BB_AVBD_K_MIN = 100.0f;
 static const daxa_f32 BB_AVBD_K_MAX = 1000000.0f;
 static const daxa_u32 BB_AVBD_ITERATIONS = 10;      // primal sweeps (+1 dual update each)

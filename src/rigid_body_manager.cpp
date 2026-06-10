@@ -61,6 +61,9 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_AVBD_CV = task_manager->create_compute(AvbdColorValidateInfo{}.info);
     pipeline_AVBD_PRE = task_manager->create_compute(AvbdPrepareInfo{}.info);
     pipeline_AVBD_FIN = task_manager->create_compute(AvbdFinalizeInfo{}.info);
+    pipeline_AVBD_WS = task_manager->create_compute(AvbdWarmstartInfo{}.info);
+    pipeline_AVBD_PRIM = task_manager->create_compute(AvbdPrimalInfo{}.info);
+    pipeline_AVBD_DUAL = task_manager->create_compute(AvbdDualInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
     update_pipeline = task_manager->create_compute(UpdateRigidBodies{}.info);
   }
@@ -1157,6 +1160,26 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_AVBD_FIN = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_FIN)>;
   TTask_AVBD_FIN task_AVBD_FIN(avbd_views, user_callback_AVBD_FIN);
 
+  auto user_callback_AVBD_WS = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_WS, 0u, COLLISION_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_WS = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_WS)>;
+  TTask_AVBD_WS task_AVBD_WS(avbd_views, user_callback_AVBD_WS);
+
+  auto make_avbd_primal = [this, avbd_dispatch](daxa_u32 c)
+  {
+    return [this, avbd_dispatch, c](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  };
+  using TTask_AVBD_PRIM = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_primal(0u))>;
+  std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_vec;
+  task_AVBD_PRIM_vec.reserve(BB_AVBD_MAX_BODY_COLORS);
+  for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+  {
+    task_AVBD_PRIM_vec.emplace_back(avbd_views, make_avbd_primal(c));
+  }
+
+  auto user_callback_AVBD_DUAL = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_DUAL, 0u, COLLISION_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_DUAL = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_DUAL)>;
+  TTask_AVBD_DUAL task_AVBD_DUAL(avbd_views, user_callback_AVBD_DUAL);
+
   // ---- per-color solver tasks (Phase 3): one dispatch per color, each filters manifold_color==color ----
   static const daxa_u32 MAX_COLORS_SOLVE = BB_MAX_COLORS_SOLVE; // shared.inl: per-color solver dispatch count; empty colors are cheap no-ops
   auto gc_solve_views = std::array{
@@ -1269,6 +1292,15 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   }
   RB_TG.add_task(task_AVBD_CV);
   RB_TG.add_task(task_AVBD_PRE); // AVBD: save step-start pose + jump to the inertial target
+  RB_TG.add_task(task_AVBD_WS);  // AVBD: lambda/k warm-start scaling
+  for (daxa_u32 it = 0u; it < BB_AVBD_ITERATIONS; ++it)
+  {
+    for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+    {
+      RB_TG.add_task(task_AVBD_PRIM_vec[c]);
+    }
+    RB_TG.add_task(task_AVBD_DUAL);
+  }
   if (static_cast<daxa_u32>(sim_flags & SimFlag::USE_GRAPH_COLORING) != 0u)
   {
     // per-color solve (parallel: one dispatch per color, balanced, no atomics)

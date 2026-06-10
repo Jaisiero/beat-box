@@ -448,6 +448,12 @@ const auto entry_avbd_prepare = "entry_avbd_prepare";
 const auto avbd_prepare_pipeline_name = "AVBD Prepare";
 const auto entry_avbd_finalize = "entry_avbd_finalize";
 const auto avbd_finalize_pipeline_name = "AVBD Finalize";
+const auto entry_avbd_warmstart = "entry_avbd_warmstart";
+const auto avbd_warmstart_pipeline_name = "AVBD Warmstart";
+const auto entry_avbd_primal = "entry_avbd_primal";
+const auto avbd_primal_pipeline_name = "AVBD Primal";
+const auto entry_avbd_dual = "entry_avbd_dual";
+const auto avbd_dual_pipeline_name = "AVBD Dual";
 // island sleeping (entries in RB_sim.slang)
 const auto entry_sleep_reduce = "entry_sleep_reduce";
 const auto sleep_reduce_pipeline_name = "Sleep Reduce";
@@ -1135,6 +1141,39 @@ struct AvbdFinalizeInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(AvbdPushConstants),
       .name = avbd_finalize_pipeline_name,
+  };
+};
+struct AvbdWarmstartInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_warmstart, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_warmstart_pipeline_name,
+  };
+};
+struct AvbdPrimalInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_primal, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_primal_pipeline_name,
+  };
+};
+struct AvbdDualInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_dual, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_dual_pipeline_name,
   };
 };
 // island sleeping passes (entries in RB_sim.slang; share SleepPushConstants)
