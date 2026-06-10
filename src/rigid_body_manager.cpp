@@ -65,12 +65,12 @@ RigidBodyManager::~RigidBodyManager()
 
 SimConfig &RigidBodyManager::get_sim_config_reference()
 {
-  return *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[renderer_manager->get_frame_index()]).value();
+  return *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[renderer_manager->get_sim_frame_index()]).value();
 }
 
 daxa::BufferId RigidBodyManager::get_sim_config_host_buffer()
 {
-  return sim_config_host_buffer[renderer_manager->get_frame_index()];
+  return sim_config_host_buffer[renderer_manager->get_sim_frame_index()];
 }
 
 
@@ -1355,17 +1355,21 @@ void RigidBodyManager::destroy()
 
 bool RigidBodyManager::is_dirty()
 {
-  return sim_flag_dirty[renderer_manager->get_frame_index()];
+  return sim_flag_dirty[renderer_manager->get_sim_frame_index()];
 }
 
 void RigidBodyManager::clean_dirty()
 {
-  sim_flag_dirty[renderer_manager->get_frame_index()] = false;
+  // update_sim() now refreshes BOTH parities in one call, so clear all dirty flags
+  for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
+  {
+    sim_flag_dirty[i] = false;
+  }
 }
 
 daxa::BufferId RigidBodyManager::get_lbvh_node_buffer()
 {
-  return lbvh_nodes[renderer_manager->get_frame_index()];
+  return lbvh_nodes[renderer_manager->get_sim_frame_index()];
 }
 
 bool RigidBodyManager::simulate()
@@ -1374,6 +1378,10 @@ bool RigidBodyManager::simulate()
   {
     return !initialized;
   }
+
+  // advance the SIM clock (per-step double-buffer parity, decoupled from the render frame):
+  // step K works on [parity K] and reads the previous step's output at [parity K^1]
+  renderer_manager->begin_sim_step();
 
   update_buffers();
 
@@ -1402,27 +1410,36 @@ bool RigidBodyManager::update_sim()
     return !initialized;
   }
 
-  *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[renderer_manager->get_frame_index()]).value() = SimConfig{
-      .solver_type = solver_type,
-      .rigid_body_count = renderer_manager->get_rigid_body_count(),
-      .active_rigid_body_count = renderer_manager->get_active_rigid_body_count(),
-      .island_count = 0,
-      .contact_island_count = 0,
-      .manifold_node_count = 0,
-      .radix_shift = 0,
-      .dt = TIME_STEP,
-      .gravity = -GRAVITY,
-      .flags = sim_flags,
-      .g_c_info = GlobalCollisionInfo{
-          .collision_count = 0,
-          .collision_point_count = 0,
-      },
-      .frame_count = renderer_manager->get_frame_count(),
-  };
+  // Populate BOTH double-buffer parities. The sim consumes alternating per-step buffers, and
+  // since the per-step sim clock + catch-up bursts, the dirty path is no longer guaranteed to
+  // run on each parity on consecutive iterations (the old per-render-frame clock was). A
+  // single-parity update would leave the other half's sim config (and consumers like the
+  // reset-body-links pass) stale or empty on every second step.
+  for (daxa_u32 f = 0u; f < DOUBLE_BUFFERING; ++f)
+  {
+    *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[f]).value() = SimConfig{
+        .solver_type = solver_type,
+        .rigid_body_count = renderer_manager->get_rigid_body_count(),
+        .active_rigid_body_count = renderer_manager->get_active_rigid_body_count(),
+        .island_count = 0,
+        .contact_island_count = 0,
+        .manifold_node_count = 0,
+        .radix_shift = 0,
+        .dt = TIME_STEP,
+        .gravity = -GRAVITY,
+        .flags = sim_flags,
+        .g_c_info = GlobalCollisionInfo{
+            .collision_count = 0,
+            .collision_point_count = 0,
+        },
+        .frame_count = renderer_manager->get_frame_count(),
+    };
 
-  update_buffers();
+    update_buffers(f);
+    update_SC_TG.execute();
+  }
 
-  update_SC_TG.execute();
+  update_buffers(); // restore current-parity bindings
 
   return initialized;
 }
@@ -1448,17 +1465,26 @@ bool RigidBodyManager::update_active_rigid_body_list()
     return !initialized;
   }
 
-  update_buffers();
+  // both parities: see update_sim() — the active list is consumed per-step at alternating parity
+  for (daxa_u32 f = 0u; f < DOUBLE_BUFFERING; ++f)
+  {
+    update_buffers(f);
+    ARB_TG.execute();
+  }
 
-  ARB_TG.execute();
+  update_buffers();
 
   return initialized;
 }
 
 void RigidBodyManager::update_buffers()
 {
-  daxa_u32 previous_frame = renderer_manager->get_previous_frame_index();
-  daxa_u32 current_frame = renderer_manager->get_frame_index();
+  update_buffers(renderer_manager->get_sim_frame_index());
+}
+
+void RigidBodyManager::update_buffers(daxa_u32 current_frame)
+{
+  daxa_u32 previous_frame = (current_frame + DOUBLE_BUFFERING - 1) % DOUBLE_BUFFERING;
 
   task_sim_config_host.set_buffer(sim_config_host_buffer[current_frame]);
   task_sim_config.set_buffer(sim_config[current_frame]);

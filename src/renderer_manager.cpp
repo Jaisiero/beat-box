@@ -219,11 +219,9 @@ void RendererManager::render()
   double _sim_ms_accum = 0.0; daxa_u64 _sim_ms_n = 0;   // [PERF] isolated sim timing
   // Fixed-timestep simulation, decoupled from the render rate: the sim advances TIME_STEP
   // (1/60 s) of simulated time only when 1/60 s of real time has accumulated, so its speed is
-  // real-time at any fps (it used to step once per render frame: 2.4x too fast at 144 fps).
-  // At most ONE step per render frame: the double-buffered sim resources (rigid bodies,
-  // manifolds, sim_config) rotate with the render frame_index, so multi-step catch-up within
-  // one frame would re-read stale "previous" buffers; below 60 fps the sim therefore slows
-  // down instead of catching up. The accumulator is clamped so stalls don't queue a burst.
+  // real-time at any fps. The sim double buffers rotate per STEP (sim clock in StatusManager),
+  // so the loop below can run several steps inside one render frame to CATCH UP when the
+  // render dips under 60 fps. The accumulator is clamped so stalls don't queue a burst.
   auto sim_clock_prev = std::chrono::steady_clock::now();
   double sim_accum_s = 0.0;
   constexpr double SIM_DT_S = static_cast<double>(TIME_STEP);
@@ -237,16 +235,20 @@ void RendererManager::render()
       rigid_body_manager->update_sim();
     }
 
-    // Simulate rigid bodies (fixed 60 Hz)
-    bool sim_stepped = false;
+    // Simulate rigid bodies: fixed 60 Hz with REAL catch-up. The sim double buffers rotate
+    // per STEP (begin_sim_step inside simulate()), so several steps inside one render frame
+    // are legal; only the last step of the burst gets published (TLAS build below). Below
+    // 60/MAX_CATCHUP_STEPS fps the sim slows down instead of spiraling.
+    constexpr daxa_u32 MAX_CATCHUP_STEPS = 4u;
+    daxa_u32 sim_steps_this_frame = 0u;
     {
       auto const sim_clock_now = std::chrono::steady_clock::now();
       double const elapsed_s = std::chrono::duration<double>(sim_clock_now - sim_clock_prev).count();
       sim_clock_prev = sim_clock_now;
       if (status_manager->is_simulating())
       {
-        sim_accum_s = std::min(sim_accum_s + elapsed_s, 2.0 * SIM_DT_S);
-        if (sim_accum_s >= SIM_DT_S)
+        sim_accum_s = std::min(sim_accum_s + elapsed_s, (MAX_CATCHUP_STEPS + 1.0) * SIM_DT_S);
+        while (sim_accum_s >= SIM_DT_S && sim_steps_this_frame < MAX_CATCHUP_STEPS)
         {
           sim_accum_s -= SIM_DT_S;
           gpu->synchronize();                                          // [PERF] flush prior GPU work
@@ -256,7 +258,7 @@ void RendererManager::render()
           _sim_ms_accum += std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
           _sim_ms_n++;                                                 // [PERF]
-          sim_stepped = true;
+          ++sim_steps_this_frame;
         }
       }
       else
@@ -264,6 +266,7 @@ void RendererManager::render()
         sim_accum_s = 0.0; // don't burst-step on resume
       }
     }
+    bool const sim_stepped = sim_steps_this_frame > 0u;
     if (!window.update())
       continue;
 
@@ -360,6 +363,26 @@ daxa_u32 RendererManager::get_previous_frame_index()
 daxa_u32 RendererManager::get_frame_index()
 {
   return status_manager->get_frame_index();
+}
+
+daxa_u32 RendererManager::get_sim_frame_index()
+{
+  return status_manager->get_sim_frame_index();
+}
+
+daxa_u32 RendererManager::get_sim_next_frame_index()
+{
+  return (status_manager->get_sim_frame_index() + 1) % DOUBLE_BUFFERING;
+}
+
+daxa_u32 RendererManager::get_sim_previous_frame_index()
+{
+  return (status_manager->get_sim_frame_index() + DOUBLE_BUFFERING - 1) % DOUBLE_BUFFERING;
+}
+
+void RendererManager::begin_sim_step()
+{
+  status_manager->begin_sim_step();
 }
 
 daxa_u32 RendererManager::get_next_frame_index()

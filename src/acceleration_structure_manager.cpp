@@ -193,7 +193,7 @@ daxa::TlasId AccelerationStructureManager::get_tlas()
   if(!initialized) {
     return {};
   }
-  return tlas[renderer_manager->get_frame_index()];
+  return tlas[renderer_manager->get_sim_frame_index()];
 }
 
 daxa::BufferId AccelerationStructureManager::get_previous_rigid_body_buffer()
@@ -201,7 +201,7 @@ daxa::BufferId AccelerationStructureManager::get_previous_rigid_body_buffer()
   if(!initialized) {
     return {};
   }
-  return rigid_body_buffer[renderer_manager->get_previous_frame_index()];
+  return rigid_body_buffer[renderer_manager->get_sim_previous_frame_index()];
 }
 
 daxa::BufferId AccelerationStructureManager::get_rigid_body_buffer()
@@ -209,7 +209,7 @@ daxa::BufferId AccelerationStructureManager::get_rigid_body_buffer()
   if(!initialized) {
     return {};
   }
-  return rigid_body_buffer[renderer_manager->get_frame_index()];
+  return rigid_body_buffer[renderer_manager->get_sim_frame_index()];
 }
 
 daxa::BufferId AccelerationStructureManager::get_next_rigid_body_buffer()
@@ -218,7 +218,7 @@ daxa::BufferId AccelerationStructureManager::get_next_rigid_body_buffer()
     return {};
   }
 
-  return rigid_body_buffer[renderer_manager->get_next_frame_index()];
+  return rigid_body_buffer[renderer_manager->get_sim_next_frame_index()];
 }
 
 void AccelerationStructureManager::build_AS()
@@ -432,10 +432,10 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   // );
 
   // Set the TLAS buffer
-  tlas_build_info.dst_tlas = tlas[renderer_manager->get_frame_index()];
+  tlas_build_info.dst_tlas = tlas[renderer_manager->get_sim_frame_index()];
 
   // Set Task TLAS
-  task_tlas.set_tlas(tlas[renderer_manager->get_frame_index()]);
+  task_tlas.set_tlas(tlas[renderer_manager->get_sim_frame_index()]);
 
   return true;
 }
@@ -461,7 +461,7 @@ bool AccelerationStructureManager::update()
     return false;
   }
 
-  daxa_u32 frame_index = renderer_manager->get_frame_index();
+  daxa_u32 frame_index = renderer_manager->get_sim_frame_index();
 
   // BUILDING BLAS
   auto clear_build_AS = [&](u32 count)

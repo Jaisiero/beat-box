@@ -66,6 +66,11 @@ struct RendererManager
   daxa_u32 get_previous_frame_index();
   daxa_u32 get_frame_index();
   daxa_u32 get_next_frame_index();
+  // sim clock (per-step parity, decoupled from the render frame index; see StatusManager)
+  daxa_u32 get_sim_frame_index();
+  daxa_u32 get_sim_next_frame_index();
+  daxa_u32 get_sim_previous_frame_index();
+  void begin_sim_step();
   bool is_gui_enabled() {
     return status_manager->is_gui_enabled();
   }
