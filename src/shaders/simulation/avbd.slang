@@ -92,25 +92,35 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
   AvbdBodyState* s = &states[i];
 
+  // anti-spin clamp (reference solver.cpp)
+  daxa_f32 om_len = length(r->omega);
+  if (om_len > 50.0f)
+  {
+    r->omega *= 50.0f / om_len;
+  }
+
+  daxa_f32 grav = ((r->flags & RigidBodyFlag::GRAVITY) != RigidBodyFlag::NONE) ? sim_config->gravity : 0.0f;
+
+  // inertial target (Eq 2): full gravity
   s->pos_start = r->position;
   s->rot_start.v = r->rotation.v;
   s->rot_start.w = r->rotation.w;
-
-  daxa_f32vec3 v = r->velocity;
-  if ((r->flags & RigidBodyFlag::GRAVITY) != RigidBodyFlag::NONE)
-  {
-    v.y += sim_config->gravity * dt; // gravity folded into the inertial velocity
-  }
-  s->pos_tilde = r->position + v * dt;
+  s->pos_tilde = r->position + r->velocity * dt + daxa_f32vec3(0.0f, grav, 0.0f) * (dt * dt);
   Quaternion q_tilde = r->apply_angular_velocity(r->rotation, r->omega, dt);
   s->rot_tilde.v = q_tilde.v;
   s->rot_tilde.w = q_tilde.w;
 
-  // start the primal state at the inertial target
-  r->position = s->pos_tilde;
+  // adaptive warm start (original VBD): start the primal state at pos + v*dt plus only the
+  // fraction of gravity that was actually realized last step (0 when resting on support)
+  daxa_f32 accel_w = 0.0f;
+  if (abs(grav) > 1e-6f)
+  {
+    daxa_f32 accel_y = (r->velocity.y - r->prev_velocity.y) / dt;
+    accel_w = clamp(accel_y * sign(grav) / abs(grav), 0.0f, 1.0f);
+  }
+  r->position = r->position + r->velocity * dt + daxa_f32vec3(0.0f, grav, 0.0f) * (accel_w * dt * dt);
   r->rotation.v = q_tilde.v;
   r->rotation.w = q_tilde.w;
-  r->velocity = v; // keep the gravity-updated velocity for diagnostics/sleep thresholds mid-step
 }
 
 // Reconstructs velocities from the pose delta (BDF1): v = (x - x_start)/dt,
@@ -141,6 +151,7 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
   AvbdBodyState* s = &states[i];
 
+  r->prev_velocity = r->velocity; // for next step's adaptive warm start
   r->velocity = (r->position - s->pos_start) * inv_dt;
 
   // dq = q_cur * conjugate(q_start); small-angle: omega = 2*dq.v/dt (sign-fixed)
@@ -154,11 +165,14 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
 
 // ----- F3: contact constraints (normal only), primal 6x6 block solve + dual updates -----
 //
-// Constraint per contact j (bodies 1=obb1, 2=obb2, normal n points 1->2, penetration<0=overlap):
-//   C(x) = pen_start + n.((dp2 + dth2 x r2) - (dp1 + dth1 x r1))   [>= 0 required]
-// with dp/dth the pose deltas since step start and r_i the world contact arms at step start.
-// Augmented Lagrangian energy: E = -lambda*C + (k/2)*min(C,0)^2, lambda >= 0.
-// Storage reuse: Contact.normal_impulse = lambda_n, Contact.mass_coefficient = penalty k_n.
+// Direct transcription of the reference AVBD discrete scheme (Giles et al. 2025,
+// savant117/avbd-demo2d, postStabilize mode):
+//   C(x) = C0*(1 - stab_alpha) + J . dpose       (truncated Taylor at step start, Sec 4)
+//   force f = clamp(k*C + lambda, -inf, 0)        (contacts only push; lambda <= 0)
+//   primal: g += J*f, H += k*J J^T  -> x += solve(H, -g)  (no geometric stiffness, Sec 3.5)
+//   dual (main sweeps only): lambda = f; if lambda < 0: k += beta*|C| (linear ramp, Eq 16)
+//   post-stab sweep: stab_alpha=0 AFTER velocity reconstruction (depenetration w/o momentum)
+// Storage reuse: Contact.normal_impulse = lambda (<= 0), Contact.mass_coefficient = penalty k.
 
 daxa_f32vec3 avbd_small_angle_delta(Quaternion q_now, Quaternion q_start)
 {
@@ -168,10 +182,16 @@ daxa_f32vec3 avbd_small_angle_delta(Quaternion q_now, Quaternion q_start)
   return dq.v * (2.0f * sign);
 }
 
-// current constraint value of contact j of manifold m (also outputs the world arms)
+// Current constraint value of contact j of manifold m (also outputs the world arms).
+// Truncated Taylor series around the step-start pose (reference manifold.cpp):
+//   C(x) = C0*(1 - stab_alpha) + J . dpose
+// During the main sweeps stab_alpha=1: only the constraint DELTA is solved (pre-existing
+// penetration C0 is invisible to the dynamics, so depenetration never injects momentum).
+// The post-stabilization sweep passes stab_alpha=0 to correct C0 positionally AFTER the
+// velocities were already reconstructed.
 daxa_f32 avbd_contact_C(Manifold* m, daxa_u32 j, RigidBody* r1, RigidBody* r2,
                         AvbdBodyState* s1, AvbdBodyState* s2,
-                        bool dyn1, bool dyn2,
+                        bool dyn1, bool dyn2, daxa_f32 stab_alpha,
                         out daxa_f32vec3 rr1, out daxa_f32vec3 rr2)
 {
   daxa_f32vec3 n = m->normal;
@@ -182,7 +202,8 @@ daxa_f32 avbd_contact_C(Manifold* m, daxa_u32 j, RigidBody* r1, RigidBody* r2,
   rr1 = p - c1;
   rr2 = p - c2;
 
-  daxa_f32 C = m->contacts[j].penetration;
+  daxa_f32 C0 = m->contacts[j].penetration + BB_AVBD_MARGIN;
+  daxa_f32 C = C0 * (1.0f - stab_alpha);
   if (dyn1)
   {
     daxa_f32vec3 dp1 = r1->position - s1->pos_start;
@@ -297,17 +318,22 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   for (daxa_u32 j = 0u; j < cc; ++j)
   {
     bool matched = m->contacts[j].warm_start != 0u && sim_config->has_flag(SimFlag::WARM_STARTING);
-    daxa_f32 lam = matched ? m->contacts[j].normal_impulse : 0.0f;
-    daxa_f32 k = matched ? m->contacts[j].mass_coefficient : 0.0f;
-    m->contacts[j].normal_impulse = max(lam, 0.0f) * BB_AVBD_ALPHA * BB_AVBD_GAMMA;
-    m->contacts[j].mass_coefficient = clamp(k * BB_AVBD_GAMMA, BB_AVBD_K_MIN, BB_AVBD_K_MAX);
-    // Position-correction limiting, FIXED once per step (paper's momentum-spike mitigation):
-    // shift the constraint so this step only asks to correct BB_AVBD_MAX_DEPEN of the
-    // step-start penetration. Re-evaluating the limit per iteration would move the goalpost
-    // every primal sweep and make lambda climb without bound. bias_factor is a PGS-only
-    // field, reused as the per-step shift under AVBD.
-    daxa_f32 depth0 = max(0.0f, -m->contacts[j].penetration);
-    m->contacts[j].bias_factor = max(0.0f, depth0 - BB_AVBD_MAX_DEPEN);
+    if (!matched)
+    {
+      // fresh contact: zero force estimate, minimum penalty
+      m->contacts[j].normal_impulse = 0.0f;
+      m->contacts[j].mass_coefficient = BB_AVBD_PENALTY_MIN;
+    }
+    else
+    {
+      // post-stabilization mode (reference solver.cpp): keep the FULL lambda from last step
+      // (it never saw C0, so it is the steady contact force, not an impact spike) and only
+      // decay the penalty so it can shrink when contacts calm down.
+      daxa_f32 k = m->contacts[j].mass_coefficient;
+      m->contacts[j].mass_coefficient = clamp(k * BB_AVBD_GAMMA, BB_AVBD_PENALTY_MIN, BB_AVBD_PENALTY_MAX);
+      // lambda (normal_impulse) kept as is; force convention lambda <= 0
+      m->contacts[j].normal_impulse = min(m->contacts[j].normal_impulse, 0.0f);
+    }
   }
 }
 
@@ -406,27 +432,19 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
         for (daxa_u32 j = 0u; j < cc; ++j)
         {
           daxa_f32vec3 rr1, rr2;
-          daxa_f32 C = avbd_contact_C(m, j, r1, r2, s1, s2, dyn1, dyn2, rr1, rr2)
-                       + m->contacts[j].bias_factor; // per-step correction limit (see warmstart)
-          daxa_f32 lam = m->contacts[j].normal_impulse;
+          daxa_f32 C = avbd_contact_C(m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, rr1, rr2);
+          daxa_f32 lam = m->contacts[j].normal_impulse; // <= 0 (force convention)
           daxa_f32 k = m->contacts[j].mass_coefficient;
-          // Rockafellar augmented Lagrangian for the inequality C >= 0:
-          // F = max(0, lambda - k*C). Crucially F cuts to ZERO once separated past C > lambda/k —
-          // a plain "-lambda" force would keep ATTRACTING separated bodies (glue) and pump energy.
-          daxa_f32 F = max(0.0f, lam - k * C);
-          if (F <= 0.0f)
-          {
-            continue; // inactive
-          }
+          // clamped force magnitude (reference Sec 3.2): contacts only push -> f in (-inf, 0]
+          daxa_f32 f = min(k * C + lam, 0.0f);
           // my jacobian (J1 = [-n, -(r1 x n)], J2 = [+n, +(r2 x n)])
           daxa_f32vec3 n = m->normal;
           daxa_f32vec3 Jl = i_is_1 ? -n : n;
           daxa_f32vec3 Ja = i_is_1 ? -cross(rr1, n) : cross(rr2, n);
-          daxa_f32 force = -F; // dE/dC
-          // gradient += force * J
-          g[0] += force * Jl.x; g[1] += force * Jl.y; g[2] += force * Jl.z;
-          g[3] += force * Ja.x; g[4] += force * Ja.y; g[5] += force * Ja.z;
-          // hessian += k * J J^T (Gauss-Newton penalty curvature, active region only)
+          // gradient += J * f (Eq. 13); hessian += k * J J^T (Eq. 17, contacts have no
+          // second-order term: truncated Taylor, reference Sec 4)
+          g[0] += f * Jl.x; g[1] += f * Jl.y; g[2] += f * Jl.z;
+          g[3] += f * Ja.x; g[4] += f * Ja.y; g[5] += f * Ja.z;
           daxa_f32 J[6] = { Jl.x, Jl.y, Jl.z, Ja.x, Ja.y, Ja.z };
           [unroll]
           for (daxa_u32 a = 0u; a < 6u; ++a)
@@ -449,16 +467,12 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   daxa_f32 dx[6];
   avbd_solve6(H, rhs, dx);
 
-  // step limiting (prototype anti-explosion guard)
+  // no step limiting: the reference scheme relies on the inertia term + penalty curvature
   daxa_f32vec3 dlin = daxa_f32vec3(dx[0], dx[1], dx[2]);
   daxa_f32vec3 dang = daxa_f32vec3(dx[3], dx[4], dx[5]);
-  daxa_f32 lin_len = length(dlin);
-  if (lin_len > 0.5f) { dlin *= 0.5f / lin_len; }
-  daxa_f32 ang_len = length(dang);
-  if (ang_len > 0.5f) { dang *= 0.5f / ang_len; }
   { // TEMP DIAG
     daxa_u32 prevd;
-    InterlockedMax(sim_config->avbd_dbg_max_dx, asuint(min(lin_len, 0.5f)), prevd);
+    InterlockedMax(sim_config->avbd_dbg_max_dx, asuint(length(dlin)), prevd);
   }
 
   r->position += dlin;
@@ -469,7 +483,8 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   r->rotation.w = qn.w;
 }
 
-// dual: one thread per manifold; ascend lambda, grow the penalty while still violated
+// dual: one thread per manifold; assign lambda = clamped force, grow the penalty linearly
+// while the force is strictly inside its bounds (main sweeps only; skipped in post-stab)
 [shader("compute")]
 [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_dual(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
@@ -507,21 +522,24 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   for (daxa_u32 j = 0u; j < cc; ++j)
   {
     daxa_f32vec3 rr1, rr2;
-    daxa_f32 C = avbd_contact_C(m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, rr1, rr2)
-                 + m->contacts[j].bias_factor; // same shifted constraint the primal minimizes
+    // dual updates only run during the main sweeps -> stab_alpha = 1 (delta-only constraint)
+    daxa_f32 C = avbd_contact_C(m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, rr1, rr2);
     daxa_f32 lam = m->contacts[j].normal_impulse;
     daxa_f32 k = m->contacts[j].mass_coefficient;
-    daxa_f32 new_lam = max(0.0f, lam - k * C);
+    // lambda update (reference Eq 11): ASSIGN the clamped force estimate
+    daxa_f32 new_lam = min(k * C + lam, 0.0f);
     m->contacts[j].normal_impulse = new_lam;
-    if (C < 0.0f)
+    // penalty ramp (Eq 16): LINEAR growth, only while the force is not at its clamp bound
+    if (new_lam < 0.0f)
     {
-      m->contacts[j].mass_coefficient = min(BB_AVBD_K_MAX, k * BB_AVBD_BETA);
+      m->contacts[j].mass_coefficient = min(k + BB_AVBD_BETA * abs(C), BB_AVBD_PENALTY_MAX);
     }
-    { // TEMP DIAG
-      daxa_u32 prevd;
-      InterlockedMax(sim_config->avbd_dbg_max_lam, asuint(new_lam), prevd);
-      if (new_lam > 0.0f)
+    { // TEMP DIAG (lambda <= 0: track its magnitude; only when strictly negative, since
+      // asuint(-0.0f) = 0x80000000 would dominate the unsigned InterlockedMax)
+      if (new_lam < 0.0f)
       {
+        daxa_u32 prevd;
+        InterlockedMax(sim_config->avbd_dbg_max_lam, asuint(-new_lam), prevd);
         InterlockedAdd(sim_config->avbd_dbg_active, 1u, prevd);
       }
     }

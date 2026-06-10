@@ -23,6 +23,7 @@ void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
   dst->inv_mass = src->inv_mass;
   dst->velocity = src->velocity;
   dst->omega = src->omega;
+  dst->prev_velocity = src->prev_velocity;
   dst->inv_inertia[0][0] = src->inv_inertia[0][0];
   dst->inv_inertia[0][1] = src->inv_inertia[0][1];
   dst->inv_inertia[0][2] = src->inv_inertia[0][2];
@@ -313,6 +314,9 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
             contacts[i].normal_impulse = old_contact->normal_impulse;
             contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0];
             contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
+            // AVBD: the penalty parameter must persist across steps (PGS overwrites this field
+            // in pre_step, so copying it is harmless for the PGS family)
+            contacts[i].mass_coefficient = old_contact->mass_coefficient;
 
             contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
           break;

@@ -1126,19 +1126,19 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       daxa::attachment_view(AvbdTaskHead::AT.avbd_state, task_avbd_state),
       daxa::attachment_view(AvbdTaskHead::AT.body_color, task_avbd_body_color),
   };
-  auto avbd_dispatch = [this](daxa::TaskInterface ti, std::shared_ptr<daxa::ComputePipeline> &pl, daxa_u32 pc_color, daxa_u32 dispatch_offset)
+  auto avbd_dispatch = [this](daxa::TaskInterface ti, std::shared_ptr<daxa::ComputePipeline> &pl, daxa_u32 pc_color, daxa_f32 stab_alpha, daxa_u32 dispatch_offset)
   {
     ti.recorder.set_pipeline(*pl);
-    ti.recorder.push_constant(AvbdPushConstants{.task_head = ti.attachment_shader_blob, .color = pc_color});
+    ti.recorder.push_constant(AvbdPushConstants{.task_head = ti.attachment_shader_blob, .color = pc_color, .stab_alpha = stab_alpha});
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(AvbdTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * dispatch_offset});
   };
-  auto user_callback_AVBD_CR = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CR, 0u, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  auto user_callback_AVBD_CR = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CR, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
   using TTask_AVBD_CR = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_CR)>;
   TTask_AVBD_CR task_AVBD_CR(avbd_views, user_callback_AVBD_CR);
 
   auto make_avbd_round = [this, avbd_dispatch](daxa_u32 round)
   {
-    return [this, avbd_dispatch, round](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CRND, round, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+    return [this, avbd_dispatch, round](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CRND, round, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
   };
   using TTask_AVBD_CRND = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_round(0u))>;
   std::vector<TTask_AVBD_CRND> task_AVBD_CRND_vec;
@@ -1148,35 +1148,38 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     task_AVBD_CRND_vec.emplace_back(avbd_views, make_avbd_round(rd));
   }
 
-  auto user_callback_AVBD_CV = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CV, 0u, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  auto user_callback_AVBD_CV = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CV, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
   using TTask_AVBD_CV = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_CV)>;
   TTask_AVBD_CV task_AVBD_CV(avbd_views, user_callback_AVBD_CV);
 
-  auto user_callback_AVBD_PRE = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRE, 0u, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  auto user_callback_AVBD_PRE = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRE, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
   using TTask_AVBD_PRE = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_PRE)>;
   TTask_AVBD_PRE task_AVBD_PRE(avbd_views, user_callback_AVBD_PRE);
 
-  auto user_callback_AVBD_FIN = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_FIN, 0u, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  auto user_callback_AVBD_FIN = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_FIN, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
   using TTask_AVBD_FIN = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_FIN)>;
   TTask_AVBD_FIN task_AVBD_FIN(avbd_views, user_callback_AVBD_FIN);
 
-  auto user_callback_AVBD_WS = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_WS, 0u, COLLISION_DISPATCH_COUNT_OFFSET); };
+  auto user_callback_AVBD_WS = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_WS, 0u, 1.0f, COLLISION_DISPATCH_COUNT_OFFSET); };
   using TTask_AVBD_WS = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_WS)>;
   TTask_AVBD_WS task_AVBD_WS(avbd_views, user_callback_AVBD_WS);
 
-  auto make_avbd_primal = [this, avbd_dispatch](daxa_u32 c)
+  auto make_avbd_primal = [this, avbd_dispatch](daxa_u32 c, daxa_f32 stab_alpha)
   {
-    return [this, avbd_dispatch, c](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+    return [this, avbd_dispatch, c, stab_alpha](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, stab_alpha, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
   };
-  using TTask_AVBD_PRIM = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_primal(0u))>;
-  std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_vec;
+  using TTask_AVBD_PRIM = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_primal(0u, 1.0f))>;
+  std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_vec;     // main sweeps: alpha = 1 (delta-only constraint)
+  std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_PS_vec;  // post-stabilization sweep: alpha = 0 (full C0)
   task_AVBD_PRIM_vec.reserve(BB_AVBD_MAX_BODY_COLORS);
+  task_AVBD_PRIM_PS_vec.reserve(BB_AVBD_MAX_BODY_COLORS);
   for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
   {
-    task_AVBD_PRIM_vec.emplace_back(avbd_views, make_avbd_primal(c));
+    task_AVBD_PRIM_vec.emplace_back(avbd_views, make_avbd_primal(c, 1.0f));
+    task_AVBD_PRIM_PS_vec.emplace_back(avbd_views, make_avbd_primal(c, 0.0f));
   }
 
-  auto user_callback_AVBD_DUAL = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_DUAL, 0u, COLLISION_DISPATCH_COUNT_OFFSET); };
+  auto user_callback_AVBD_DUAL = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_DUAL, 0u, 1.0f, COLLISION_DISPATCH_COUNT_OFFSET); };
   using TTask_AVBD_DUAL = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_DUAL)>;
   TTask_AVBD_DUAL task_AVBD_DUAL(avbd_views, user_callback_AVBD_DUAL);
 
@@ -1333,6 +1336,13 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       RB_TG.add_task(task_CSR);
   }
   RB_TG.add_task(task_AVBD_FIN); // AVBD: reconstruct velocities from the pose delta
+  // AVBD post-stabilization sweep (reference postStabilize): one extra primal pass with
+  // alpha = 0 (full C0) AFTER velocities are reconstructed -> corrects pre-existing
+  // penetration positionally without injecting momentum
+  for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+  {
+    RB_TG.add_task(task_AVBD_PRIM_PS_vec[c]);
+  }
   RB_TG.add_task(task_CP);
   RB_TG.add_task(task_update);
 

@@ -354,6 +354,7 @@ struct RigidBody
   daxa_f32 inv_mass;
   daxa_f32vec3 velocity;
   daxa_f32vec3 omega;
+  daxa_f32vec3 prev_velocity; // last step's velocity (AVBD adaptive warm start; rides the row reorder)
   daxa_f32mat3x3 inv_inertia;
   daxa_f32 restitution;
   daxa_f32 friction;
@@ -764,18 +765,18 @@ static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
 // AVBD (Augmented Vertex Block Descent, Giles et al. SIGGRAPH 2025) — paper defaults:
 // warm-start scaling lambda <- ALPHA*GAMMA*lambda, penalty k <- max(K_MIN, GAMMA*k);
 // penalty growth k <- min(K_MAX, BETA*k) while a constraint stays violated.
-static const daxa_f32 BB_AVBD_ALPHA = 0.0f; // lambda persistence across steps. 0 for now: impact
-// frames legitimately build impact-sized lambdas (~100x rest force); persisting those onto the
-// next, resting step launches bodies. Revisit (paper uses 0.95) once a per-step lambda cap exists.
-static const daxa_f32 BB_AVBD_BETA = 2.0f;  // per-iteration growth; 10 iterations/step compound it
+// Scheme transcribed from the reference implementation (savant117/avbd-demo2d, solver.cpp +
+// manifold.cpp) in POST-STABILIZATION mode: during the main iterations contacts solve only the
+// constraint DELTA (pre-existing penetration C0 excluded -> depenetration never injects
+// momentum); velocities are reconstructed BEFORE one extra stabilization sweep that corrects C0
+// positionally. lambda <= 0 (force convention), persisted fully across steps; the penalty grows
+// LINEARLY (k += BETA*|C|) while the contact is active and decays by GAMMA at warm-start.
+static const daxa_f32 BB_AVBD_BETA = 100000.0f;
 static const daxa_f32 BB_AVBD_GAMMA = 0.99f;
-// Momentum-spike mitigation (paper): limit how much penetration a single step may correct, so
-// deep overlaps (e.g. interpenetrating spawns) depenetrate over several steps instead of
-// converting into huge reconstructed velocities (0.05 m/step @60Hz <= 3 m/s).
-static const daxa_f32 BB_AVBD_MAX_DEPEN = 0.05f;
-static const daxa_f32 BB_AVBD_K_MIN = 100.0f;
-static const daxa_f32 BB_AVBD_K_MAX = 1000000.0f;
-static const daxa_u32 BB_AVBD_ITERATIONS = 10;      // primal sweeps (+1 dual update each)
+static const daxa_f32 BB_AVBD_PENALTY_MIN = 1.0f;
+static const daxa_f32 BB_AVBD_PENALTY_MAX = 1000000000.0f;
+static const daxa_f32 BB_AVBD_MARGIN = 0.0005f;     // collision margin (avoids flickering contacts)
+static const daxa_u32 BB_AVBD_ITERATIONS = 10;      // main sweeps (+1 post-stabilization sweep)
 static const daxa_u32 BB_AVBD_COLOR_ROUNDS = 16;    // Jones-Plassmann body-coloring rounds
 static const daxa_u32 BB_AVBD_MAX_BODY_COLORS = 32; // primal dispatches per sweep (empty = no-op)
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_POINT_COUNT = 8192;
@@ -1152,7 +1153,8 @@ DAXA_DECL_TASK_HEAD_END
 struct AvbdPushConstants
 {
   DAXA_TH_BLOB(AvbdTaskHead, task_head)
-  daxa_u32 color; // primal: which body color to solve; coloring rounds: the round number
+  daxa_u32 color;       // primal: which body color to solve; coloring rounds: the round number
+  daxa_f32 stab_alpha;  // 1.0 = main sweeps (constraint delta only), 0.0 = post-stabilization
 };
 
 
