@@ -93,22 +93,32 @@ struct TaskGraph
   std::map<std::string, daxa::TaskImage> task_images;
   std::map<std::string, daxa::TaskTlas> task_tlas;
   std::map<std::string, daxa::TaskBlas> task_blas;
+  // every task added to this graph is forced onto this queue (see add_task)
+  daxa::Queue queue = daxa::QUEUE_MAIN;
 
   TaskGraph() = default;
 
-  TaskGraph(daxa::TaskGraph task_graph_)
-      : task_graph(task_graph_) {}
+  TaskGraph(daxa::TaskGraph task_graph_, daxa::Queue queue_ = daxa::QUEUE_MAIN)
+      : task_graph(task_graph_), queue(queue_) {}
 
 
   void add_task(auto task)
   {
+    // Force every task onto this graph's queue: tasks default to QUEUE_MAIN (not QUEUE_NONE),
+    // so TaskGraphInfo::default_queue alone would never apply to them.
+    if constexpr (requires { task.uses_queue(queue); })
+    {
+      task.uses_queue(queue);
+    }
     if constexpr (requires { task.as_inline_task(); })
     {
       task_graph.add_task(task.as_inline_task());
     }
     else if constexpr (std::is_same_v<std::decay_t<decltype(task)>, daxa::InlineTaskInfo>)
     {
-      task_graph.add_task(task.to_inline_task());
+      auto inline_task = task.to_inline_task();
+      inline_task.uses_queue(queue);
+      task_graph.add_task(std::move(inline_task));
     }
     else
     {
@@ -119,6 +129,11 @@ struct TaskGraph
   void submit()
   {
     task_graph.submit({});
+  }
+
+  void submit(daxa::TaskSubmitInfo const & info)
+  {
+    task_graph.submit(info);
   }
 
   void present()
@@ -208,13 +223,14 @@ struct TaskManager
     return pipeline_manager.reload_all();
   }
 
-  TaskGraph& create_task_graph(char const *name, std::span<daxa::TaskBuffer> buffers, std::span<daxa::TaskImage> images, std::span<daxa::TaskBlas> blases, std::span<daxa::TaskTlas> tlases, bool is_swapchain = false)
+  TaskGraph& create_task_graph(char const *name, std::span<daxa::TaskBuffer> buffers, std::span<daxa::TaskImage> images, std::span<daxa::TaskBlas> blases, std::span<daxa::TaskTlas> tlases, bool is_swapchain = false, daxa::Queue queue = daxa::QUEUE_MAIN)
   {
     auto TG = TaskGraph(daxa::TaskGraph({
         .device = gpu->device,
         .swapchain = is_swapchain? gpu->swapchain : std::optional<daxa::Swapchain>(),
+        .default_queue = queue,
         .name = name,
-    }));
+    }), queue);
     for (auto buffer : buffers)
     {
       TG.add_buffer(buffer.info().name, buffer);
@@ -235,14 +251,15 @@ struct TaskManager
   }
 
   template<typename TTask>
-  TaskGraph& create_task_graph(char const *name,  std::span<TTask> tasks, 
-  std::span<daxa::TaskBuffer> buffers, std::span<daxa::TaskImage> images, std::span<daxa::TaskBlas> blases, std::span<daxa::TaskTlas> tlases, bool is_swapchain = false)
+  TaskGraph& create_task_graph(char const *name,  std::span<TTask> tasks,
+  std::span<daxa::TaskBuffer> buffers, std::span<daxa::TaskImage> images, std::span<daxa::TaskBlas> blases, std::span<daxa::TaskTlas> tlases, bool is_swapchain = false, daxa::Queue queue = daxa::QUEUE_MAIN)
   {
     auto TG = TaskGraph(daxa::TaskGraph({
         .device = gpu->device,
         .swapchain = is_swapchain? gpu->swapchain : std::optional<daxa::Swapchain>(),
+        .default_queue = queue,
         .name = name,
-    }));
+    }), queue);
     for (auto buffer : buffers)
     {
       TG.add_buffer(buffer.info().name, buffer);

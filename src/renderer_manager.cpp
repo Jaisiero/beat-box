@@ -155,7 +155,9 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   RT_TG.add_task(gui_manager->gui_line_task_info);
   RT_TG.add_task(gui_manager->gui_task_info);
 
-  RT_TG.submit();
+  // the render submit waits the sim timeline: it consumes the latest sim+TLAS publication
+  // produced on the async compute queue (value set per frame in execute())
+  RT_TG.submit({.additional_wait_timeline_semaphores = &gpu->sim_wait_span});
   RT_TG.present();
   RT_TG.complete();
 
@@ -190,6 +192,7 @@ bool RendererManager::execute()
   {
     return false;
   }
+  gpu->sync_render_to_sim_timeline(); // wait the latest published sim+TLAS state
   RT_TG.execute();
   return true;
 }

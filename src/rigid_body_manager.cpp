@@ -102,7 +102,7 @@ void RigidBodyManager::record_active_rigid_body_list_upload_tasks(TaskGraph &ARB
       };
   std::array<daxa::InlineTaskInfo, 1> tasks = {
       task_update_active_rigid_bodies};
-  ARBL_TG = task_manager->create_task_graph("Active Rigid Body List Upload", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+  ARBL_TG = task_manager->create_task_graph("Active Rigid Body List Upload", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
 }
 
 bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager> renderer, std::shared_ptr<GUIManager> gui, daxa_u32 iterations)
@@ -1003,7 +1003,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_color_count,
   };
 
-  RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+  // the whole sim runs on the async compute queue; the render graph waits the sim timeline
+  RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
 
   // ---- graph coloring tasks (Phase 2: color + validate, coexisting with the island solver) ----
   // Contacts are an EDGE coloring: colors needed ~= max body degree (Vizing), and one round commits at
@@ -1285,7 +1286,7 @@ void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &out_readback
       task_readback_SC,
   };
 
-  out_readback_SC_TG = task_manager->create_task_graph("Read back Simulation Configuration", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+  out_readback_SC_TG = task_manager->create_task_graph("Read back Simulation Configuration", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
 }
 
 void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &out_update_SC_TG)
@@ -1315,7 +1316,7 @@ void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &out_update_SC_T
       task_update_SC,
   };
 
-  out_update_SC_TG = task_manager->create_task_graph("Update Simulation Configuration", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+  out_update_SC_TG = task_manager->create_task_graph("Update Simulation Configuration", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
 }
 
 void RigidBodyManager::destroy()
