@@ -1039,6 +1039,33 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
   return found;
 }
 
+// Cheap separating-axis BOOLEAN prefilter on the bodies' bounding OBBs (face axes only -
+// a separating face axis PROVES disjointness, so culling here can never drop a real
+// contact; edge-edge separations just fall through to sampling, which finds nothing).
+// Broad-phase world AABBs are conservative for rotated bodies; this gate skips the whole
+// surface-voxel loop for near-miss pairs. Small margin keeps resting manifolds alive.
+daxa_b32 voxel_obb_prefilter(RigidBody* a, RigidBody* b)
+{
+  daxa_f32vec3 ha = (a->maximum - a->minimum) * 0.5f;
+  daxa_f32vec3 hb = (b->maximum - b->minimum) * 0.5f;
+  daxa_f32vec3 ca = a->position + a->rotate_vector((a->maximum + a->minimum) * 0.5f);
+  daxa_f32vec3 cb = b->position + b->rotate_vector((b->maximum + b->minimum) * 0.5f);
+  daxa_f32vec3 d = cb - ca;
+  daxa_f32vec3 ax[3] = { a->rotate_vector(daxa_f32vec3(1, 0, 0)), a->rotate_vector(daxa_f32vec3(0, 1, 0)), a->rotate_vector(daxa_f32vec3(0, 0, 1)) };
+  daxa_f32vec3 bx[3] = { b->rotate_vector(daxa_f32vec3(1, 0, 0)), b->rotate_vector(daxa_f32vec3(0, 1, 0)), b->rotate_vector(daxa_f32vec3(0, 0, 1)) };
+  daxa_f32 haa[3] = { ha.x, ha.y, ha.z };
+  daxa_f32 hbb[3] = { hb.x, hb.y, hb.z };
+  [unroll]
+  for (daxa_u32 i = 0u; i < 3u; ++i)
+  {
+    daxa_f32 rb = hbb[0] * abs(dot(ax[i], bx[0])) + hbb[1] * abs(dot(ax[i], bx[1])) + hbb[2] * abs(dot(ax[i], bx[2]));
+    if (abs(dot(d, ax[i])) > haa[i] + rb + 0.01f) { return false; }
+    daxa_f32 ra = haa[0] * abs(dot(bx[i], ax[0])) + haa[1] * abs(dot(bx[i], ax[1])) + haa[2] * abs(dot(bx[i], ax[2]));
+    if (abs(dot(d, bx[i])) > hbb[i] + ra + 0.01f) { return false; }
+  }
+  return true;
+}
+
 // full voxel narrow phase for a candidate pair; emits the standard Manifold.
 // Manifold convention: normal points obb1 -> obb2, penetration < 0 = overlap.
 daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBody* rB, out Manifold manifold)
@@ -1046,6 +1073,11 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
   manifold.contact_count = 0;
   manifold.key = 99; // constant voxel key: warm-start matching is by voxel feature ids
   manifold.error = 0;
+
+  if (!voxel_obb_prefilter(rA, rB))
+  {
+    return false;
+  }
 
   VoxelShape* shapes = (VoxelShape*)(sim_config->voxel_shapes_addr);
   daxa_u32* occ = (daxa_u32*)(sim_config->voxel_occupancy_addr);
@@ -1093,10 +1125,14 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
     manifold.contacts[out_n].tangent_impulse[1] = 0.0f;
     manifold.contacts[out_n].warm_start = 0u;
     manifold.contacts[out_n].stick = 0u;
-    manifold.contacts[out_n].fp.in_reference = flip ? red.fp_b[o] : red.fp_a[o];
-    manifold.contacts[out_n].fp.out_reference = flip ? red.fp_a[o] : red.fp_b[o];
+    // warm-start matching (is_same_contact compares the two incident ids): key on the
+    // SAMPLED body's voxel id only - the B cell under a voxel crosses cell boundaries on
+    // micro-motion at rest, which would reset lambda every step (observed astick ~1-4 of
+    // ~70 and permanent jitter). The octant winner is depth-sticky, so the A id is stable.
+    manifold.contacts[out_n].fp.in_reference = flip ? 1u : 0u;
+    manifold.contacts[out_n].fp.out_reference = red.fp_b[o];
     manifold.contacts[out_n].fp.in_incident = red.fp_a[o];
-    manifold.contacts[out_n].fp.out_incident = red.fp_b[o];
+    manifold.contacts[out_n].fp.out_incident = red.fp_a[o];
     ++out_n;
   }
   manifold.contact_count = daxa_i32(out_n);

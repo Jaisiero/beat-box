@@ -305,6 +305,15 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
     if (key != old_manifold->key) {
       return;
     }
+    // voxel manifolds (key 99): the dominant normal is assembled from QUANTIZED voxel
+    // sample normals and can flap a few degrees frame-to-frame at rest, which re-excites
+    // the contacts and blocks sleeping. While the rebuilt normal stays within ~25 deg of
+    // last step's, reuse the old normal (and its tangent basis) verbatim.
+    if (key == 99 && dot(normal, old_manifold->normal) > 0.9f)
+    {
+      normal = old_manifold->normal;
+      compute_basis();
+    }
     daxa_f32vec3 otv0  = old_manifold->tangent_vectors[0];
     daxa_f32vec3 otv1  = old_manifold->tangent_vectors[1];
 
