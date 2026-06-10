@@ -967,11 +967,19 @@ struct VoxelManifoldReducer
     sample_count = 0u;
   }
 
-  [mutating] void add(daxa_f32vec3 p, daxa_f32 pe, daxa_f32vec3 n, daxa_u32 fa, daxa_u32 fb, daxa_f32vec3 center)
+  // Winner per octant: depth quantized to half a voxel, ties broken by LOWEST voxel id.
+  // Raw "deepest wins" churns at rest (many samples sit within depth noise of each other,
+  // so the winning voxel - and with it the warm-start feature id - swapped every step and
+  // blocked sleeping). Quantized depth + id tie-break pins contacts to fixed voxels.
+  [mutating] void add(daxa_f32vec3 p, daxa_f32 pe, daxa_f32vec3 n, daxa_u32 fa, daxa_u32 fb,
+                      daxa_f32vec3 center, daxa_f32 quant)
   {
     daxa_f32vec3 d = p - center;
     daxa_u32 oct = (d.x > 0.0f ? 1u : 0u) | (d.y > 0.0f ? 2u : 0u) | (d.z > 0.0f ? 4u : 0u);
-    if (pe < pen[oct])
+    daxa_i32 nb = daxa_i32(floor(pe / quant));
+    daxa_i32 ob = daxa_i32(floor(pen[oct] / quant));
+    bool empty = pen[oct] >= 0.0f;
+    if (empty || nb < ob || (nb == ob && fa < fp_a[oct]))
     {
       pos[oct] = p; pen[oct] = pe; nrm[oct] = n; fp_a[oct] = fa; fp_b[oct] = fb;
     }
@@ -1033,7 +1041,7 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
     }
     if (pe >= 0.0f) { continue; } // grazing sample: occupied cell but no overlap along n
     pe = max(pe, -vs1);           // clamp runaway depths (deep interior samples)
-    red.add(pw, pe, n_out2, e & 0xFFFFFFu, fb, r1->position);
+    red.add(pw, pe, n_out2, e & 0xFFFFFFu, fb, r1->position, 0.5f * vs1);
     ++found;
   }
   return found;
