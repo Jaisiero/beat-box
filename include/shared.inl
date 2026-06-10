@@ -571,10 +571,33 @@ struct SimConfig
   daxa_u32 manifold_node_count; // atomic add
   daxa_u32 broad_phase_collision_count; // atomic add
   daxa_u32 radix_shift;
-  daxa_u32 graph_color_count;      // graph-coloring: # colors used this frame (validator)
+  daxa_u32 graph_color_count;      // graph-coloring: # colors used this frame (debug/validator)
   daxa_u32 graph_color_violations; // graph-coloring: validator invariant violations (must be 0)
-  daxa_u32 graph_color_overflow;   // graph-coloring: # contacts the per-color dispatches skip; the serial overflow bucket early-outs on 0
+  daxa_u32 graph_color_overflow;   // graph-coloring: # contacts the per-color solver skips (uncolored OR color>=BB_MAX_COLORS_SOLVE)
   daxa_u32 gc_round;               // graph-coloring: current round index (incremented by owner_reset; seeds the fair-arbitration priority)
+  daxa_u32 gc_max_degree;          // graph-coloring DIAG: max colored-degree = max popcount(body_color_mask) over bodies
+  daxa_u32 gc_max_degree_body;     // graph-coloring DIAG: a body index whose mask saturated (popcount>=30)
+  daxa_u32 gc_max_degree_flags;    // graph-coloring DIAG: that body's RigidBodyFlag bits as seen by the validator
+  daxa_u32 gc_satbody_degree;      // graph-coloring DIAG: # manifolds referencing the saturated body (true degree)
+  daxa_u32 gc_satbody_uncolored;   // graph-coloring DIAG: how many of those are uncolored
+  daxa_u32 gc_satbody_pmin;        // graph-coloring DIAG: min partner body index over those manifolds
+  daxa_u32 gc_satbody_pmax;        // graph-coloring DIAG: max partner body index over those manifolds
+  daxa_u32 gc_sat_nanflags;        // graph-coloring DIAG: bit0 pos-NaN, bit1 rot-NaN, bit2 vel-NaN, bit3 omega-NaN, bit4 rot-denormalized
+  daxa_f32 gc_sat_pos_y;           // graph-coloring DIAG: saturated body's position.y (sanity)
+  // ---- velocity-explosion latch DIAG: records the FIRST body whose |v| exceeds the threshold,
+  // tagged with the pipeline stage that first observed it (CAS once, never reset during a run):
+  //   stage 1 = pre-solve probe (validator, after advect)  -> injected outside the solver
+  //   stage 2 = integrate-positions probe (after CS sweep) -> injected by warm-start/CS
+  //   stage 3 = end-of-frame probe (after CSR relax sweep) -> injected by the relax sweep
+  daxa_u32 dbg_ex_stage;
+  daxa_u32 dbg_ex_body;
+  daxa_u32 dbg_ex_frame;
+  daxa_f32 dbg_ex_vel;
+  daxa_f32 dbg_ex_y;
+  daxa_f32 dbg_ex_vy;
+  daxa_u32 dbg_maxv;               // per-frame max |v| over dynamic bodies, integer m/s (reset each frame)
+  daxa_u32 dbg_id_sum;             // per-frame sum of body ids over all rows; constant unless the
+                                   // sort/reorder permutation duplicates one row and drops another
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
@@ -602,6 +625,75 @@ struct SimConfig
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 };
 DAXA_DECL_BUFFER_PTR(SimConfig)
+
+#if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
+// Velocity-explosion latch probe (DIAG). Threshold 50 m/s: settled bodies are ~0 m/s and the
+// initial 7 m drop peaks at ~12 m/s, so anything above is solver-injected energy.
+static const daxa_f32 BB_DBG_EXPLODE_VEL2 = 2500.0f;
+
+// Far-contact latch probe (DIAG), stage 6: fires when a contact point lies further than 100 units
+// from its manifold anchor. Boxes are ~1 unit (floor 100), so a farther point means the edge-edge
+// closest-point solve was ill-conditioned (nearly parallel edges -> denominator ~ sin^2(theta)).
+// Such a lever arm turns a normal warm-start kick into a huge angular impulse.
+static const daxa_f32 BB_DBG_FAR_CONTACT2 = 10000.0f;
+void bb_dbg_far_contact_probe(SimConfig* sc, daxa_u32 obb1, daxa_u32 obb2, daxa_f32vec3 rel, daxa_f32 pen, daxa_f32 normal_y)
+{
+  daxa_f32 r2 = dot(rel, rel);
+  if (r2 > BB_DBG_FAR_CONTACT2)
+  {
+    daxa_u32 prev;
+    InterlockedCompareExchange(sc->dbg_ex_stage, 0u, 6u, prev);
+    if (prev == 0u)
+    {
+      sc->dbg_ex_body = obb1;
+      sc->dbg_ex_frame = daxa_u32(sc->frame_count) | (obb2 << 16);
+      sc->dbg_ex_vel = sqrt(r2); // |contact - anchor|
+      sc->dbg_ex_y = pen;
+      sc->dbg_ex_vy = normal_y;
+    }
+  }
+}
+
+// Accumulated-impulse latch probe (DIAG), stage 4: fires when a warm-started/accumulated contact
+// impulse exceeds the threshold (a settled contact carries ~mass*g*dt/contact ~ 0.2 Ns; thousands
+// means a runaway accumulator). Reuses the same latch slots: body<-obb1, vel<-|impulse|,
+// y<-penetration, vy<-normal.y of the offending contact.
+static const daxa_f32 BB_DBG_EXPLODE_IMPULSE = 2000.0f;
+void bb_dbg_impulse_probe(SimConfig* sc, daxa_u32 stage, daxa_u32 obb1, daxa_u32 obb2, daxa_f32 ni, daxa_f32 pen, daxa_f32 normal_y)
+{
+  if (abs(ni) > BB_DBG_EXPLODE_IMPULSE)
+  {
+    daxa_u32 prev;
+    InterlockedCompareExchange(sc->dbg_ex_stage, 0u, stage, prev);
+    if (prev == 0u)
+    {
+      sc->dbg_ex_body = obb1;
+      sc->dbg_ex_frame = daxa_u32(sc->frame_count) | (obb2 << 16); // pack partner in high bits (frames < 65536 in a run)
+      sc->dbg_ex_vel = ni;
+      sc->dbg_ex_y = pen;
+      sc->dbg_ex_vy = normal_y;
+    }
+  }
+}
+void bb_dbg_velocity_probe(SimConfig* sc, daxa_u32 stage, daxa_u32 body, daxa_f32vec3 v, daxa_f32 y)
+{
+  daxa_f32 v2 = dot(v, v);
+  daxa_u32 prev;
+  InterlockedMax(sc->dbg_maxv, daxa_u32(min(sqrt(v2), 1.0e6f)), prev);
+  if (v2 > BB_DBG_EXPLODE_VEL2)
+  {
+    InterlockedCompareExchange(sc->dbg_ex_stage, 0u, stage, prev);
+    if (prev == 0u) // we are the first observer: record the event context (single writer)
+    {
+      sc->dbg_ex_body = body;
+      sc->dbg_ex_frame = daxa_u32(sc->frame_count);
+      sc->dbg_ex_vel = sqrt(v2);
+      sc->dbg_ex_y = y;
+      sc->dbg_ex_vy = v.y;
+    }
+  }
+}
+#endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 
 static const daxa_u32 RIGID_BODY_DISPATCH_COUNT_OFFSET = 0;
 static const daxa_u32 ISLAND_DISPATCH_COUNT_OFFSET = 1;

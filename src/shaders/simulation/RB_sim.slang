@@ -1085,6 +1085,10 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
         return;
       }
 
+      // DIAG probe stage 2 (after the CS sweep, before positions move): huge |v| first seen here
+      // means warm-start/CS injected it this frame.
+      bb_dbg_velocity_probe(sim_config, 2u, index, r->velocity, r->position.y);
+
       // Integrate positions
       if (sim_config->has_flag(SimFlag::ADVECTION))
       {
@@ -1188,6 +1192,16 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
   daxa::f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
+  // DIAG stage 4: runaway accumulator INHERITED from last frame (warm-start bomb already armed)
+  // DIAG stage 6: contact point absurdly far from the body (ill-conditioned closest-point solve)
+  for (daxa_i32 ci = 0; ci < manifold->contact_count; ++ci)
+  {
+    bb_dbg_impulse_probe(sim_config, 4u, manifold->obb1_index, manifold->obb2_index,
+                         manifold->contacts[ci].normal_impulse, manifold->contacts[ci].penetration, manifold->normal.y);
+    bb_dbg_far_contact_probe(sim_config, manifold->obb1_index, manifold->obb2_index,
+                             manifold->contacts[ci].position - manifold->anchor_a,
+                             manifold->contacts[ci].penetration, manifold->normal.y);
+  }
   if (sim_config->solver_type == SimSolverType::PGS_SOFT)
     PGS_SOFT.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
 }
@@ -1230,6 +1244,10 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  // DIAG stage 5: runaway accumulator BUILT this frame by the CS sweep (seen entering relax)
+  for (daxa_i32 ci = 0; ci < manifold->contact_count; ++ci)
+    bb_dbg_impulse_probe(sim_config, 5u, manifold->obb1_index, manifold->obb2_index,
+                         manifold->contacts[ci].normal_impulse, manifold->contacts[ci].penetration, manifold->normal.y);
   if (sim_config->solver_type == SimSolverType::PGS_SOFT)
     PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
 }
@@ -1413,6 +1431,17 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   RigidBody* rigid_bodies_update = (RigidBody*)(RB_update.task_head.rigid_bodies_update);
   RigidBody* r = &rigid_bodies[index];
   RigidBody* r_copy = &rigid_bodies_update[index];
+
+  // DIAG: row-permutation checksum. Sum of ids over all rows is constant (n*(n-1)/2) unless the
+  // sort/reorder duplicated one body row and dropped another (destroying a body).
+  daxa_u32 _prev;
+  InterlockedAdd(sim_config->dbg_id_sum, r->id, _prev);
+  // DIAG probe stage 3 (end of frame, after the CSR relax sweep).
+  if (r->has_flag(RigidBodyFlag::DYNAMIC))
+  {
+    bb_dbg_velocity_probe(sim_config, 3u, index, r->velocity, r->position.y);
+  }
+
   copy_rigid_body_fields(r_copy, r);
   r_copy->island_index = MAX_U32;
   r_copy->active_index = MAX_U32;
