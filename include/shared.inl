@@ -583,6 +583,7 @@ struct SimConfig
   daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
   daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)
   daxa_u32 avbd_violations;        // AVBD: body-coloring invariant violations (adjacent same color; must be 0)
+  daxa_u32 avbd_stick_count;       // AVBD: # contacts whose sticking anchors were reused this step (diagnostics)
   daxa_u32 gc_max_degree;          // graph-coloring DIAG: max colored-degree = max popcount(body_color_mask) over bodies
   daxa_u32 gc_max_degree_body;     // graph-coloring DIAG: a body index whose mask saturated (popcount>=30)
   daxa_u32 gc_max_degree_flags;    // graph-coloring DIAG: that body's RigidBodyFlag bits as seen by the validator
@@ -773,6 +774,12 @@ static const daxa_f32 BB_AVBD_GAMMA = 0.99f;
 static const daxa_f32 BB_AVBD_PENALTY_MIN = 1.0f;
 static const daxa_f32 BB_AVBD_PENALTY_MAX = 1000000000.0f;
 static const daxa_f32 BB_AVBD_MARGIN = 0.0005f;     // collision margin (avoids flickering contacts)
+static const daxa_f32 BB_AVBD_STICK_THRESH = 0.01f; // max anchor drift to keep static-friction anchors
+static const daxa_f32 BB_AVBD_STICK_SLOP = 0.001f;  // anchor drift deadband: below this no positional
+                                                    // pull-back (keeps the post-stab sweep from micro-
+                                                    // jittering resting piles, which blocks sleeping;
+                                                    // measured optimum: 0 -> sleeps 870, 1mm -> 920,
+                                                    // 2mm -> 820 of 1024 at rest)
 static const daxa_u32 BB_AVBD_ITERATIONS = 10;      // main sweeps (+1 post-stabilization sweep)
 static const daxa_u32 BB_AVBD_COLOR_ROUNDS = 16;    // Jones-Plassmann body-coloring rounds
 static const daxa_u32 BB_AVBD_MAX_BODY_COLORS = 32; // primal dispatches per sweep (empty = no-op)

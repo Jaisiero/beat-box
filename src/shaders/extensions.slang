@@ -50,6 +50,9 @@ void copy_contact_fields(Contact* dst, Contact* src)
   dst->normal_mass = src->normal_mass;
   dst->tangent_mass[0] = src->tangent_mass[0];
   dst->tangent_mass[1] = src->tangent_mass[1];
+  dst->anchor_a = src->anchor_a;
+  dst->anchor_b = src->anchor_b;
+  dst->stick = src->stick;
   dst->fp.in_reference = src->fp.in_reference;
   dst->fp.out_reference = src->fp.out_reference;
   dst->fp.in_incident = src->fp.in_incident;
@@ -70,6 +73,9 @@ void write_contact_fields_from_value(Contact* dst, Contact src)
   dst->normal_mass = src.normal_mass;
   dst->tangent_mass[0] = src.tangent_mass[0];
   dst->tangent_mass[1] = src.tangent_mass[1];
+  dst->anchor_a = src.anchor_a;
+  dst->anchor_b = src.anchor_b;
+  dst->stick = src.stick;
   dst->fp.in_reference = src.fp.in_reference;
   dst->fp.out_reference = src.fp.out_reference;
   dst->fp.in_incident = src.fp.in_incident;
@@ -319,6 +325,14 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
             contacts[i].mass_coefficient = old_contact->mass_coefficient;
             contacts[i].tangent_mass[0] = old_contact->tangent_mass[0];
             contacts[i].tangent_mass[1] = old_contact->tangent_mass[1];
+            // AVBD sticking (reference initialize()): if the contact was sticking last step,
+            // keep its anchored contact points for true static friction
+            contacts[i].stick = old_contact->stick;
+            if (old_contact->stick != 0u)
+            {
+              contacts[i].anchor_a = old_contact->anchor_a;
+              contacts[i].anchor_b = old_contact->anchor_b;
+            }
 
             contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
           break;

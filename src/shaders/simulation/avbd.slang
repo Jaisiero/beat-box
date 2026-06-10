@@ -69,6 +69,10 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
     return;
   }
   daxa_u32 i = compute_i.x;
+  if (i == 0u)
+  {
+    sim_config->avbd_stick_count = 0u; // re-accumulated by the warm-start dispatch
+  }
   if (i >= sim_config->rigid_body_count)
   {
     return;
@@ -212,27 +216,52 @@ daxa_f32 avbd_contact_C(Manifold* m, daxa_u32 j, RigidBody* r1, RigidBody* r2,
   return C;
 }
 
-// F4 friction: tangential constraint row along direction d using the SAME arms as the
-// normal row (reference manifold.cpp rows i*2+1). C0_t is exactly 0 here because both
-// arms derive from the one clipped contact point (no sticking anchors yet), so the row
-// is alpha-invariant: it measures the tangential slide accumulated during this step.
-daxa_f32 avbd_dir_C(daxa_f32vec3 d, daxa_f32vec3 rr1, daxa_f32vec3 rr2,
+// rotate a vector by a quaternion: v' = u + 2*qv x (qv x u + w*u)
+daxa_f32vec3 avbd_q_rotate(Quaternion q, daxa_f32vec3 u)
+{
+  return u + 2.0f * cross(q.v, cross(q.v, u) + q.w * u);
+}
+
+// F4 friction: tangential constraint row along direction d (reference manifold.cpp rows
+// i*2+1) with sticking anchors. The arms come from the per-contact anchors (Contact::
+// anchor_a/anchor_b, local space): freshly re-anchored every step while slipping (then
+// C0_t = 0 and the row measures only this step's slide), but REUSED while the contact
+// sticks — then C0_t is the total tangential drift since anchoring and the row becomes a
+// positional spring back to the anchor, up to the Coulomb bound (true static friction).
+// C0_t enters with (1 - stab_alpha) like the normal row: invisible to the dynamics in the
+// main sweeps, corrected positionally by the post-stabilization sweep (no momentum).
+daxa_f32 avbd_dir_C(daxa_f32vec3 d, Manifold* m, daxa_u32 j,
                     RigidBody* r1, RigidBody* r2,
                     AvbdBodyState* s1, AvbdBodyState* s2,
-                    bool dyn1, bool dyn2)
+                    bool dyn1, bool dyn2, daxa_f32 stab_alpha,
+                    out daxa_f32vec3 ar1, out daxa_f32vec3 ar2, out daxa_f32 C0t)
 {
-  daxa_f32 C = 0.0f;
+  // step-start poses (statics: current pose == start pose)
+  daxa_f32vec3 c1 = dyn1 ? s1->pos_start : r1->position;
+  daxa_f32vec3 c2 = dyn2 ? s2->pos_start : r2->position;
+  Quaternion q1 = dyn1 ? Quaternion(s1->rot_start.v, s1->rot_start.w) : Quaternion(r1->rotation.v, r1->rotation.w);
+  Quaternion q2 = dyn2 ? Quaternion(s2->rot_start.v, s2->rot_start.w) : Quaternion(r2->rotation.v, r2->rotation.w);
+  // world arms of the anchored contact points at step start
+  ar1 = avbd_q_rotate(q1, m->contacts[j].anchor_a);
+  ar2 = avbd_q_rotate(q2, m->contacts[j].anchor_b);
+  // pre-existing tangential drift between the anchors (C grows when body2 leads along +d).
+  // The positional pull-back only acts on the drift beyond a small slop: a deadband that
+  // keeps the post-stabilization sweep from perpetually micro-correcting compressed pile
+  // contacts (sub-mm jitter that vetoes sleeping). Drift stays bounded by the slop.
+  C0t = dot(d, (c2 + ar2) - (c1 + ar1));
+  daxa_f32 c0_eff = sign(C0t) * max(0.0f, abs(C0t) - BB_AVBD_STICK_SLOP);
+  daxa_f32 C = c0_eff * (1.0f - stab_alpha);
   if (dyn1)
   {
     daxa_f32vec3 dp1 = r1->position - s1->pos_start;
     daxa_f32vec3 dth1 = avbd_small_angle_delta(r1->rotation, s1->rot_start);
-    C -= dot(d, dp1 + cross(dth1, rr1));
+    C -= dot(d, dp1 + cross(dth1, ar1));
   }
   if (dyn2)
   {
     daxa_f32vec3 dp2 = r2->position - s2->pos_start;
     daxa_f32vec3 dth2 = avbd_small_angle_delta(r2->rotation, s2->rot_start);
-    C += dot(d, dp2 + cross(dth2, rr2));
+    C += dot(d, dp2 + cross(dth2, ar2));
   }
   return C;
 }
@@ -332,6 +361,25 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
     return;
   }
   Manifold* m = &((Manifold*)(AVBD_PC.task_head.collisions))[m_idx];
+  daxa_u32 b1 = m->obb1_index;
+  daxa_u32 b2 = m->obb2_index;
+  if (b1 >= sim_config->rigid_body_count || b2 >= sim_config->rigid_body_count || b1 == b2)
+  {
+    return;
+  }
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
+  RigidBody* r1 = &rigid_bodies[b1];
+  RigidBody* r2 = &rigid_bodies[b2];
+  bool dyn1 = avbd_is_dynamic(r1) && (r1->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE;
+  bool dyn2 = avbd_is_dynamic(r2) && (r2->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE;
+  // step-start poses for the anchor local frames (prepare already jumped the bodies to the
+  // warmstarted pose, so dynamics read pos/rot_start from avbd_state; statics never move)
+  daxa_f32vec3 c1 = dyn1 ? states[b1].pos_start : r1->position;
+  daxa_f32vec3 c2 = dyn2 ? states[b2].pos_start : r2->position;
+  Quaternion q1c = dyn1 ? Quaternion(-states[b1].rot_start.v, states[b1].rot_start.w) : Quaternion(-r1->rotation.v, r1->rotation.w);
+  Quaternion q2c = dyn2 ? Quaternion(-states[b2].rot_start.v, states[b2].rot_start.w) : Quaternion(-r2->rotation.v, r2->rotation.w);
+
   daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
   for (daxa_u32 j = 0u; j < cc; ++j)
   {
@@ -345,6 +393,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
       m->contacts[j].tangent_impulse[1] = 0.0f;
       m->contacts[j].tangent_mass[0] = BB_AVBD_PENALTY_MIN;
       m->contacts[j].tangent_mass[1] = BB_AVBD_PENALTY_MIN;
+      m->contacts[j].stick = 0u;
     }
     else
     {
@@ -363,6 +412,21 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
         daxa_f32 kt = m->contacts[j].tangent_mass[t];
         m->contacts[j].tangent_mass[t] = clamp(kt * BB_AVBD_GAMMA, BB_AVBD_PENALTY_MIN, BB_AVBD_PENALTY_MAX);
       }
+    }
+    // anchor maintenance (reference initialize()): sticking contacts arrived here with their
+    // old anchors (update_from_old reused them); everything else re-anchors at the fresh
+    // clipped point, expressed in each body's step-start local frame
+    bool sticking = matched && m->contacts[j].stick != 0u;
+    if (!sticking)
+    {
+      daxa_f32vec3 p = m->contacts[j].position;
+      m->contacts[j].anchor_a = avbd_q_rotate(q1c, p - c1);
+      m->contacts[j].anchor_b = avbd_q_rotate(q2c, p - c2);
+    }
+    if (sticking)
+    {
+      daxa_u32 prevd;
+      InterlockedAdd(sim_config->avbd_stick_count, 1u, prevd);
     }
   }
 }
@@ -484,18 +548,21 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
             for (daxa_u32 b = 0u; b < 6u; ++b) { H[a][b] += k * J[a] * J[b]; }
           }
           // friction rows: box-bounded tangent forces, bounds refreshed from the LATEST
-          // normal lambda (reference updates fmin/fmax in every computeConstraint call)
+          // normal lambda (reference updates fmin/fmax in every computeConstraint call);
+          // arms come from the sticking anchors (== the clip point while slipping)
           daxa_f32 bound = mu * abs(lam);
           [unroll]
           for (daxa_u32 t = 0u; t < 2u; ++t)
           {
             daxa_f32vec3 td = m->tangent_vectors[t];
-            daxa_f32 Ct = avbd_dir_C(td, rr1, rr2, r1, r2, s1, s2, dyn1, dyn2);
+            daxa_f32vec3 ar1, ar2;
+            daxa_f32 C0t;
+            daxa_f32 Ct = avbd_dir_C(td, m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, ar1, ar2, C0t);
             daxa_f32 lam_t = m->contacts[j].tangent_impulse[t];
             daxa_f32 kt = m->contacts[j].tangent_mass[t];
             daxa_f32 ft = clamp(kt * Ct + lam_t, -bound, bound);
             daxa_f32vec3 Jlt = i_is_1 ? -td : td;
-            daxa_f32vec3 Jat = i_is_1 ? -cross(rr1, td) : cross(rr2, td);
+            daxa_f32vec3 Jat = i_is_1 ? -cross(ar1, td) : cross(ar2, td);
             g[0] += ft * Jlt.x; g[1] += ft * Jlt.y; g[2] += ft * Jlt.z;
             g[3] += ft * Jat.x; g[4] += ft * Jat.y; g[5] += ft * Jat.z;
             daxa_f32 Jt[6] = { Jlt.x, Jlt.y, Jlt.z, Jat.x, Jat.y, Jat.z };
@@ -588,11 +655,15 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
     // friction rows: bounds from the ENTRY normal lambda (the reference recomputes
     // fmin/fmax in computeConstraint BEFORE this dual pass touches the rows)
     daxa_f32 bound = mu * abs(lam);
+    bool stick_ok = true;
+    daxa_f32 drift2 = 0.0f;
     [unroll]
     for (daxa_u32 t = 0u; t < 2u; ++t)
     {
       daxa_f32vec3 td = m->tangent_vectors[t];
-      daxa_f32 Ct = avbd_dir_C(td, rr1, rr2, r1, r2, &states[b1], &states[b2], dyn1, dyn2);
+      daxa_f32vec3 ar1, ar2;
+      daxa_f32 C0t;
+      daxa_f32 Ct = avbd_dir_C(td, m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, ar1, ar2, C0t);
       daxa_f32 lam_t = m->contacts[j].tangent_impulse[t];
       daxa_f32 kt = m->contacts[j].tangent_mass[t];
       daxa_f32 new_lam_t = clamp(kt * Ct + lam_t, -bound, bound);
@@ -601,7 +672,15 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
       {
         m->contacts[j].tangent_mass[t] = min(kt + BB_AVBD_BETA * abs(Ct), BB_AVBD_PENALTY_MAX);
       }
+      else
+      {
+        stick_ok = false; // friction saturated -> kinetic regime
+      }
+      drift2 += C0t * C0t;
     }
+    // stick determination (reference computeConstraint, re-evaluated every dual iteration;
+    // the last one decides whether the next step reuses the anchors)
+    m->contacts[j].stick = (stick_ok && drift2 < BB_AVBD_STICK_THRESH * BB_AVBD_STICK_THRESH) ? 1u : 0u;
   }
 }
 

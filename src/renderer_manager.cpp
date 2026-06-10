@@ -286,6 +286,7 @@ void RendererManager::render()
           std::cout << "[PERF] manifolds=" << sc.g_c_info.collision_count
                     << " sleeping=" << sc.sleeping_count
                     << " avbdc=" << sc.avbd_color_count << " avbdv=" << sc.avbd_violations
+                    << " astick=" << sc.avbd_stick_count
                     << " colors=" << sc.graph_color_count << " violations=" << sc.graph_color_violations
                     << " overflow=" << sc.graph_color_overflow
                     << " maxdeg=" << sc.gc_max_degree

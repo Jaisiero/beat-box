@@ -443,6 +443,12 @@ struct Contact {
   daxa_f32 mass_coefficient;
   daxa_f32 normal_mass;
   daxa_f32 tangent_mass[2];
+  // AVBD sticking (reference Contact::rA/rB + stick): the contact point at anchor time in
+  // each body's LOCAL frame. While stick != 0 the manifold update reuses these anchors, so
+  // the friction rows measure total drift since anchoring (static friction without creep).
+  daxa_f32vec3 anchor_a;
+  daxa_f32vec3 anchor_b;
+  daxa_u32 stick;
   FeaturePair fp;
   daxa_u32 warm_start;
 };
