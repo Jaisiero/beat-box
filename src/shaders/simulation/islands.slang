@@ -438,8 +438,10 @@ private
       return;
     }
     // write contact island inside range in atomic counter from island
+    // (key inits to MAX_U32 = "no color"; manifold_link_to_island lowers it to the island's
+    //  min dynamic body id so the RT island view gets a frame-stable color without the SMLI sort)
     daxa_u32 contact_island_index = old_count;
-    contact_islands[contact_island_index] = ContactIsland(MAX_U64, island_index, MAX_U32, manifold_count, 0);
+    contact_islands[contact_island_index] = ContactIsland(MAX_U32, island_index, MAX_U32, manifold_count, 0);
     islands[island_index].contact_island_index = contact_island_index;
   }
 
@@ -488,7 +490,7 @@ private
   }
 
   daxa::u32 manifold_link_to_island(daxa_u32 manifold_index, daxa_u32 body_a_index,
-                               daxa_u32 body_b_index)
+                               daxa_u32 body_b_index, daxa_u32 stable_key)
   {
     daxa_u32 min_index = min(body_a_index, body_b_index);
 
@@ -508,7 +510,12 @@ private
       daxa_u32 safe_contact_island_count = min(*contact_island_count, BB_MAX_RIGID_BODY_COUNT);
       if(contact_island_index >= safe_contact_island_count)
         return manifold_link_index;
-      
+
+      // stable per-island color key for the RT island view: min persistent dynamic body id.
+      // The SMLI sort that used to fill .key is disabled (too expensive), so write it here.
+      daxa_u32 prev_key;
+      InterlockedMin(contact_islands[contact_island_index].key, stable_key, prev_key);
+
       daxa_u32 old_count = 0;
       InterlockedAdd(contact_islands[contact_island_index].count, 1, old_count);
       if(old_count >= contact_islands[contact_island_index].max_count)

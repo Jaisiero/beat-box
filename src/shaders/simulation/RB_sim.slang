@@ -875,7 +875,15 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 
       ContactIslandBuilder builder = ContactIslandBuilder(sim_config->active_rigid_body_count, body_links, sim_config->island_count, islands, &sim_config->contact_island_count, contact_islands, collision_count, manifold_links);
 
-      let manifold_index = builder.manifold_link_to_island(index, a_active_body_index, b_active_body_index);
+      // stable island color key: min persistent id among the manifold's DYNAMIC bodies
+      // (statics excluded — the floor would otherwise give every island the same color)
+      RigidBody* ra = &rigid_bodies[body_a_index];
+      RigidBody* rb = &rigid_bodies[body_b_index];
+      daxa_u32 id_a = ((ra->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE) ? ra->id : MAX_U32;
+      daxa_u32 id_b = ((rb->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE) ? rb->id : MAX_U32;
+      daxa_u32 stable_key = min(id_a, id_b);
+
+      let manifold_index = builder.manifold_link_to_island(index, a_active_body_index, b_active_body_index, stable_key);
 
       if(manifold_index != MAX_U32) {
         copy_manifold_fields(&collision_sorted[manifold_index], m);
@@ -1384,7 +1392,9 @@ const static daxa::f32 LINE_SIZE = 0.5f;
       daxa_u32 gc = manifold_color[compute_i.x];
       if (gc < BB_MAX_COLORS)
       {
-        daxa::f32 h = (daxa::f32)gc / (daxa::f32)BB_MAX_COLORS * 6.0f; // distinct hue per color
+        // golden-ratio hue scramble: adjacent graph colors land far apart on the hue wheel,
+        // so the ~8 colors actually used stay clearly distinguishable
+        daxa::f32 h = frac((daxa::f32)gc * 0.6180339887f) * 6.0f;
         gcol = clamp(daxa::f32vec3(abs(h - 3.0f) - 1.0f, 2.0f - abs(h - 2.0f), 2.0f - abs(h - 4.0f)), 0.0f, 1.0f);
       }
     }

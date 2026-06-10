@@ -185,6 +185,25 @@ struct StatusManager
     }
   }
 
+  bool is_graph_color_debug()
+  {
+    return graph_color_debug;
+  }
+
+  // tint debug contact points by graph color (vs warm-start red/blue); needs the GUI overlay (TAB)
+  void switch_graph_color_debug()
+  {
+    graph_color_debug = !graph_color_debug;
+    if(graph_color_debug)
+    {
+      rigid_body_manager->set_sim_flags(SimFlag::DEBUG_GRAPH_COLORS);
+    }
+    else
+    {
+      rigid_body_manager->clear_sim_flags(SimFlag::DEBUG_GRAPH_COLORS);
+    }
+  }
+
   bool is_advection()
   {
     return advection;
@@ -328,6 +347,8 @@ private:
   bool advection = true;
   // flag for warm starting
   bool warm_starting = true;
+  // flag for graph-color contact debug tint
+  bool graph_color_debug = false;
   // flag for accumulation
   bool accumulation = false;
   // flag for showing islands
