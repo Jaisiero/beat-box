@@ -46,9 +46,13 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_GCP1 = task_manager->create_compute(GraphColorAssignP1Info{}.info);
     pipeline_GCP2 = task_manager->create_compute(GraphColorAssignP2Info{}.info);
     pipeline_GCV = task_manager->create_compute(GraphColorValidateInfo{}.info);
+    pipeline_GCV2 = task_manager->create_compute(GraphColorValidate2Info{}.info);
     pipeline_GCS_CPS = task_manager->create_compute(GraphColorPreSolverInfo{}.info);
     pipeline_GCS_CS = task_manager->create_compute(GraphColorSolverInfo{}.info);
     pipeline_GCS_CSR = task_manager->create_compute(GraphColorRelaxInfo{}.info);
+    pipeline_GCS_CPS_OV = task_manager->create_compute(GraphColorPreSolverOverflowInfo{}.info);
+    pipeline_GCS_CS_OV = task_manager->create_compute(GraphColorSolverOverflowInfo{}.info);
+    pipeline_GCS_CSR_OV = task_manager->create_compute(GraphColorRelaxOverflowInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
     update_pipeline = task_manager->create_compute(UpdateRigidBodies{}.info);
   }
@@ -992,7 +996,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
 
   // ---- graph coloring tasks (Phase 2: color + validate, coexisting with the island solver) ----
-  static const daxa_u32 GRAPH_COLOR_MAX_ROUNDS = 8u;
+  // Contacts are an EDGE coloring: colors needed ~= max body degree (Vizing), and one round commits at
+  // most one contact per (body,color), so rounds needed ~= max degree too. Transient pile-compression
+  // spikes reach degree ~24-30, so run the full mask capacity; converged frames early-out per thread.
+  static const daxa_u32 GRAPH_COLOR_MAX_ROUNDS = BB_MAX_COLORS;
 
   auto user_callback_GCD = [this](daxa::TaskInterface ti, auto &)
   {
@@ -1045,8 +1052,12 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_GCV = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCV)>;
   TTask_GCV task_GCV(gc_views, user_callback_GCV);
 
+  auto user_callback_GCV2 = [this, gc_dispatch](daxa::TaskInterface ti, auto &) { gc_dispatch(ti, pipeline_GCV2); };
+  using TTask_GCV2 = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCV2)>;
+  TTask_GCV2 task_GCV2(gc_views, user_callback_GCV2);
+
   // ---- per-color solver tasks (Phase 3): one dispatch per color, each filters manifold_color==color ----
-  static const daxa_u32 MAX_COLORS_SOLVE = 16u; // colors above this fall to the island/overflow path; empty colors are cheap no-ops
+  static const daxa_u32 MAX_COLORS_SOLVE = BB_MAX_COLORS_SOLVE; // shared.inl: per-color solver dispatch count; empty colors are cheap no-ops
   auto gc_solve_views = std::array{
       daxa::attachment_view(GraphColorSolveTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
       daxa::attachment_view(GraphColorSolveTaskHead::AT.sim_config, task_sim_config),
@@ -1073,6 +1084,21 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     task_GCS_CS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CS, c));
     task_GCS_CSR_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CSR, c));
   }
+
+  // overflow bucket: serial single-thread solve of manifolds the per-color dispatches skip
+  // (uncolored / color>=MAX_COLORS_SOLVE). Early-outs on graph_color_overflow==0, so it is
+  // free except on degenerate frames.
+  auto make_gcs_ov = [this](std::shared_ptr<daxa::ComputePipeline> pl) {
+    return [this, pl](daxa::TaskInterface ti, auto &) {
+      ti.recorder.set_pipeline(*pl);
+      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = 0u});
+      ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+    };
+  };
+  using TTask_GCS_OV = TaskTemplate<GraphColorSolveTaskHead::Task, decltype(make_gcs_ov(pipeline_GCS_CS_OV))>;
+  TTask_GCS_OV task_GCS_CPS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CPS_OV));
+  TTask_GCS_OV task_GCS_CS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CS_OV));
+  TTask_GCS_OV task_GCS_CSR_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CSR_OV));
 
   RB_TG.add_task(task_RC);
   RB_TG.add_task(task_CRB);
@@ -1106,6 +1132,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   }
   RB_TG.add_task(task_GCOR); // reset owner-as-seen for the validator
   RB_TG.add_task(task_GCV);
+  RB_TG.add_task(task_GCV2); // TEMP diag: satbody degree/partners
   RB_TG.add_task(task_IC);
   RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_ID);
@@ -1124,15 +1151,23 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   if (static_cast<daxa_u32>(sim_flags & SimFlag::USE_GRAPH_COLORING) != 0u)
   {
     // per-color solve (parallel: one dispatch per color, balanced, no atomics)
+    // + serial overflow bucket after each sweep (uncolored / color>=MAX_COLORS_SOLVE manifolds)
     for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
       RB_TG.add_task(task_GCS_CPS_vec[c]);
+    RB_TG.add_task(task_GCS_CPS_OV);
     for (auto i = 0u; i < iteration_count; ++i)
+    {
       for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
         RB_TG.add_task(task_GCS_CS_vec[c]);
+      RB_TG.add_task(task_GCS_CS_OV);
+    }
     RB_TG.add_task(task_IP);
     for (auto i = 0u; i < iteration_count; ++i)
+    {
       for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
         RB_TG.add_task(task_GCS_CSR_vec[c]);
+      RB_TG.add_task(task_GCS_CSR_OV);
+    }
   }
   else
   {

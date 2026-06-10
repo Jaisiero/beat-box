@@ -425,6 +425,8 @@ const auto entry_graph_color_assign_p2 = "entry_graph_color_assign_p2";
 const auto graph_color_assign_p2_pipeline_name = "Graph Color Assign P2";
 const auto entry_graph_color_validate = "entry_graph_color_validate";
 const auto graph_color_validate_pipeline_name = "Graph Color Validate";
+const auto entry_graph_color_validate2 = "entry_graph_color_validate2";
+const auto graph_color_validate2_pipeline_name = "Graph Color Validate2 (satbody diag)";
 // per-color solver passes (entries live in RB_sim.slang)
 const auto entry_collision_pre_solver_color = "entry_collision_pre_solver_color";
 const auto graph_color_pre_solver_pipeline_name = "Graph Color Pre Solver";
@@ -432,6 +434,13 @@ const auto entry_collision_solver_color = "entry_collision_solver_color";
 const auto graph_color_solver_pipeline_name = "Graph Color Solver";
 const auto entry_collision_solver_relax_color = "entry_collision_solver_relax_color";
 const auto graph_color_relax_pipeline_name = "Graph Color Solver Relax";
+// overflow bucket (serial; solves manifolds the per-color dispatches skip)
+const auto entry_collision_pre_solver_overflow = "entry_collision_pre_solver_overflow";
+const auto graph_color_pre_solver_overflow_pipeline_name = "Graph Color Pre Solver Overflow";
+const auto entry_collision_solver_overflow = "entry_collision_solver_overflow";
+const auto graph_color_solver_overflow_pipeline_name = "Graph Color Solver Overflow";
+const auto entry_collision_solver_relax_overflow = "entry_collision_solver_relax_overflow";
+const auto graph_color_relax_overflow_pipeline_name = "Graph Color Solver Relax Overflow";
 
 // rigid body dispatcher
 const auto entry_rigid_body_dispatcher = "entry_rigid_body_dispatcher";
@@ -1006,6 +1015,17 @@ struct GraphColorValidateInfo {
       .name = graph_color_validate_pipeline_name,
   };
 };
+struct GraphColorValidate2Info {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_graph_color_validate2, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorPushConstants),
+      .name = graph_color_validate2_pipeline_name,
+  };
+};
 // per-color solver pipelines (entries in RB_sim.slang; share GraphColorSolvePushConstants)
 struct GraphColorPreSolverInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
@@ -1038,6 +1058,40 @@ struct GraphColorRelaxInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(GraphColorSolvePushConstants),
       .name = graph_color_relax_pipeline_name,
+  };
+};
+// overflow bucket: single-thread serial solve of manifolds the per-color dispatches skip
+struct GraphColorPreSolverOverflowInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = { .entry_point = entry_collision_pre_solver_overflow, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorSolvePushConstants),
+      .name = graph_color_pre_solver_overflow_pipeline_name,
+  };
+};
+struct GraphColorSolverOverflowInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = { .entry_point = entry_collision_solver_overflow, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorSolvePushConstants),
+      .name = graph_color_solver_overflow_pipeline_name,
+  };
+};
+struct GraphColorRelaxOverflowInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = { .entry_point = entry_collision_solver_relax_overflow, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(GraphColorSolvePushConstants),
+      .name = graph_color_relax_overflow_pipeline_name,
   };
 };
 
