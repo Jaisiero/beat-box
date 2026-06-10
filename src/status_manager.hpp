@@ -315,7 +315,7 @@ private:
   // flag for initialization
   bool initialized = false;
   // flag for simulation
-  bool simulating = true; // TEMP phase-1 measurement
+  bool simulating = false;
   // update simulation buffer
   bool update_sim_buffer = false;
   // flag for gui

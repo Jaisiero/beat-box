@@ -46,7 +46,6 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_GCP1 = task_manager->create_compute(GraphColorAssignP1Info{}.info);
     pipeline_GCP2 = task_manager->create_compute(GraphColorAssignP2Info{}.info);
     pipeline_GCV = task_manager->create_compute(GraphColorValidateInfo{}.info);
-    pipeline_GCV2 = task_manager->create_compute(GraphColorValidate2Info{}.info);
     pipeline_GCS_CPS = task_manager->create_compute(GraphColorPreSolverInfo{}.info);
     pipeline_GCS_CS = task_manager->create_compute(GraphColorSolverInfo{}.info);
     pipeline_GCS_CSR = task_manager->create_compute(GraphColorRelaxInfo{}.info);
@@ -1052,10 +1051,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_GCV = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCV)>;
   TTask_GCV task_GCV(gc_views, user_callback_GCV);
 
-  auto user_callback_GCV2 = [this, gc_dispatch](daxa::TaskInterface ti, auto &) { gc_dispatch(ti, pipeline_GCV2); };
-  using TTask_GCV2 = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCV2)>;
-  TTask_GCV2 task_GCV2(gc_views, user_callback_GCV2);
-
   // ---- per-color solver tasks (Phase 3): one dispatch per color, each filters manifold_color==color ----
   static const daxa_u32 MAX_COLORS_SOLVE = BB_MAX_COLORS_SOLVE; // shared.inl: per-color solver dispatch count; empty colors are cheap no-ops
   auto gc_solve_views = std::array{
@@ -1132,7 +1127,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   }
   RB_TG.add_task(task_GCOR); // reset owner-as-seen for the validator
   RB_TG.add_task(task_GCV);
-  RB_TG.add_task(task_GCV2); // TEMP diag: satbody degree/partners
   RB_TG.add_task(task_IC);
   RB_TG.add_task(task_CS_dispatcher);
   RB_TG.add_task(task_ID);

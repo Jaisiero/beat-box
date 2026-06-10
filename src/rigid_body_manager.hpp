@@ -133,7 +133,6 @@ private:
   | SimFlag::FRICTION
   | SimFlag::ACCUM_IMPULSE
   | SimFlag::WARM_STARTING
-  | SimFlag::DEBUG_GRAPH_COLORS
   | SimFlag::USE_GRAPH_COLORING
   ;
   // simulating flag update 
@@ -178,7 +177,6 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCP1; // assign phase 1
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCP2; // assign phase 2
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCV;  // validate
-  std::shared_ptr<daxa::ComputePipeline> pipeline_GCV2; // validate2 (satbody diag, TEMP)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CPS; // per-color pre-solver
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CS;  // per-color solver
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CSR; // per-color relax

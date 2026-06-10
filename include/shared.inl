@@ -571,19 +571,10 @@ struct SimConfig
   daxa_u32 manifold_node_count; // atomic add
   daxa_u32 broad_phase_collision_count; // atomic add
   daxa_u32 radix_shift;
-  daxa_u32 graph_color_count;      // graph-coloring: # colors used this frame (debug/validator)
+  daxa_u32 graph_color_count;      // graph-coloring: # colors used this frame (validator)
   daxa_u32 graph_color_violations; // graph-coloring: validator invariant violations (must be 0)
-  daxa_u32 graph_color_overflow;   // graph-coloring: # contacts the per-color solver skips (uncolored OR color>=BB_MAX_COLORS_SOLVE)
+  daxa_u32 graph_color_overflow;   // graph-coloring: # contacts the per-color dispatches skip; the serial overflow bucket early-outs on 0
   daxa_u32 gc_round;               // graph-coloring: current round index (incremented by owner_reset; seeds the fair-arbitration priority)
-  daxa_u32 gc_max_degree;          // graph-coloring DIAG: max colored-degree = max popcount(body_color_mask) over bodies
-  daxa_u32 gc_max_degree_body;     // graph-coloring DIAG: a body index whose mask saturated (popcount>=30)
-  daxa_u32 gc_max_degree_flags;    // graph-coloring DIAG: that body's RigidBodyFlag bits as seen by the validator
-  daxa_u32 gc_satbody_degree;      // graph-coloring DIAG: # manifolds referencing the saturated body (true degree)
-  daxa_u32 gc_satbody_uncolored;   // graph-coloring DIAG: how many of those are uncolored
-  daxa_u32 gc_satbody_pmin;        // graph-coloring DIAG: min partner body index over those manifolds
-  daxa_u32 gc_satbody_pmax;        // graph-coloring DIAG: max partner body index over those manifolds
-  daxa_u32 gc_sat_nanflags;        // graph-coloring DIAG: bit0 pos-NaN, bit1 rot-NaN, bit2 vel-NaN, bit3 omega-NaN, bit4 rot-denormalized
-  daxa_f32 gc_sat_pos_y;           // graph-coloring DIAG: saturated body's position.y (sanity)
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;

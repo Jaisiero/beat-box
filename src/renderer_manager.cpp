@@ -213,7 +213,6 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
 
 void RendererManager::render()
 {
-  double _sim_ms_accum = 0.0; daxa_u64 _sim_ms_n = 0;   // [PERF] isolated sim timing
   while (!window.should_close())
   {
     // Update the GUI
@@ -226,13 +225,7 @@ void RendererManager::render()
 
     // Simulate rigid bodies
     if(status_manager->is_simulating()) {
-      gpu->synchronize();                                          // [PERF] flush prior GPU work
-      auto _s0 = std::chrono::high_resolution_clock::now();        // [PERF]
       rigid_body_manager->simulate();
-      gpu->synchronize();                                          // [PERF] wait sim GPU completion
-      _sim_ms_accum += std::chrono::duration<double, std::milli>(
-        std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
-      _sim_ms_n++;                                                 // [PERF]
     }
 
     if (!window.update())
@@ -241,23 +234,6 @@ void RendererManager::render()
     // Update the acceleration structures
     if(status_manager->is_simulating() || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
-      { static daxa_u64 _cf = 0; static auto _t0 = std::chrono::high_resolution_clock::now();
-        if ((++_cf % 30) == 0) {
-          auto _t1 = std::chrono::high_resolution_clock::now();
-          double _ms = std::chrono::duration<double, std::milli>(_t1 - _t0).count() / 30.0; _t0 = _t1;
-          double _sim_ms = _sim_ms_n ? (_sim_ms_accum / (double)_sim_ms_n) : 0.0;   // [PERF]
-          _sim_ms_accum = 0.0; _sim_ms_n = 0;                                        // [PERF]
-          auto const &sc = rigid_body_manager->get_sim_config_reference();
-          std::cout << "[PERF] manifolds=" << sc.g_c_info.collision_count
-                    << " colors=" << sc.graph_color_count << " violations=" << sc.graph_color_violations
-                    << " overflow=" << sc.graph_color_overflow
-                    << " maxdeg=" << sc.gc_max_degree
-                    << " satbody=" << sc.gc_max_degree_body << " satflags=" << sc.gc_max_degree_flags
-                    << " satdeg=" << sc.gc_satbody_degree << " satunc=" << sc.gc_satbody_uncolored
-                    << " p=[" << sc.gc_satbody_pmin << "," << sc.gc_satbody_pmax << "]"
-                    << " nan=" << sc.gc_sat_nanflags << " y=" << sc.gc_sat_pos_y
-                    << " | frame=" << _ms << " ms (" << (1000.0 / _ms) << " fps)"
-                    << "  sim=" << _sim_ms << " ms" << std::endl; } }
       // TODO: change for wait compute queue
       gpu->synchronize();
       if(status_manager->is_updating()) {
