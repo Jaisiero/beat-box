@@ -54,6 +54,7 @@ BB_DAXA_TASK_ALIAS(UpdateInstancesTaskHead)
 BB_DAXA_TASK_ALIAS(CreatePointsTaskHead)
 BB_DAXA_TASK_ALIAS(GraphColorTaskHead)
 BB_DAXA_TASK_ALIAS(GraphColorSolveTaskHead)
+BB_DAXA_TASK_ALIAS(SleepTaskHead)
 #undef BB_DAXA_TASK_ALIAS
 
 namespace daxa
@@ -434,6 +435,13 @@ const auto entry_collision_solver_color = "entry_collision_solver_color";
 const auto graph_color_solver_pipeline_name = "Graph Color Solver";
 const auto entry_collision_solver_relax_color = "entry_collision_solver_relax_color";
 const auto graph_color_relax_pipeline_name = "Graph Color Solver Relax";
+// island sleeping (entries in RB_sim.slang)
+const auto entry_sleep_reduce = "entry_sleep_reduce";
+const auto sleep_reduce_pipeline_name = "Sleep Reduce";
+const auto entry_sleep_veto = "entry_sleep_veto";
+const auto sleep_veto_pipeline_name = "Sleep Veto";
+const auto entry_sleep_apply = "entry_sleep_apply";
+const auto sleep_apply_pipeline_name = "Sleep Apply";
 // overflow bucket (serial; solves manifolds the per-color dispatches skip)
 const auto entry_collision_pre_solver_overflow = "entry_collision_pre_solver_overflow";
 const auto graph_color_pre_solver_overflow_pipeline_name = "Graph Color Pre Solver Overflow";
@@ -1058,6 +1066,40 @@ struct GraphColorRelaxInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(GraphColorSolvePushConstants),
       .name = graph_color_relax_pipeline_name,
+  };
+};
+// island sleeping passes (entries in RB_sim.slang; share SleepPushConstants)
+struct SleepReduceInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = { .entry_point = entry_sleep_reduce, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(SleepPushConstants),
+      .name = sleep_reduce_pipeline_name,
+  };
+};
+struct SleepVetoInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = { .entry_point = entry_sleep_veto, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(SleepPushConstants),
+      .name = sleep_veto_pipeline_name,
+  };
+};
+struct SleepApplyInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = { .entry_point = entry_sleep_apply, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(SleepPushConstants),
+      .name = sleep_apply_pipeline_name,
   };
 };
 // overflow bucket: single-thread serial solve of manifolds the per-color dispatches skip

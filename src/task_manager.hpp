@@ -210,7 +210,14 @@ struct TaskManager
 
   [[nodiscard]] auto create_compute(daxa::ComputePipelineCompileInfo info) -> std::shared_ptr<daxa::ComputePipeline>
   {
-    return pipeline_manager.add_compute_pipeline2(static_cast<daxa::ComputePipelineCompileInfo2>(info)).value();
+    auto result = pipeline_manager.add_compute_pipeline2(static_cast<daxa::ComputePipelineCompileInfo2>(info));
+    if (result.is_err())
+    {
+      // surface the compile error before .value() throws a bare bad-optional-access
+      std::cerr << "[PIPELINE ERROR] " << std::string_view{info.name.data(), info.name.size()} << ":\n"
+                << result.message() << std::endl;
+    }
+    return result.value();
   }
 
   [[nodiscard]] auto create_raster(daxa::RasterPipelineCompileInfo info) -> std::shared_ptr<daxa::RasterPipeline>

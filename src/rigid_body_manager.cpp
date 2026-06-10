@@ -53,6 +53,9 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_GCS_CPS_OV = task_manager->create_compute(GraphColorPreSolverOverflowInfo{}.info);
     pipeline_GCS_CS_OV = task_manager->create_compute(GraphColorSolverOverflowInfo{}.info);
     pipeline_GCS_CSR_OV = task_manager->create_compute(GraphColorRelaxOverflowInfo{}.info);
+    pipeline_SLR = task_manager->create_compute(SleepReduceInfo{}.info);
+    pipeline_SLV = task_manager->create_compute(SleepVetoInfo{}.info);
+    pipeline_SLA = task_manager->create_compute(SleepApplyInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
     update_pipeline = task_manager->create_compute(UpdateRigidBodies{}.info);
   }
@@ -1067,6 +1070,31 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_GCV2 = TaskTemplate<GraphColorTaskHead::Task, decltype(user_callback_GCV2)>;
   TTask_GCV2 task_GCV2(gc_views, user_callback_GCV2);
 
+  // ---- neighborhood sleeping tasks (see entry_sleep_reduce/veto/apply) ----
+  auto sleep_views = std::array{
+      daxa::attachment_view(SleepTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+      daxa::attachment_view(SleepTaskHead::AT.sim_config, task_sim_config),
+      daxa::attachment_view(SleepTaskHead::AT.rigid_bodies, task_rigid_bodies),
+      daxa::attachment_view(SleepTaskHead::AT.collisions, task_collision_scratch),
+  };
+  auto sleep_dispatch = [this](daxa::TaskInterface ti, std::shared_ptr<daxa::ComputePipeline> &pl, daxa_u32 dispatch_offset)
+  {
+    ti.recorder.set_pipeline(*pl);
+    ti.recorder.push_constant(SleepPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(SleepTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * dispatch_offset});
+  };
+  auto user_callback_SLR = [this, sleep_dispatch](daxa::TaskInterface ti, auto &) { sleep_dispatch(ti, pipeline_SLR, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  using TTask_SLR = TaskTemplate<SleepTaskHead::Task, decltype(user_callback_SLR)>;
+  TTask_SLR task_SLR(sleep_views, user_callback_SLR);
+
+  auto user_callback_SLV = [this, sleep_dispatch](daxa::TaskInterface ti, auto &) { sleep_dispatch(ti, pipeline_SLV, COLLISION_DISPATCH_COUNT_OFFSET); };
+  using TTask_SLV = TaskTemplate<SleepTaskHead::Task, decltype(user_callback_SLV)>;
+  TTask_SLV task_SLV(sleep_views, user_callback_SLV);
+
+  auto user_callback_SLA = [this, sleep_dispatch](daxa::TaskInterface ti, auto &) { sleep_dispatch(ti, pipeline_SLA, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  using TTask_SLA = TaskTemplate<SleepTaskHead::Task, decltype(user_callback_SLA)>;
+  TTask_SLA task_SLA(sleep_views, user_callback_SLA);
+
   // ---- per-color solver tasks (Phase 3): one dispatch per color, each filters manifold_color==color ----
   static const daxa_u32 MAX_COLORS_SOLVE = BB_MAX_COLORS_SOLVE; // shared.inl: per-color solver dispatch count; empty colors are cheap no-ops
   auto gc_solve_views = std::array{
@@ -1138,6 +1166,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   RB_TG.add_task(task_IB);
   RB_TG.add_task(task_IPS);
   RB_TG.add_task(task_IBL);
+  // neighborhood sleeping: decide sleep/wake BEFORE the solve so sleeping bodies skip it this step
+  RB_TG.add_task(task_SLR);
+  RB_TG.add_task(task_SLV);
+  RB_TG.add_task(task_SLA);
   // FIXME: that's a really expensive sort
   // RB_TG.add_task(task_SBLI);
   RB_TG.add_task(task_MIB);

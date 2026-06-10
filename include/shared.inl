@@ -96,6 +96,7 @@ enum RigidBodyFlag : daxa_u32 {
   COLLIDING = 1 << 0,
   DYNAMIC = 1 << 1,
   GRAVITY = 1 << 2,
+  SLEEPING = 1 << 3, // island at rest: advect/solve/integrate skip this body until its island wakes
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 RigidBodyFlag  operator|(RigidBodyFlag a, RigidBodyFlag b)
@@ -156,6 +157,7 @@ enum SimFlag : daxa_u32
   DEBUG_INFO = 1 << 4,
   USE_GRAPH_COLORING = 1 << 5, // solve contacts by graph color (parallel) instead of by contact-island (serial-per-island)
   DEBUG_GRAPH_COLORS = 1 << 6, // tint contact debug geometry by each manifold's graph color
+  SLEEPING_ENABLED = 1 << 7,   // island sleeping: resting islands stop advecting/solving/integrating
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 SimFlag  operator|(SimFlag a, SimFlag b)
@@ -336,6 +338,7 @@ struct RigidBody
   daxa_u32 island_index;
   daxa_u32 active_index;
   daxa_u32 manifold_node_index;
+  daxa_u32 sleep_timer; // consecutive sim steps below the sleep velocity thresholds
   daxa_u32 material_index;
 #if defined(BB_DEBUG)
   daxa_u32 face_collided;
@@ -575,6 +578,7 @@ struct SimConfig
   daxa_u32 graph_color_violations; // graph-coloring: validator invariant violations (must be 0)
   daxa_u32 graph_color_overflow;   // graph-coloring: # contacts the per-color solver skips (uncolored OR color>=BB_MAX_COLORS_SOLVE)
   daxa_u32 gc_round;               // graph-coloring: current round index (incremented by owner_reset; seeds the fair-arbitration priority)
+  daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
   daxa_u32 gc_max_degree;          // graph-coloring DIAG: max colored-degree = max popcount(body_color_mask) over bodies
   daxa_u32 gc_max_degree_body;     // graph-coloring DIAG: a body index whose mask saturated (popcount>=30)
   daxa_u32 gc_max_degree_flags;    // graph-coloring DIAG: that body's RigidBodyFlag bits as seen by the validator
@@ -740,6 +744,17 @@ static const daxa_u32 BB_COLOR_OVERFLOW = BB_MAX_COLORS; // bucket index for con
 // colors are near-free no-op indirect dispatches. Remaining residue (genuinely uncolored after the
 // coloring rounds) is counted in SimConfig::graph_color_overflow as a runtime guard.
 static const daxa_u32 BB_MAX_COLORS_SOLVE = BB_MAX_COLORS;
+// Neighborhood sleeping: a body sleeps when it AND every contact partner stayed below both
+// velocity thresholds for BB_SLEEP_STEPS consecutive sim steps (at 60 Hz, 30 steps = 0.5 s).
+// Local rule instead of whole-island: measured piles keep a "simmering crust" of a few dozen
+// genuinely agitated bodies (0.3-2 m/s) that would veto an island-wide minimum forever, while
+// the pressed interior is perfectly quiet. Waking is automatic: a partner that speeds up vetoes
+// the sleeper on the very next step (its contact still exists while it is leaving).
+static const daxa_f32 BB_SLEEP_LIN_VEL2 = 0.0144f; // (0.12 m/s)^2 — generous: the soft solver leaves residual jitter at rest
+static const daxa_f32 BB_SLEEP_ANG_VEL2 = 0.0225f; // (0.15 rad/s)^2
+static const daxa_u32 BB_SLEEP_STEPS = 30;
+static const daxa_u32 BB_SLEEP_VETO_BIT = 0x80000000u; // sleep_timer bit 31: a contact partner is not quiet
+static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_POINT_COUNT = 8192;
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_LINE_VERTEX_COUNT = BB_MAX_DEBUG_CONTACT_POINT_COUNT * 2;
 
@@ -855,7 +870,7 @@ DAXA_DECL_BUFFER_PTR(ManifoldLinkIsland)
 
 // TODO: Island config struct by AABB tree (active bodies, island count, ...)
 
-struct Island 
+struct Island
 {
   daxa_u32 start_index;
   daxa_u32 max_count; // atomic add
@@ -1128,6 +1143,20 @@ struct RigidBodySimPushConstants
   DAXA_TH_BLOB(RigidBodySimTaskHead, task_head)
 };
 
+
+// NEIGHBORHOOD SLEEPING (reduce: per-body quiet timer; veto: contacts with a non-quiet partner
+// set the veto bit on the body; apply: quiet + un-vetoed bodies fall asleep, vetoed/loud wake)
+DAXA_DECL_TASK_HEAD_BEGIN(SleepTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Manifold), collisions)
+DAXA_DECL_TASK_HEAD_END
+
+struct SleepPushConstants
+{
+  DAXA_TH_BLOB(SleepTaskHead, task_head)
+};
 
 // ISLANDS
 DAXA_DECL_TASK_HEAD_BEGIN(IslandCounterTaskHead)
