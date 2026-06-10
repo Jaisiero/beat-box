@@ -121,7 +121,9 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
     record_update_TLAS_tasks(TLAS_update_TG, TLAS_build_TG, update_pipeline);
     TLAS_update_TG.submit();
     TLAS_update_TG.complete();
-    TLAS_build_TG.submit();
+    // the TLAS build is the LAST compute submit of a sim publication: it signals the sim
+    // timeline (value set via advance_sim_timeline right before each execute)
+    TLAS_build_TG.submit({.additional_signal_timeline_semaphores = &task_manager->gpu->sim_signal_span});
     TLAS_build_TG.complete();
 
     record_update_AS_buffers_tasks(AS_update_buffers_TG);
@@ -191,7 +193,7 @@ daxa::TlasId AccelerationStructureManager::get_tlas()
   if(!initialized) {
     return {};
   }
-  return tlas[renderer_manager->get_frame_index()];
+  return tlas[renderer_manager->get_sim_frame_index()];
 }
 
 daxa::BufferId AccelerationStructureManager::get_previous_rigid_body_buffer()
@@ -199,7 +201,7 @@ daxa::BufferId AccelerationStructureManager::get_previous_rigid_body_buffer()
   if(!initialized) {
     return {};
   }
-  return rigid_body_buffer[renderer_manager->get_previous_frame_index()];
+  return rigid_body_buffer[renderer_manager->get_sim_previous_frame_index()];
 }
 
 daxa::BufferId AccelerationStructureManager::get_rigid_body_buffer()
@@ -207,7 +209,7 @@ daxa::BufferId AccelerationStructureManager::get_rigid_body_buffer()
   if(!initialized) {
     return {};
   }
-  return rigid_body_buffer[renderer_manager->get_frame_index()];
+  return rigid_body_buffer[renderer_manager->get_sim_frame_index()];
 }
 
 daxa::BufferId AccelerationStructureManager::get_next_rigid_body_buffer()
@@ -216,7 +218,7 @@ daxa::BufferId AccelerationStructureManager::get_next_rigid_body_buffer()
     return {};
   }
 
-  return rigid_body_buffer[renderer_manager->get_next_frame_index()];
+  return rigid_body_buffer[renderer_manager->get_sim_next_frame_index()];
 }
 
 void AccelerationStructureManager::build_AS()
@@ -430,15 +432,15 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   // );
 
   // Set the TLAS buffer
-  tlas_build_info.dst_tlas = tlas[renderer_manager->get_frame_index()];
+  tlas_build_info.dst_tlas = tlas[renderer_manager->get_sim_frame_index()];
 
   // Set Task TLAS
-  task_tlas.set_tlas(tlas[renderer_manager->get_frame_index()]);
+  task_tlas.set_tlas(tlas[renderer_manager->get_sim_frame_index()]);
 
   return true;
 }
 
-void AccelerationStructureManager::update_TLAS() 
+void AccelerationStructureManager::update_TLAS()
 {
   if(!initialized) {
     return;
@@ -447,6 +449,8 @@ void AccelerationStructureManager::update_TLAS()
   update();
   TLAS_update_TG.execute();
   device.wait_idle();
+  // timeline signal values must be strictly increasing: bump right before the signaling submit
+  task_manager->gpu->advance_sim_timeline();
   TLAS_build_TG.execute();
 }
 
@@ -457,7 +461,7 @@ bool AccelerationStructureManager::update()
     return false;
   }
 
-  daxa_u32 frame_index = renderer_manager->get_frame_index();
+  daxa_u32 frame_index = renderer_manager->get_sim_frame_index();
 
   // BUILDING BLAS
   auto clear_build_AS = [&](u32 count)
@@ -771,7 +775,8 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
       rigid_body_manager->task_rigid_bodies,
       task_aabb_buffer,
   };
-  instances_TG = task_manager->create_task_graph("Update TLAS Instances", std::span<daxa::TaskBuffer>(instance_buffers), {}, {}, {});
+  // TLAS instance update + build run on the async compute queue, after the sim (same-queue FIFO)
+  instances_TG = task_manager->create_task_graph("Update TLAS Instances", std::span<daxa::TaskBuffer>(instance_buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
   instances_TG.add_task(task_UI);
 
   std::array<daxa::TaskBuffer, 3> build_buffers = {
@@ -786,7 +791,7 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
       task_tlas,
   };
 
-  build_TG = task_manager->create_task_graph("Build TLAS", std::span<daxa::TaskBuffer>(build_buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(task_tlases));
+  build_TG = task_manager->create_task_graph("Build TLAS", std::span<daxa::TaskBuffer>(build_buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(task_tlases), false, daxa::QUEUE_COMPUTE_0);
   build_TG.add_task(task_BB);
   build_TG.add_task(task_BT);
 }
@@ -939,7 +944,7 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
     gui_manager->task_axes_vertex_buffer,
   };
 
-  AS_buffers_TG = task_manager->create_task_graph("Update Acceleration Structure Buffers", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {});
+  AS_buffers_TG = task_manager->create_task_graph("Update Acceleration Structure Buffers", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
 }
 
 BB_NAMESPACE_END

@@ -155,7 +155,9 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   RT_TG.add_task(gui_manager->gui_line_task_info);
   RT_TG.add_task(gui_manager->gui_task_info);
 
-  RT_TG.submit();
+  // the render submit waits the sim timeline: it consumes the latest sim+TLAS publication
+  // produced on the async compute queue (value set per frame in execute())
+  RT_TG.submit({.additional_wait_timeline_semaphores = &gpu->sim_wait_span});
   RT_TG.present();
   RT_TG.complete();
 
@@ -190,6 +192,7 @@ bool RendererManager::execute()
   {
     return false;
   }
+  gpu->sync_render_to_sim_timeline(); // wait the latest published sim+TLAS state
   RT_TG.execute();
   return true;
 }
@@ -214,6 +217,14 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
 void RendererManager::render()
 {
   double _sim_ms_accum = 0.0; daxa_u64 _sim_ms_n = 0;   // [PERF] isolated sim timing
+  // Fixed-timestep simulation, decoupled from the render rate: the sim advances TIME_STEP
+  // (1/60 s) of simulated time only when 1/60 s of real time has accumulated, so its speed is
+  // real-time at any fps. The sim double buffers rotate per STEP (sim clock in StatusManager),
+  // so the loop below can run several steps inside one render frame to CATCH UP when the
+  // render dips under 60 fps. The accumulator is clamped so stalls don't queue a burst.
+  auto sim_clock_prev = std::chrono::steady_clock::now();
+  double sim_accum_s = 0.0;
+  constexpr double SIM_DT_S = static_cast<double>(TIME_STEP);
   while (!window.should_close())
   {
     // Update the GUI
@@ -224,22 +235,44 @@ void RendererManager::render()
       rigid_body_manager->update_sim();
     }
 
-    // Simulate rigid bodies
-    if(status_manager->is_simulating()) {
-      gpu->synchronize();                                          // [PERF] flush prior GPU work
-      auto _s0 = std::chrono::high_resolution_clock::now();        // [PERF]
-      rigid_body_manager->simulate();
-      gpu->synchronize();                                          // [PERF] wait sim GPU completion
-      _sim_ms_accum += std::chrono::duration<double, std::milli>(
-        std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
-      _sim_ms_n++;                                                 // [PERF]
+    // Simulate rigid bodies: fixed 60 Hz with REAL catch-up. The sim double buffers rotate
+    // per STEP (begin_sim_step inside simulate()), so several steps inside one render frame
+    // are legal; only the last step of the burst gets published (TLAS build below). Below
+    // 60/MAX_CATCHUP_STEPS fps the sim slows down instead of spiraling.
+    constexpr daxa_u32 MAX_CATCHUP_STEPS = 4u;
+    daxa_u32 sim_steps_this_frame = 0u;
+    {
+      auto const sim_clock_now = std::chrono::steady_clock::now();
+      double const elapsed_s = std::chrono::duration<double>(sim_clock_now - sim_clock_prev).count();
+      sim_clock_prev = sim_clock_now;
+      if (status_manager->is_simulating())
+      {
+        sim_accum_s = std::min(sim_accum_s + elapsed_s, (MAX_CATCHUP_STEPS + 1.0) * SIM_DT_S);
+        while (sim_accum_s >= SIM_DT_S && sim_steps_this_frame < MAX_CATCHUP_STEPS)
+        {
+          sim_accum_s -= SIM_DT_S;
+          gpu->synchronize();                                          // [PERF] flush prior GPU work
+          auto _s0 = std::chrono::high_resolution_clock::now();        // [PERF]
+          rigid_body_manager->simulate();
+          gpu->synchronize();                                          // [PERF] wait sim GPU completion
+          _sim_ms_accum += std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
+          _sim_ms_n++;                                                 // [PERF]
+          ++sim_steps_this_frame;
+        }
+      }
+      else
+      {
+        sim_accum_s = 0.0; // don't burst-step on resume
+      }
     }
-
+    bool const sim_stepped = sim_steps_this_frame > 0u;
     if (!window.update())
       continue;
 
-    // Update the acceleration structures
-    if(status_manager->is_simulating() || status_manager->is_updating()) {
+    // Update the acceleration structures (only when the sim actually stepped — skipped frames
+    // render the unchanged state and avoid the full-pipeline synchronize + readback)
+    if(sim_stepped || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
       { static daxa_u64 _cf = 0; static auto _t0 = std::chrono::high_resolution_clock::now();
         // sample every 31 frames (odd) so the readback alternates between the two double-buffered
@@ -330,6 +363,26 @@ daxa_u32 RendererManager::get_previous_frame_index()
 daxa_u32 RendererManager::get_frame_index()
 {
   return status_manager->get_frame_index();
+}
+
+daxa_u32 RendererManager::get_sim_frame_index()
+{
+  return status_manager->get_sim_frame_index();
+}
+
+daxa_u32 RendererManager::get_sim_next_frame_index()
+{
+  return (status_manager->get_sim_frame_index() + 1) % DOUBLE_BUFFERING;
+}
+
+daxa_u32 RendererManager::get_sim_previous_frame_index()
+{
+  return (status_manager->get_sim_frame_index() + DOUBLE_BUFFERING - 1) % DOUBLE_BUFFERING;
+}
+
+void RendererManager::begin_sim_step()
+{
+  status_manager->begin_sim_step();
 }
 
 daxa_u32 RendererManager::get_next_frame_index()

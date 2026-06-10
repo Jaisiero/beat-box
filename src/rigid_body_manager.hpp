@@ -112,6 +112,7 @@ private:
   void record_update_sim_config_tasks(TaskGraph &out_update_SC_TG);
   void record_active_rigid_body_list_upload_tasks(TaskGraph &ARB_TG);
   void update_buffers();
+  void update_buffers(daxa_u32 current_frame);
   
   // Device reference
   daxa::Device& device;

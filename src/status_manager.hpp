@@ -98,6 +98,26 @@ struct StatusManager
     return frame_index;
   }
 
+  // ---- sim clock (decoupled from the render frame index) ----
+  // The sim's double-buffered resources rotate per SIM STEP, not per render frame, so the
+  // fixed-timestep loop can run several steps inside one render frame (catch-up). Parity
+  // advances at the START of each step: step K works on [parity K] and reads [parity K^1].
+  daxa_u64 get_sim_step_count()
+  {
+    return sim_step_count;
+  }
+
+  daxa_u32 get_sim_frame_index()
+  {
+    return sim_frame_index;
+  }
+
+  void begin_sim_step()
+  {
+    ++sim_step_count;
+    sim_frame_index = static_cast<daxa_u32>(sim_step_count % DOUBLE_BUFFERING);
+  }
+
   daxa_u64 get_frame_count()
   {
     return frame_count;
@@ -361,6 +381,9 @@ private:
   daxa_u32 double_buffering_counter = 0;
   // frame index
   daxa_u32 frame_index = 0;
+  // sim step clock (see begin_sim_step)
+  daxa_u64 sim_step_count = 0;
+  daxa_u32 sim_frame_index = 0;
   // frame counter
   daxa_u64 frame_count = 0;
   // frame accumulation
