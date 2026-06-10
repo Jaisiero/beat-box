@@ -219,6 +219,31 @@ daxa_f32 avbd_contact_C(Manifold* m, daxa_u32 j, RigidBody* r1, RigidBody* r2,
   return C;
 }
 
+// F4 friction: tangential constraint row along direction d using the SAME arms as the
+// normal row (reference manifold.cpp rows i*2+1). C0_t is exactly 0 here because both
+// arms derive from the one clipped contact point (no sticking anchors yet), so the row
+// is alpha-invariant: it measures the tangential slide accumulated during this step.
+daxa_f32 avbd_dir_C(daxa_f32vec3 d, daxa_f32vec3 rr1, daxa_f32vec3 rr2,
+                    RigidBody* r1, RigidBody* r2,
+                    AvbdBodyState* s1, AvbdBodyState* s2,
+                    bool dyn1, bool dyn2)
+{
+  daxa_f32 C = 0.0f;
+  if (dyn1)
+  {
+    daxa_f32vec3 dp1 = r1->position - s1->pos_start;
+    daxa_f32vec3 dth1 = avbd_small_angle_delta(r1->rotation, s1->rot_start);
+    C -= dot(d, dp1 + cross(dth1, rr1));
+  }
+  if (dyn2)
+  {
+    daxa_f32vec3 dp2 = r2->position - s2->pos_start;
+    daxa_f32vec3 dth2 = avbd_small_angle_delta(r2->rotation, s2->rot_start);
+    C += dot(d, dp2 + cross(dth2, rr2));
+  }
+  return C;
+}
+
 // 3x3 inverse (closed form, for the world inertia from the stored world inv-inertia)
 daxa_f32mat3x3 avbd_inverse3(daxa_f32mat3x3 a)
 {
@@ -320,9 +345,13 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
     bool matched = m->contacts[j].warm_start != 0u && sim_config->has_flag(SimFlag::WARM_STARTING);
     if (!matched)
     {
-      // fresh contact: zero force estimate, minimum penalty
+      // fresh contact: zero force estimates, minimum penalties
       m->contacts[j].normal_impulse = 0.0f;
       m->contacts[j].mass_coefficient = BB_AVBD_PENALTY_MIN;
+      m->contacts[j].tangent_impulse[0] = 0.0f;
+      m->contacts[j].tangent_impulse[1] = 0.0f;
+      m->contacts[j].tangent_mass[0] = BB_AVBD_PENALTY_MIN;
+      m->contacts[j].tangent_mass[1] = BB_AVBD_PENALTY_MIN;
     }
     else
     {
@@ -333,6 +362,14 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
       m->contacts[j].mass_coefficient = clamp(k * BB_AVBD_GAMMA, BB_AVBD_PENALTY_MIN, BB_AVBD_PENALTY_MAX);
       // lambda (normal_impulse) kept as is; force convention lambda <= 0
       m->contacts[j].normal_impulse = min(m->contacts[j].normal_impulse, 0.0f);
+      // friction rows: same treatment (lambda kept, penalty decayed); tangent lambda is
+      // free-signed inside its box bounds
+      [unroll]
+      for (daxa_u32 t = 0u; t < 2u; ++t)
+      {
+        daxa_f32 kt = m->contacts[j].tangent_mass[t];
+        m->contacts[j].tangent_mass[t] = clamp(kt * BB_AVBD_GAMMA, BB_AVBD_PENALTY_MIN, BB_AVBD_PENALTY_MAX);
+      }
     }
   }
 }
@@ -429,6 +466,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
         AvbdBodyState* s2 = &states[b2];
 
         daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
+        daxa_f32 mu = sqrt(max(r1->friction, 0.0f) * max(r2->friction, 0.0f));
         for (daxa_u32 j = 0u; j < cc; ++j)
         {
           daxa_f32vec3 rr1, rr2;
@@ -451,6 +489,29 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
           {
             [unroll]
             for (daxa_u32 b = 0u; b < 6u; ++b) { H[a][b] += k * J[a] * J[b]; }
+          }
+          // friction rows: box-bounded tangent forces, bounds refreshed from the LATEST
+          // normal lambda (reference updates fmin/fmax in every computeConstraint call)
+          daxa_f32 bound = mu * abs(lam);
+          [unroll]
+          for (daxa_u32 t = 0u; t < 2u; ++t)
+          {
+            daxa_f32vec3 td = m->tangent_vectors[t];
+            daxa_f32 Ct = avbd_dir_C(td, rr1, rr2, r1, r2, s1, s2, dyn1, dyn2);
+            daxa_f32 lam_t = m->contacts[j].tangent_impulse[t];
+            daxa_f32 kt = m->contacts[j].tangent_mass[t];
+            daxa_f32 ft = clamp(kt * Ct + lam_t, -bound, bound);
+            daxa_f32vec3 Jlt = i_is_1 ? -td : td;
+            daxa_f32vec3 Jat = i_is_1 ? -cross(rr1, td) : cross(rr2, td);
+            g[0] += ft * Jlt.x; g[1] += ft * Jlt.y; g[2] += ft * Jlt.z;
+            g[3] += ft * Jat.x; g[4] += ft * Jat.y; g[5] += ft * Jat.z;
+            daxa_f32 Jt[6] = { Jlt.x, Jlt.y, Jlt.z, Jat.x, Jat.y, Jat.z };
+            [unroll]
+            for (daxa_u32 a = 0u; a < 6u; ++a)
+            {
+              [unroll]
+              for (daxa_u32 b = 0u; b < 6u; ++b) { H[a][b] += kt * Jt[a] * Jt[b]; }
+            }
           }
         }
       }
@@ -519,6 +580,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   }
 
   daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
+  daxa_f32 mu = sqrt(max(r1->friction, 0.0f) * max(r2->friction, 0.0f));
   for (daxa_u32 j = 0u; j < cc; ++j)
   {
     daxa_f32vec3 rr1, rr2;
@@ -533,6 +595,23 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
     if (new_lam < 0.0f)
     {
       m->contacts[j].mass_coefficient = min(k + BB_AVBD_BETA * abs(C), BB_AVBD_PENALTY_MAX);
+    }
+    // friction rows: bounds from the ENTRY normal lambda (the reference recomputes
+    // fmin/fmax in computeConstraint BEFORE this dual pass touches the rows)
+    daxa_f32 bound = mu * abs(lam);
+    [unroll]
+    for (daxa_u32 t = 0u; t < 2u; ++t)
+    {
+      daxa_f32vec3 td = m->tangent_vectors[t];
+      daxa_f32 Ct = avbd_dir_C(td, rr1, rr2, r1, r2, &states[b1], &states[b2], dyn1, dyn2);
+      daxa_f32 lam_t = m->contacts[j].tangent_impulse[t];
+      daxa_f32 kt = m->contacts[j].tangent_mass[t];
+      daxa_f32 new_lam_t = clamp(kt * Ct + lam_t, -bound, bound);
+      m->contacts[j].tangent_impulse[t] = new_lam_t;
+      if (new_lam_t > -bound && new_lam_t < bound)
+      {
+        m->contacts[j].tangent_mass[t] = min(kt + BB_AVBD_BETA * abs(Ct), BB_AVBD_PENALTY_MAX);
+      }
     }
     { // TEMP DIAG (lambda <= 0: track its magnitude; only when strictly negative, since
       // asuint(-0.0f) = 0x80000000 would dominate the unsigned InterlockedMax)

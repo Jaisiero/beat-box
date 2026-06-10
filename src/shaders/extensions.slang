@@ -314,9 +314,11 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
             contacts[i].normal_impulse = old_contact->normal_impulse;
             contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0];
             contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
-            // AVBD: the penalty parameter must persist across steps (PGS overwrites this field
-            // in pre_step, so copying it is harmless for the PGS family)
+            // AVBD: the penalty parameters must persist across steps (PGS overwrites these
+            // fields in pre_step, so copying them is harmless for the PGS family)
             contacts[i].mass_coefficient = old_contact->mass_coefficient;
+            contacts[i].tangent_mass[0] = old_contact->tangent_mass[0];
+            contacts[i].tangent_mass[1] = old_contact->tangent_mass[1];
 
             contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
           break;
