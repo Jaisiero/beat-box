@@ -1263,8 +1263,30 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
   // warm-start persists lambda BY KEY, the persisted lambda then acted along the flipped
   // normal and ATTRACTED the bodies (the observed collapse-into-one-point). The
   // center-to-center direction never flips for a resting pair.
-  daxa_f32vec3 dc = r1->position - r2->position;
-  daxa_f32vec3 ref_n = dot(dc, dc) > 1e-8f ? normalize(dc) : daxa_f32vec3(0.0f, 1.0f, 0.0f);
+  // cluster reference = the STABLE deepest sample's normal (quantized-depth bucket +
+  // lowest-voxel-id winner - the same persistent identity the reducer uses, so it does
+  // not flip-flop). The previous center-to-center reference was stable but geometrically
+  // wrong as a discriminant: for side-by-side pieces the contact normals are
+  // PERPENDICULAR to the center line, so every sample sat exactly ON the cluster
+  // boundary and micro-rotations flipped it between manifolds 99/98, resetting its
+  // lambdas each time - the accumulator-visible piece-piece jitter (floor contacts,
+  // whose normals align with the center line, stayed sharp).
+  daxa_f32vec3 ref_n = daxa_f32vec3(0.0f, 1.0f, 0.0f);
+  daxa_f32 ref_quant = 0.5f * s1->voxel_size;
+  daxa_f32 best_qb = 1.0e9f;
+  daxa_u32 best_id = 0xFFFFFFFFu;
+  [unroll]
+  for (daxa_u32 o = 0u; o < 8u; ++o)
+  {
+    if (red.pen[o] > 0.5e9f) { continue; } // empty slot
+    daxa_f32 qb = floor(red.pen[o] / ref_quant);
+    if (qb < best_qb || (qb == best_qb && red.fp_a[o] < best_id))
+    {
+      best_qb = qb;
+      best_id = red.fp_a[o];
+      ref_n = red.nrm[o];
+    }
+  }
   VoxelManifoldReducer red1;
   red1.init();
   voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red1, ref_n, 1u);
