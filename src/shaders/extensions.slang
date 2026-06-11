@@ -297,13 +297,19 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
 
   [mutating]
   void update_from_old(Manifold* old_manifold) {
-    // Impulses are only transferable when both manifolds came from the same SAT axis. With a
-    // different key the normal/feature interpretation changed — and the contact feature ids are
-    // not globally unique across types (face contacts use Edge ids 0..11, edge-edge contacts use
-    // axis keys 6..14), so a cross-axis feature match is a false positive that warm-starts a
-    // contact with an impulse measured along a different direction.
-    if (key != old_manifold->key) {
-      return;
+    // With a different key the normal/feature interpretation changed - and the contact
+    // feature ids are not comparable across axes, so cross-key fp matches would be
+    // false positives. But REJECTING the whole manifold meant tilted deep stacks (the
+    // box pool), whose SAT winner flaps between near-tied axes, lost ALL their lambdas
+    // on every flap (measured MISS storms re-waking the pile). For OBB manifolds the
+    // physical contact is the same while the planes agree: accept the cross-key carry,
+    // skip the fp pass (ids incomparable) and let PROXIMITY inheritance move the
+    // lambdas. Voxel manifolds (90-95) are per-axis by design and stay key-exact.
+    bool cross_key = key != old_manifold->key;
+    if (cross_key) {
+      bool any_voxel = (key >= 90 && key <= 95) || (old_manifold->key >= 90 && old_manifold->key <= 95);
+      if (any_voxel) { return; }
+      if (dot(normal, old_manifold->normal) <= 0.7f) { return; } // plane really changed
     }
     // voxel manifolds (key 99): the dominant normal is assembled from QUANTIZED voxel
     // sample normals and can flap a few degrees frame-to-frame at rest, which re-excites
@@ -331,7 +337,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
     bool voxel_m = key >= 90 && key <= 95;
     daxa_u32 used_old = 0u;    // old contacts already inherited (never duplicate lambdas)
     daxa_u32 matched_new = 0u; // new contacts already matched by feature ids
-    for(daxa_u32 i = 0u; i < contact_count; i++) {
+    for(daxa_u32 i = 0u; cross_key == false && i < contact_count; i++) {
       for(daxa_u32 j = 0u; j < old_manifold->contact_count; j++) {
         if ((used_old & (1u << j)) != 0u) { continue; }
         Contact* old_contact = &old_manifold->contacts[j];

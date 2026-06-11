@@ -740,7 +740,7 @@ public:
   // Depth (a ~8-cube column once settled) maximizes per-contact load and the length of
   // the warm-start convergence chain: THE stress test for stacked contacts. Walls
   // confine the crust so nothing rolls away. Success criterion: EVERY cube asleep
-  // (sleeping=192, fresh=0, maxv=0), red contact points only.
+  // (sleeping=432, fresh=0, maxv=0), red contact points only.
   void scene_7() {
     materials = {
       {
@@ -749,7 +749,7 @@ public:
       },
       {
         .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),
-        .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f),
+        .emission = daxa_f32vec3(30.0f, 30.0f, 30.0f),
       },
       {
         .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),
@@ -777,43 +777,46 @@ public:
       },
     };
 
-    // floor + lighting panel (same pattern as scene_3/4/5)
+    // floor + lighting panel. The panel sits ABOVE the spawn column (cubes rain down
+    // from up to y~43 and would otherwise bounce off it); brighter to compensate.
     rigid_bodies = {
       {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f}
     };
-    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 24.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-5.0f, -0.2f, -5.0f), .maximum = daxa_f32vec3(5.0f, 0.2f, 5.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 50.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-8.0f, -0.2f, -8.0f), .maximum = daxa_f32vec3(8.0f, 0.2f, 8.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
     rigid_bodies.back().material_index = 1u; // emissive
 
-    // the pit: interior 5x5 world units, walls 14 high (dark red statics; the pile
-    // settles ~8 deep, well below the rim). Static-static wall/floor pairs are skipped
-    // by the narrow phase, overlapping corners are free.
+    // the pit: interior 8x8 world units, walls 10 high (dark red statics) - low enough
+    // for the default camera (y=16) to look over the rim, tall enough that the ~7-deep
+    // settled heap stays confined. Static-static wall/floor pairs are skipped by the
+    // narrow phase, overlapping corners are free.
     auto push_wall = [&](daxa_f32vec3 pos, daxa_f32vec3 half) {
       rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = pos, .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-half.x, -half.y, -half.z), .maximum = half, .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
       rigid_bodies.back().material_index = 7u;
     };
-    push_wall(daxa_f32vec3( 2.75f, 7.0f, 14.0f), daxa_f32vec3(0.25f, 7.0f, 3.0f));
-    push_wall(daxa_f32vec3(-2.75f, 7.0f, 14.0f), daxa_f32vec3(0.25f, 7.0f, 3.0f));
-    push_wall(daxa_f32vec3(0.0f, 7.0f, 16.75f), daxa_f32vec3(3.0f, 7.0f, 0.25f));
-    push_wall(daxa_f32vec3(0.0f, 7.0f, 11.25f), daxa_f32vec3(3.0f, 7.0f, 0.25f));
+    push_wall(daxa_f32vec3( 4.25f, 5.0f, 14.0f), daxa_f32vec3(0.25f, 5.0f, 4.5f));
+    push_wall(daxa_f32vec3(-4.25f, 5.0f, 14.0f), daxa_f32vec3(0.25f, 5.0f, 4.5f));
+    push_wall(daxa_f32vec3(0.0f, 5.0f, 18.25f), daxa_f32vec3(4.5f, 5.0f, 0.25f));
+    push_wall(daxa_f32vec3(0.0f, 5.0f, 9.75f), daxa_f32vec3(4.5f, 5.0f, 0.25f));
 
-    // 12 layers x 4x4 unit cubes dropped into the pit with deterministic index-hashed
-    // jitter AND TILT (no RNG, exactly reproducible). Straight axis-aligned columns
-    // land as a neat lattice and stay columnar; the tilts (4-13 deg about a hashed
-    // horizontal axis) make the cubes tumble into the disordered-but-settled heap this
-    // scene exists to stress.
+    // 12 waves x 6x6 unit cubes (432) RAINING into the pit: vertical spacing 2.8 from
+    // y=12 up to ~43, so the waves arrive staggered in time and pile onto the already
+    // settled heap. Deterministic index-hashed jitter AND TILT (no RNG, exactly
+    // reproducible): the tilts (4-13 deg about a hashed horizontal bearing) make the
+    // cubes tumble into a disordered heap instead of landing as a lattice.
     for (u32 iy = 0; iy < 12; ++iy) {
-      for (u32 iz = 0; iz < 4; ++iz) {
-        for (u32 ix = 0; ix < 4; ++ix) {
+      for (u32 iz = 0; iz < 6; ++iz) {
+        for (u32 ix = 0; ix < 6; ++ix) {
           u32 const h1 = ix * 3u + iy * 5u + iz * 7u;
           u32 const h2 = ix * 7u + iy * 3u + iz * 5u;
           u32 const h3 = ix * 5u + iy * 7u + iz * 3u;
-          f32 const jx = (f32(h1 % 11u) - 5.0f) * 0.05f; // +-0.25
-          f32 const jz = (f32(h2 % 11u) - 5.0f) * 0.05f; // +-0.25
-          f32 const phi = f32(h3 % 16u) * 0.3927f;       // tilt axis bearing
-          f32 const ang = 0.07f + f32(h1 % 7u) * 0.025f; // 4-13 deg
+          f32 const jx = (f32(h1 % 11u) - 5.0f) * 0.05f;  // +-0.25
+          f32 const jz = (f32(h2 % 11u) - 5.0f) * 0.05f;  // +-0.25
+          f32 const jy = (f32(h3 % 11u) - 5.0f) * 0.20f;  // +-1.0: staggers each wave
+          f32 const phi = f32(h3 % 16u) * 0.3927f;        // tilt axis bearing
+          f32 const ang = 0.07f + f32(h1 % 7u) * 0.025f;  // 4-13 deg
           f32 const sh = std::sin(0.5f * ang);
           Quaternion const q_tilt = Quaternion(std::cos(phi) * sh, 0.0f, std::sin(phi) * sh, std::cos(0.5f * ang));
-          rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-1.65f + 1.1f * ix + jx, 1.0f + 1.45f * iy, 12.35f + 1.1f * iz + jz), .rotation = q_tilt, .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = 0.6f});
+          rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-3.0f + 1.2f * ix + jx, 12.0f + 2.8f * iy + jy, 11.0f + 1.2f * iz + jz), .rotation = q_tilt, .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = 0.6f});
         }
       }
     }
@@ -835,9 +838,12 @@ public:
     // scene_4();
     // scene_5(); // V3 showcase: frame threads onto the post + mixed concave pile
     // scene_6(); // deterministic stability probe (rests + stacks; fresh/pen must read 0/single-digit)
-    scene_7(); // box pool: deep-stack convergence stress (all 192 cubes must sleep)
+    scene_7(); // box pool: 432 cubes rain into the pit (all must settle and sleep)
 
-    std::uniform_int_distribution<> distr(1, static_cast<int>(materials.size() - 1)); // define the range
+    // random materials for bodies with material_index 0 (unset). Start at 2: index 1 is
+    // the emissive light-panel material, and randomly emissive bodies read as glaring
+    // white "lamp cubes" in every pile render
+    std::uniform_int_distribution<> distr(2, static_cast<int>(materials.size() - 1));
 
     aabb.clear();
     aabb.reserve(rigid_bodies.size());

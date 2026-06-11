@@ -892,29 +892,43 @@ struct BodyLinkManifold {
     }
   }
 
-  // want_key filters the per-pair search: voxel pairs carry up to TWO manifolds (keys
-  // 99/98, opposing-normal clusters), and matching the wrong one fails the key check in
-  // update_from_old, silently disabling warm-starting for the pair.
+  // want_key filters the per-pair search: voxel pairs carry up to SIX manifolds (keys
+  // 90-95, one per contact-face axis), and matching the wrong one would steal another
+  // axis's lambdas. OBB pairs carry exactly ONE manifold, so if the exact key is gone
+  // we fall back to the pair's manifold under ANY key: tilted deep stacks (the box
+  // pool) flap the SAT winner between near-tied axes, and every flap used to lose the
+  // whole manifold (the MISS storms that kept re-waking the pile). update_from_old
+  // guards the cross-key inheritance with a normal-coherence check.
   static daxa_b32 find_old_collision(daxa_u32 a, daxa_u32 b, daxa_i32 want_key, daxa_u32 first_manifold_node_index, daxa_u32 manifold_node_count, daxa_u32 collision_count, CollisionEntry* collision_map, ManifoldNode* manifold_nodes, Manifold* old_collisions, out daxa_u32 old_index) {
     daxa_u32 current = first_manifold_node_index;
     daxa_u32 steps = 0u;
+    daxa_u32 fallback = MAX_U32;
+    bool exact_only = want_key >= 90 && want_key <= 95;
     while (current != MAX_U32 && current < manifold_node_count && steps < manifold_node_count) {
       daxa_u32 id = manifold_nodes[current].manifold_id;
       if (id >= collision_count) {
-        return false;
+        break;
       }
       daxa::u32 index = collision_map[id].index;
       if (index >= collision_count) {
-        return false;
+        break;
       }
-      if (old_collisions[index].obb1_index == a && old_collisions[index].obb2_index == b &&
-          old_collisions[index].key == want_key) {
-        old_index = index;
-        return true;
+      if (old_collisions[index].obb1_index == a && old_collisions[index].obb2_index == b) {
+        if (old_collisions[index].key == want_key) {
+          old_index = index;
+          return true;
+        }
+        if (!exact_only) {
+          fallback = index;
+        }
       }
       daxa_i32 next = manifold_nodes[current].next;
       current = next < 0 ? MAX_U32 : daxa_u32(next);
       ++steps;
+    }
+    if (fallback != MAX_U32) {
+      old_index = fallback;
+      return true;
     }
     return false;
   }
@@ -1473,6 +1487,19 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   {
     if (emit_i > 0u) { break; }
     have = OBBvsOBBCollision.collision_detection(r, r2, manifold, obb1_faces, obb2_faces);
+    // EXTRACTION CAP - same lesson the voxel path learned ("full-voxel corrections
+    // pop"): rained cubes punch 0.2-0.9 deep into the pile, and AVBD's post-stabilize
+    // corrects the stored C0 almost fully in one positional step. Uncapped, that is a
+    // teleport that re-buries the neighbors and avalanches the crust (the box pool
+    // never converged: violent corrections, re-waking waves). Capped, the burial
+    // extracts smoothly over a few frames; resting pens (mm) never touch the cap.
+    if (have)
+    {
+      for (daxa_i32 ci = 0; ci < manifold.contact_count; ++ci)
+      {
+        manifold.contacts[ci].penetration = max(manifold.contacts[ci].penetration, -0.25f);
+      }
+    }
   }
   if (!have) { continue; }
   manifold.obb1_index = rba_index;
