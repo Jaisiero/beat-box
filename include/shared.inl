@@ -802,6 +802,16 @@ static const daxa_f32 BB_AVBD_STICK_SLOP = 0.001f;  // anchor drift deadband: be
 static const daxa_u32 BB_AVBD_ITERATIONS = 10;      // main sweeps (+1 post-stabilization sweep)
 static const daxa_u32 BB_AVBD_COLOR_ROUNDS = 16;    // Jones-Plassmann body-coloring rounds
 static const daxa_u32 BB_AVBD_MAX_BODY_COLORS = 32; // primal dispatches per sweep (empty = no-op)
+static const daxa_u32 BB_AVBD_POST_STAB_SWEEPS = 4; // alpha=0 positional sweeps per frame. ONE
+                                                    // (the reference) extracts deep piles about a
+                                                    // contact layer per frame and plateaus at
+                                                    // 40-50mm standing depth under load; 4 halve
+                                                    // it to ~23mm at negligible cost. MEASURED: 8
+                                                    // DIVERGE (alpha=0 is full-strength positional
+                                                    // Gauss-Seidel - iterating it without under-
+                                                    // relaxation ratchets closed-loop piles into
+                                                    // MISS storms). More sweeps need a relaxation
+                                                    // factor first.
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_POINT_COUNT = 8192;
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_LINE_VERTEX_COUNT = BB_MAX_DEBUG_CONTACT_POINT_COUNT * 2;
 

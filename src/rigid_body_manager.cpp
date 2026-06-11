@@ -1365,12 +1365,18 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       RB_TG.add_task(task_CSR);
   }
   RB_TG.add_task(task_AVBD_FIN); // AVBD: reconstruct velocities from the pose delta
-  // AVBD post-stabilization sweep (reference postStabilize): one extra primal pass with
-  // alpha = 0 (full C0) AFTER velocities are reconstructed -> corrects pre-existing
-  // penetration positionally without injecting momentum
-  for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+  // AVBD post-stabilization (reference postStabilize): primal passes with alpha = 0
+  // (full C0) AFTER velocities are reconstructed -> corrects pre-existing penetration
+  // positionally without injecting momentum. The reference runs ONE sweep, which in a
+  // DEEP pile propagates extraction roughly one contact layer per frame: the box pool
+  // plateaued at 40-50mm standing depth (gravity re-compresses as fast as one sweep
+  // extracts). Multiple sweeps per frame converge the pile to near-flush instead.
+  for (daxa_u32 ps = 0u; ps < BB_AVBD_POST_STAB_SWEEPS; ++ps)
   {
-    RB_TG.add_task(task_AVBD_PRIM_PS_vec[c]);
+    for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+    {
+      RB_TG.add_task(task_AVBD_PRIM_PS_vec[c]);
+    }
   }
   RB_TG.add_task(task_CP);
   RB_TG.add_task(task_update);

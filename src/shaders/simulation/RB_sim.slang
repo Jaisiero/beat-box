@@ -626,11 +626,15 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   // (the box pool froze with 88-213mm of standing interpenetration). Keep the pair
   // awake while its deepest contact is far from the surface: the penalty ramp keeps
   // shrinking the overlap while the bodies stay quiet, and they finally sleep flush.
+  // The threshold IS the standing rest depth (both pools froze right under the old
+  // 50mm: 42/49), so it belongs just ABOVE the solver's achievable equilibrium: with
+  // 4 post-stab sweeps the deep-pile plateau is ~23mm (measured at maxv=0), so 25mm
+  // lets the last stragglers sleep instead of vetoing them forever.
   daxa_i32 cc = manifolds[m].contact_count;
   bool deep = false;
   for (daxa_i32 ci = 0; ci < cc; ++ci)
   {
-    if (manifolds[m].contacts[ci].penetration < -0.05f) { deep = true; break; }
+    if (manifolds[m].contacts[ci].penetration < -0.025f) { deep = true; break; }
   }
   daxa_u32 prev;
   if ((a_loud || deep) && b_dyn)
