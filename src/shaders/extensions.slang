@@ -370,7 +370,10 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
     {
       for(daxa_u32 i = 0u; i < contact_count; i++) {
         if ((matched_new & (1u << i)) != 0u) { continue; }
-        daxa_f32 best_d2 = 0.09f; // (0.3)^2 ~ half a scene voxel (vs = 0.5)
+        daxa_f32 best_d2 = 0.36f; // (0.6)^2: must cover a FULL scene voxel (vs = 0.5) -
+                                  // winner hops move a contact one whole voxel and the
+                                  // old 0.3 radius missed them, so every hop reset its
+                                  // lambdas (measured as n4 churn bursts in the stack)
         daxa_i32 best_j = -1;
         for(daxa_u32 j = 0u; j < old_manifold->contact_count; j++) {
           if ((used_old & (1u << j)) != 0u) { continue; }

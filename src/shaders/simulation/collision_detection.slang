@@ -952,14 +952,15 @@ daxa_f32vec3 voxel_occ_gradient(daxa_u32* occ, VoxelShape* s, daxa_i32vec3 c)
   return daxa_f32vec3(-gx, -gy, -gz); // solid-on-the-left convention -> flip to outward
 }
 
-// reduction state: deepest sample per world octant around body A's position
+// reduction state: the 4 DIAGONAL-EXTREME samples of the contact patch (qu3e keeps 4)
 struct VoxelManifoldReducer
 {
-  daxa_f32vec3 pos[8];
-  daxa_f32 pen[8];
-  daxa_f32vec3 nrm[8];
-  daxa_u32 fp_a[8];
-  daxa_u32 fp_b[8];
+  daxa_f32vec3 pos[4];
+  daxa_f32 pen[4];
+  daxa_f32vec3 nrm[4];
+  daxa_u32 fp_a[4];
+  daxa_u32 fp_b[4];
+  daxa_f32 score[4]; // extreme-direction score of the kept sample (winner selection)
   daxa_f32vec3 normal_sum;
   daxa_f32 weight_sum; // sum of |pen| weights (detects opposing-normal cancellation)
   daxa_u32 sample_count;
@@ -968,28 +969,41 @@ struct VoxelManifoldReducer
   [mutating] void init()
   {
     [unroll]
-    for (daxa_u32 i = 0u; i < 8u; ++i) { pen[i] = 1.0e9f; fp_a[i] = 0u; } // 1e9 = empty
+    for (daxa_u32 i = 0u; i < 4u; ++i) { pen[i] = 1.0e9f; fp_a[i] = 0u; score[i] = -1.0e30f; } // 1e9 = empty
     normal_sum = daxa_f32vec3(0.0f, 0.0f, 0.0f);
     weight_sum = 0.0f;
     sample_count = 0u;
     interior_hits = 0u;
   }
 
-  // Winner per octant: depth quantized to half a voxel, ties broken by LOWEST voxel id.
-  // Raw "deepest wins" churns at rest (many samples sit within depth noise of each other,
-  // so the winning voxel - and with it the warm-start feature id - swapped every step and
-  // blocked sleeping). Quantized depth + id tie-break pins contacts to fixed voxels.
+  // Winner per EXTREME DIRECTION: the 4 diagonal directions of the contact-face plane
+  // (the two non-axis local coordinates of the reference body). The kept voxels are the
+  // OUTERMOST of the patch - its bounding-quad corners, the largest support polygon the
+  // samples can offer (max lever arms against tipping; what qu3e/Box2D get from clipped
+  // face corners / max-area point replacement). Four points suffice for stability
+  // (user-confirmed); more just gives the penalty ramps redundant rows to fight over.
+  // Score ties resolve by deeper quantized depth, then LOWEST voxel id, so winners pin
+  // to fixed voxels at rest (raw deepest churned identity within depth noise).
   [mutating] void add(daxa_f32vec3 p, daxa_f32 pe, daxa_f32vec3 n, daxa_u32 fa, daxa_u32 fb,
-                      daxa_f32vec3 center, daxa_f32 quant)
+                      daxa_f32 su, daxa_f32 sv, daxa_f32 quant)
   {
-    daxa_f32vec3 d = p - center;
-    daxa_u32 oct = (d.x > 0.0f ? 1u : 0u) | (d.y > 0.0f ? 2u : 0u) | (d.z > 0.0f ? 4u : 0u);
-    bool empty = pen[oct] > 0.5e9f;
+    // scores quantized to half-voxel buckets, exactly like depths used to be: raw float
+    // comparisons flip winners on micro-motion (measured: settling never converged, the
+    // corner pairs churned identity at 4-12 contacts/step), while bucketed scores only
+    // change when the patch really moves. Within a bucket: deeper, then LOWEST voxel id.
+    daxa_f32 sc4[4] = { su + sv, su - sv, -su + sv, -su - sv };
     daxa_i32 nb = daxa_i32(floor(pe / quant));
-    daxa_i32 ob = empty ? 0 : daxa_i32(floor(pen[oct] / quant));
-    if (empty || nb < ob || (nb == ob && fa < fp_a[oct]))
+    [unroll]
+    for (daxa_u32 o = 0u; o < 4u; ++o)
     {
-      pos[oct] = p; pen[oct] = pe; nrm[oct] = n; fp_a[oct] = fa; fp_b[oct] = fb;
+      bool empty = pen[o] > 0.5e9f;
+      daxa_i32 nb_s = daxa_i32(floor(sc4[o] / quant));
+      daxa_i32 ob_s = empty ? -2147483640 : daxa_i32(floor(score[o] / quant));
+      daxa_i32 ob = empty ? 0 : daxa_i32(floor(pen[o] / quant));
+      if (empty || nb_s > ob_s || (nb_s == ob_s && (nb < ob || (nb == ob && fa < fp_a[o]))))
+      {
+        pos[o] = p; pen[o] = pe; nrm[o] = n; fp_a[o] = fa; fp_b[o] = fb; score[o] = sc4[o];
+      }
     }
     daxa_f32 w = max(-pe, 0.1f * quant); // band samples (pe >~ 0) still steer the normal
     normal_sum += n * w;
@@ -1018,6 +1032,10 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
   daxa_f32vec3 sup = 0.5f * vs1 * daxa_f32vec3(abs(a0.x) + abs(a1.x) + abs(a2.x),
                                                abs(a0.y) + abs(a1.y) + abs(a2.y),
                                                abs(a0.z) + abs(a1.z) + abs(a2.z));
+  // contact-face tangent coordinates: the two non-axis components of the sample position
+  // in body2's LOCAL frame drive the extreme-direction winner selection in the reducer
+  daxa_u32 axk = (mode - 16u) / 2u;
+  daxa_f32 sgn_pass = ((mode - 16u) & 1u) != 0u ? 1.0f : -1.0f;
   for (daxa_u32 i = 0u; i < s1->surf_count; ++i)
   {
     daxa_u32 e = surf[s1->surf_offset + i];
@@ -1028,27 +1046,24 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
     daxa_f32 pe;
     daxa_f32vec3 n_out2; // outward from body 2's solid at the sample (world)
     daxa_u32 fb;
-    daxa_u32 sample_code; // contact axis+sign in body2's local frame (0..5)
+    daxa_f32 su = 0.0f;
+    daxa_f32 sv = 0.0f;
     if (s2_is_voxel)
     {
       daxa_f32 vs2 = s2->voxel_size;
       daxa_f32vec3 l2 = r2->rotate_vector_inverse(pw - r2->position);
+      su = axk == 0u ? l2.y : l2.x;
+      sv = axk == 2u ? l2.y : l2.z;
       daxa_f32vec3 g = (l2 - s2->grid_origin) / vs2;
       daxa_i32vec3 c = daxa_i32vec3(daxa_i32(floor(g.x)), daxa_i32(floor(g.y)), daxa_i32(floor(g.z)));
       if (!voxel_occ_bit(occ, s2, c)) { continue; }
-      // CELL-FACE contact (axis-aligned mini-SAT in B's grid): among the axes whose
-      // neighbor cell is EMPTY (outward-feasible directions), take the minimum overlap;
-      // its sign gives a crisp face normal and an exact depth. The previous occupancy
-      // GRADIENT gave diagonal normals at face edges/corners ((1,1,1)/sqrt(3) etc.) -
-      // and the per-octant winners ARE those edge/corner cells - so every face contact
-      // was tilted and depth-underestimated: mushy contacts that slowly sank under
-      // gravity (bodies half-buried in the floor / clumped into each other, then slept).
+      // CELL-FACE contact in B's grid. The smallest feasible exit (outward-feasible =
+      // EMPTY neighbor that way) is only a REFERENCE for the dominance band below - it
+      // no longer picks the axis, so its flips between near-equal exits are harmless.
       daxa_f32vec3 cc_l = s2->grid_origin + (daxa_f32vec3(daxa_f32(c.x), daxa_f32(c.y), daxa_f32(c.z)) + daxa_f32vec3(0.5f, 0.5f, 0.5f)) * vs2;
       daxa_f32vec3 dl = l2 - cc_l;
 
       daxa_f32 best = 1e9f;
-      daxa_i32 best_axis = -1;
-      daxa_f32 best_sign = 1.0f;
       [unroll]
       for (daxa_u32 ax = 0u; ax < 3u; ++ax)
       {
@@ -1061,23 +1076,35 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
         if (voxel_occ_bit(occ, s2, nb)) { continue; } // that way is more solid: not an exit
         daxa_f32 sup_ax = ax == 0u ? sup.x : (ax == 1u ? sup.y : sup.z);
         daxa_f32 ov = (0.5f * vs2 + sup_ax) - abs(di);
-        // deterministic tie band: TILTED contacts have two near-equal minimal axes and a
-        // raw argmin flips the normal 90 deg between steps (the "dancing" leaning pieces);
-        // a later axis must beat the current pick by a clear margin to displace it
-        if (ov < best - 0.05f * vs2) { best = ov; best_axis = daxa_i32(ax); best_sign = sgn; }
+        if (ov < best) { best = ov; }
       }
-      if (best_axis < 0)
+      if (best > 0.5e9f)
       {
-        // surrounded on all axes: deep interior, no reliable direction
+        // surrounded on all near sides: deep interior, no reliable direction
         red.interior_hits += 1u;
         continue;
       }
-      daxa_f32vec3 n_local = daxa_f32vec3(best_axis == 0 ? best_sign : 0.0f,
-                                          best_axis == 1 ? best_sign : 0.0f,
-                                          best_axis == 2 ? best_sign : 0.0f);
+      // PER-AXIS membership: the sample joins THIS pass's (axis, sign) manifold iff that
+      // exit is feasible and within a dominance band of the smallest exit, with its OWN
+      // exact depth along that axis. The previous per-sample argmin DEFECTED samples
+      // between axis manifolds whenever two overlaps crossed inside a 0.05vs tie band -
+      // recomposing both manifolds, hopping their winners and resetting lambdas (the
+      // measured n4 churn behind the stacked-pair jitter). With a wide band, edge
+      // samples live in BOTH manifolds stably: the wedge is real and constant.
+      daxa_f32 dla = axk == 0u ? dl.x : (axk == 1u ? dl.y : dl.z);
+      daxa_i32vec3 pnb = c;
+      if (axk == 0u) { pnb.x += daxa_i32(sgn_pass); }
+      else if (axk == 1u) { pnb.y += daxa_i32(sgn_pass); }
+      else { pnb.z += daxa_i32(sgn_pass); }
+      if (voxel_occ_bit(occ, s2, pnb)) { continue; } // pass axis not an exit here
+      daxa_f32 sup_pa = axk == 0u ? sup.x : (axk == 1u ? sup.y : sup.z);
+      daxa_f32 ovp = (0.5f * vs2 + sup_pa) - sgn_pass * dla;
+      if (ovp > best + 0.15f * vs2) { continue; } // dominated: not a credible exit
+      daxa_f32vec3 n_local = daxa_f32vec3(axk == 0u ? sgn_pass : 0.0f,
+                                          axk == 1u ? sgn_pass : 0.0f,
+                                          axk == 2u ? sgn_pass : 0.0f);
       n_out2 = r2->rotate_vector(n_local);
-      pe = -best;
-      sample_code = daxa_u32(best_axis) * 2u + (best_sign > 0.0f ? 1u : 0u);
+      pe = -ovp;
       fb = daxa_u32(c.x & 0xFF) | (daxa_u32(c.y & 0xFF) << 8u) | (daxa_u32(c.z & 0xFF) << 16u);
     }
     else
@@ -1087,35 +1114,33 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       daxa_f32vec3 half = (r2->maximum - r2->minimum) * 0.5f;
       daxa_f32vec3 center_off = (r2->maximum + r2->minimum) * 0.5f;
       l2 = l2 - center_off;
+      su = axk == 0u ? l2.y : l2.x;
+      sv = axk == 2u ? l2.y : l2.z;
       daxa_f32vec3 q = abs(l2) - half;
       if (q.x > sup.x || q.y > sup.y || q.z > sup.z) { continue; }
-      // exit along the least-penetrated face (per-axis rotated support, as above)
+      // PER-AXIS membership against the OBB faces (same dominance-band rule as the
+      // voxel branch): the pass's signed face distance must be competitive with the
+      // least-penetrated face, and the depth is the pass axis's own
       daxa_f32vec3 qs = q - sup;
-      // same deterministic tie band as the voxel-voxel mini-SAT (edge-resting pieces
-      // have two near-equal exit faces; raw argmax flips the normal between steps)
-      daxa_f32 tie = 0.05f * vs1;
-      daxa_u32 k = (qs.x > qs.y + tie && qs.x > qs.z + tie) ? 0u : (qs.y > qs.z + tie ? 1u : 2u);
-      daxa_f32 lk = k == 0u ? l2.x : (k == 1u ? l2.y : l2.z);
-      daxa_f32 qk = k == 0u ? qs.x : (k == 1u ? qs.y : qs.z);
-      daxa_f32vec3 axis = daxa_f32vec3(k == 0u ? 1.0f : 0.0f, k == 1u ? 1.0f : 0.0f, k == 2u ? 1.0f : 0.0f);
-      n_out2 = r2->rotate_vector(axis * (lk >= 0.0f ? 1.0f : -1.0f));
-      pe = qk;
-      fb = k;
-      sample_code = k * 2u + (lk >= 0.0f ? 1u : 0u);
+      daxa_f32 best_q = max(qs.x, max(qs.y, qs.z));
+      daxa_f32 l2a = axk == 0u ? l2.x : (axk == 1u ? l2.y : l2.z);
+      daxa_f32 half_a = axk == 0u ? half.x : (axk == 1u ? half.y : half.z);
+      daxa_f32 sup_a = axk == 0u ? sup.x : (axk == 1u ? sup.y : sup.z);
+      daxa_f32 q_pass = sgn_pass * l2a - half_a - sup_a;
+      if (q_pass < best_q - 0.15f * vs1) { continue; } // dominated: not a credible exit
+      daxa_f32vec3 axis = daxa_f32vec3(axk == 0u ? 1.0f : 0.0f, axk == 1u ? 1.0f : 0.0f, axk == 2u ? 1.0f : 0.0f);
+      n_out2 = r2->rotate_vector(axis * sgn_pass);
+      pe = q_pass;
+      fb = axk;
     }
     if (pe >= 0.02f) { continue; } // margin band: resting contacts (pen ~ -0.0005) must
                                    // not flicker across the cutoff and lose their lambdas
-    // per-axis manifolds: mode 16+code keeps only samples whose contact face matches
-    // that (axis, sign) in body2's LOCAL frame - a deterministic partition with no
-    // boundary churn (any single-axis cluster split left orthogonal contacts sitting
-    // exactly on a boundary; edge contacts emit BOTH face manifolds and rest as a wedge)
-    if (mode >= 16u && sample_code != mode - 16u) { continue; }
     // depth caps: half a voxel between voxel bodies (pen feeds AVBD's positional sweep -
     // full-voxel corrections pop), but a FULL voxel against statics/OBBs: fast spawns
     // tunnel into the floor and a half-voxel extraction rate loses to gravity, leaving
     // bodies half-buried (where the sleep test then froze them)
     pe = max(pe, s2_is_voxel ? -0.5f * vs1 : -vs1);
-    red.add(pw, pe, n_out2, e & 0xFFFFFFu, fb, r1->position, 0.5f * vs1);
+    red.add(pw, pe, n_out2, e & 0xFFFFFFu, fb, su, sv, 0.5f * vs1);
     ++found;
   }
   return found;
@@ -1148,10 +1173,38 @@ daxa_b32 voxel_obb_prefilter(RigidBody* a, RigidBody* b)
   return true;
 }
 
+// a contact point offset to a face corner is real support only where body2 actually has
+// material behind it: probe one cell just inside body2 along the contact axis (voxel),
+// or the face rectangle extents (OBB). Voxel-center samples had this by construction -
+// their cell PASSED the occupancy test - but an offset corner can hang past a hole edge
+// or face end, and its phantom depth then shoves the pair around.
+daxa_b32 voxel_corner_supported(daxa_f32vec3 p, daxa_f32vec3 n_sep, RigidBody* r2, VoxelShape* s2,
+                                bool s2_is_voxel, daxa_u32* occ, daxa_u32 axk)
+{
+  if (s2_is_voxel)
+  {
+    daxa_f32 vs2 = s2->voxel_size;
+    daxa_f32vec3 l2 = r2->rotate_vector_inverse((p - n_sep * (0.3f * vs2)) - r2->position);
+    daxa_f32vec3 g = (l2 - s2->grid_origin) / vs2;
+    daxa_i32vec3 cc = daxa_i32vec3(daxa_i32(floor(g.x)), daxa_i32(floor(g.y)), daxa_i32(floor(g.z)));
+    return voxel_occ_bit(occ, s2, cc);
+  }
+  daxa_f32vec3 half = (r2->maximum - r2->minimum) * 0.5f;
+  daxa_f32vec3 co = (r2->maximum + r2->minimum) * 0.5f;
+  daxa_f32vec3 l2 = r2->rotate_vector_inverse(p - r2->position) - co;
+  daxa_f32 lu = axk == 0u ? l2.y : l2.x;
+  daxa_f32 lv = axk == 2u ? l2.y : l2.z;
+  daxa_f32 hu = axk == 0u ? half.y : half.x;
+  daxa_f32 hv = axk == 2u ? half.y : half.z;
+  return abs(lu) <= hu + 0.01f && abs(lv) <= hv + 0.01f;
+}
+
 // full voxel narrow phase for a candidate pair; emits the standard Manifold.
 // emit one reduced cluster as a standard Manifold (normal from the cluster's own
 // |pen|-weighted sample normals; key identifies the cluster for warm-start matching)
-daxa_b32 voxel_emit_manifold(VoxelManifoldReducer red, bool flip, daxa_i32 key, daxa_f32vec3 n_sep, out Manifold manifold)
+daxa_b32 voxel_emit_manifold(VoxelManifoldReducer red, bool flip, daxa_i32 key, daxa_f32vec3 n_sep, daxa_f32 vs,
+                             RigidBody* r2, VoxelShape* s2, bool s2_is_voxel, daxa_u32* occ, daxa_u32 axk,
+                             out Manifold manifold)
 {
   manifold.contact_count = 0;
   manifold.key = key;
@@ -1164,30 +1217,102 @@ daxa_b32 voxel_emit_manifold(VoxelManifoldReducer red, bool flip, daxa_i32 key, 
   // a per-manifold constant, so the tangent basis and the persisted lambdas never see a
   // wiggling normal (the SAT cubes that slept perfectly have this same property)
   manifold.normal = flip ? n_sep : -n_sep;
-  daxa_u32 out_n = 0u;
+
+  // collect surviving slots; one voxel can win several extreme directions but is kept
+  // once (duplicate rows double-count its stiffness and collide warm-start identities)
+  daxa_u32 kept[4];
+  daxa_f32 keep_align[4];
+  daxa_u32 kn = 0u;
   [unroll]
-  for (daxa_u32 o = 0u; o < 8u; ++o)
+  for (daxa_u32 o = 0u; o < 4u; ++o)
   {
-    if (red.pen[o] >= 0.02f) { continue; } // band contacts emit; empty slots (1e9) drop
+    if (red.pen[o] >= 0.02f) { continue; } // band contacts emit; empty slots (1e9) drop.
+                                           // The band must stay WIDE: a 5mm cutoff made
+                                           // marginal side-face manifolds (pen ~ +0.004)
+                                           // flicker in/out, resetting their lambdas on
+                                           // every reappearance (measured n4 churn bursts)
     // depths were measured along each sample's own normal but get RESOLVED along the
-    // cluster normal: project them (and drop near-orthogonal stragglers, which would
+    // manifold normal: project them (and drop near-orthogonal stragglers, which would
     // otherwise be squeezed sideways by the full unprojected depth)
     daxa_f32 align = dot(red.nrm[o], n_sep);
     if (align <= 0.1f) { continue; }
-    manifold.contacts[out_n].position = red.pos[o];
-    manifold.contacts[out_n].penetration = red.pen[o] * align;
-    manifold.contacts[out_n].normal_impulse = 0.0f;
-    manifold.contacts[out_n].tangent_impulse[0] = 0.0f;
-    manifold.contacts[out_n].tangent_impulse[1] = 0.0f;
-    manifold.contacts[out_n].warm_start = 0u;
-    manifold.contacts[out_n].stick = 0u;
-    // warm-start matching keys on the SAMPLED body's voxel id only (B-cell ids churn on
-    // micro-motion); the octant winner is depth-sticky, so the A id is stable
-    manifold.contacts[out_n].fp.in_reference = flip ? 1u : 0u;
-    manifold.contacts[out_n].fp.out_reference = red.fp_b[o];
-    manifold.contacts[out_n].fp.in_incident = red.fp_a[o];
-    manifold.contacts[out_n].fp.out_incident = red.fp_a[o];
-    ++out_n;
+    bool dup = false;
+    for (daxa_u32 q = 0u; q < kn; ++q)
+    {
+      if (red.fp_a[kept[q]] == red.fp_a[o]) { dup = true; break; }
+    }
+    if (dup) { continue; }
+    kept[kn] = o;
+    keep_align[kn] = align;
+    ++kn;
+  }
+
+  // FOUR support points max (user-confirmed: 4 suffice for stability; qu3e keeps 4),
+  // placed at the outermost real support the patch offers:
+  //   3-4 distinct extreme voxels -> their centers (the patch bounding-quad corners)
+  //   2 voxels (a strip)          -> 2 face corners each (full-width rectangle; a line
+  //                                  of centers has zero roll lever -> limit cycle)
+  //   1 voxel                     -> its 4 face corners (the face quad)
+  // Corners retreat toward the always-supported voxel center where body2 has no
+  // material behind them (hole edges / face ends fed phantom depths to the tangles).
+  daxa_u32 reps = kn == 1u ? 4u : (kn == 2u ? 2u : 1u);
+  daxa_f32vec3 t1 = normalize(cross(n_sep, abs(n_sep.y) < 0.9f ? daxa_f32vec3(0.0f, 1.0f, 0.0f) : daxa_f32vec3(1.0f, 0.0f, 0.0f)));
+  daxa_f32vec3 t2 = cross(n_sep, t1);
+  daxa_f32vec3 da = (t1 + t2) * 0.318f * vs; // 0.45/sqrt(2): corner of the face footprint
+  daxa_f32vec3 db = (t1 - t2) * 0.318f * vs;
+  daxa_u32 out_n = 0u;
+  for (daxa_u32 k = 0u; k < kn; ++k)
+  {
+    daxa_u32 o = kept[k];
+    // diagonal choice is a property of the VOXEL (id parity), not of the kept-array
+    // index: index-based parity rotated a voxel's corner pair 90 degrees whenever a
+    // NEIGHBORING slot appeared/vanished, jolting the warm-started anchors
+    daxa_u32 vpar = (red.fp_a[o] ^ (red.fp_a[o] >> 8u) ^ (red.fp_a[o] >> 16u)) & 1u;
+    daxa_f32vec3 emitted[4];
+    daxa_u32 emitted_n = 0u;
+    for (daxa_u32 c = 0u; c < reps; ++c)
+    {
+      daxa_f32vec3 p = red.pos[o];
+      if (reps > 1u)
+      {
+        // pair 0 (c=0,1) on the voxel's parity diagonal, pair 1 (c=2,3) on the other;
+        // unsupported corners retreat toward the (always-supported) voxel center
+        daxa_f32vec3 offv = (c < 2u) == (vpar == 0u) ? da : db;
+        daxa_f32vec3 off = offv * ((c & 1u) == 0u ? 1.0f : -1.0f);
+        p = red.pos[o] + off;
+        if (!voxel_corner_supported(p, n_sep, r2, s2, s2_is_voxel, occ, axk))
+        {
+          p = red.pos[o] + off * 0.5f;
+          if (!voxel_corner_supported(p, n_sep, r2, s2, s2_is_voxel, occ, axk)) { p = red.pos[o]; }
+        }
+      }
+      // corners that retreated onto an already-emitted point are dropped instead of
+      // doubling the spring at that spot
+      bool dup_p = false;
+      for (daxa_u32 q = 0u; q < emitted_n; ++q)
+      {
+        daxa_f32vec3 dp = p - emitted[q];
+        if (dot(dp, dp) < 1.0e-12f) { dup_p = true; break; }
+      }
+      if (dup_p) { continue; }
+      emitted[emitted_n] = p;
+      ++emitted_n;
+      manifold.contacts[out_n].position = p;
+      manifold.contacts[out_n].penetration = red.pen[o] * keep_align[k];
+      manifold.contacts[out_n].normal_impulse = 0.0f;
+      manifold.contacts[out_n].tangent_impulse[0] = 0.0f;
+      manifold.contacts[out_n].tangent_impulse[1] = 0.0f;
+      manifold.contacts[out_n].warm_start = 0u;
+      manifold.contacts[out_n].stick = 0u;
+      // warm-start matching keys on the SAMPLED body's voxel id (B-cell ids churn on
+      // micro-motion). Bits 0..23 = packed voxel coords; bits 24-25 = corner index, so
+      // each point of one voxel keeps a distinct, stable identity
+      manifold.contacts[out_n].fp.in_reference = flip ? 1u : 0u;
+      manifold.contacts[out_n].fp.out_reference = red.fp_b[o];
+      manifold.contacts[out_n].fp.in_incident = red.fp_a[o] | (c << 24u);
+      manifold.contacts[out_n].fp.out_incident = red.fp_a[o] | (c << 24u);
+      ++out_n;
+    }
   }
   manifold.contact_count = daxa_i32(out_n);
   return out_n > 0u;
@@ -1274,7 +1399,8 @@ daxa_b32 voxel_axis_collision_detection(SimConfig* sim_config, RigidBody* rA, Ri
   daxa_f32 sgn = (code & 1u) != 0u ? 1.0f : -1.0f;
   daxa_f32vec3 n_local = daxa_f32vec3(ax == 0u ? sgn : 0.0f, ax == 1u ? sgn : 0.0f, ax == 2u ? sgn : 0.0f);
   daxa_f32vec3 n_world = r2->rotate_vector(n_local);
-  return voxel_emit_manifold(red, flip, daxa_i32(90u + code), n_world, manifold);
+  return voxel_emit_manifold(red, flip, daxa_i32(90u + code), n_world, s1->voxel_size,
+                             r2, s2, s2_is_voxel, occ, ax, manifold);
 }
 
 func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rigid_boy_map, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, CollisionEntry* collision_map, Manifold* collisions, RigidBodyEntry* previous_rigid_body_map, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, CollisionEntry* collision_map_prev, Manifold* old_collisions, BodyLink* body_links) -> void
@@ -1284,6 +1410,14 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
 
   RigidBody* r = &rigid_bodies[rba_index];
   RigidBody* r2 = &rigid_bodies[rbb_index];
+
+  // static-static pairs (floor vs the scene's static blocks) produce inert manifolds the
+  // solver never acts on, but the warm-start matcher chewed on them every frame (the
+  // phantom persistent fresh=4 with an OBB SAT key in the probes): skip them outright
+  if (!r->has_flag(RigidBodyFlag::DYNAMIC) && !r2->has_flag(RigidBodyFlag::DYNAMIC))
+  {
+    return;
+  }
 
   IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count, body_links);
 
@@ -1354,6 +1488,25 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
 #endif
         manifold.update_from_old(&old_collisions[old_index]);
       } 
+    }
+
+    // identity-churn probe: contacts that failed BOTH the fp match and proximity
+    // inheritance re-enter the solver with lambda=0 (the "dancing blue points" of the
+    // TAB debug view, which tints by warm_start). At rest this must read ZERO.
+    {
+      daxa_u32 fresh = 0u;
+      for (daxa_i32 ci = 0; ci < manifold.contact_count; ++ci)
+      {
+        if (manifold.contacts[ci].warm_start == 0u) { ++fresh; }
+      }
+      if (fresh > 0u)
+      {
+        InterlockedAdd(sim_config->dbg_fresh, fresh);
+        // culprit latch: pair + key + count of one churning manifold (Max = stable pick)
+        daxa_u32 tag = (min(rba_index, 0x3FFu) << 22u) | (min(rbb_index, 0x3FFu) << 12u) |
+                       ((daxa_u32(manifold.key) & 0xFFu) << 4u) | min(fresh, 0xFu);
+        InterlockedMax(sim_config->dbg_fresh_tag, tag);
+      }
     }
 
     // Add collision to buffer

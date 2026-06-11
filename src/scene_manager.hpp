@@ -724,6 +724,10 @@ public:
     push_voxel_body(cross_shape, daxa_f32vec3(6.0f, 0.51f, 14.0f), q_x90, 5u, 0.6f);
     push_voxel_body(l_shape, daxa_f32vec3(6.2f, 1.45f, 14.3f), q_tilt, 2u, 0.6f);
     push_voxel_body(l_shape, daxa_f32vec3(7.3f, 1.30f, 13.8f), q_lean, 4u, 0.6f);
+    // D: STACK - L flat dropped centered onto a flat cross (the user-reported unstable
+    //    configuration: a body resting entirely on another's small top faces)
+    push_voxel_body(cross_shape, daxa_f32vec3(-12.0f, 0.51f, 14.0f), q_x90, 5u, 0.6f);
+    push_voxel_body(l_shape, daxa_f32vec3(-12.0f, 1.56f, 14.0f), q_x90, 2u, 0.6f);
   }
 
   bool load_scene()

@@ -609,6 +609,10 @@ struct SimConfig
   daxa_u32 dbg_maxv;               // per-frame max |v| over dynamic bodies, integer mm/s (reset each frame)
   daxa_u32 dbg_id_sum;             // per-frame sum of body ids over all rows; constant unless the
                                    // sort/reorder permutation duplicates one row and drops another
+  daxa_u32 dbg_fresh;              // per-frame contacts whose identity failed warm-start matching
+                                   // (warm_start==0 = lambda reset; nonzero at rest = contact churn)
+  daxa_u32 dbg_fresh_tag;          // one churning manifold: rbaIdx<<22 | rbbIdx<<12 | key<<4 | n
+                                   // (also keeps the trailing u64 block 8-byte aligned)
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
