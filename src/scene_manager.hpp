@@ -796,15 +796,24 @@ public:
     push_wall(daxa_f32vec3(0.0f, 7.0f, 16.75f), daxa_f32vec3(3.0f, 7.0f, 0.25f));
     push_wall(daxa_f32vec3(0.0f, 7.0f, 11.25f), daxa_f32vec3(3.0f, 7.0f, 0.25f));
 
-    // 12 layers x 4x4 unit cubes dropped into the pit. Deterministic sub-cube jitter
-    // (index-hashed, NO RNG) so columns do not land in a degenerate perfect lattice
-    // and the run is exactly reproducible.
+    // 12 layers x 4x4 unit cubes dropped into the pit with deterministic index-hashed
+    // jitter AND TILT (no RNG, exactly reproducible). Straight axis-aligned columns
+    // land as a neat lattice and stay columnar; the tilts (4-13 deg about a hashed
+    // horizontal axis) make the cubes tumble into the disordered-but-settled heap this
+    // scene exists to stress.
     for (u32 iy = 0; iy < 12; ++iy) {
       for (u32 iz = 0; iz < 4; ++iz) {
         for (u32 ix = 0; ix < 4; ++ix) {
-          f32 const jx = (f32((ix * 3u + iy * 5u + iz * 7u) % 11u) - 5.0f) * 0.02f;
-          f32 const jz = (f32((ix * 7u + iy * 3u + iz * 5u) % 11u) - 5.0f) * 0.02f;
-          rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-1.8f + 1.2f * ix + jx, 1.0f + 1.2f * iy, 12.2f + 1.2f * iz + jz), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = 0.6f});
+          u32 const h1 = ix * 3u + iy * 5u + iz * 7u;
+          u32 const h2 = ix * 7u + iy * 3u + iz * 5u;
+          u32 const h3 = ix * 5u + iy * 7u + iz * 3u;
+          f32 const jx = (f32(h1 % 11u) - 5.0f) * 0.05f; // +-0.25
+          f32 const jz = (f32(h2 % 11u) - 5.0f) * 0.05f; // +-0.25
+          f32 const phi = f32(h3 % 16u) * 0.3927f;       // tilt axis bearing
+          f32 const ang = 0.07f + f32(h1 % 7u) * 0.025f; // 4-13 deg
+          f32 const sh = std::sin(0.5f * ang);
+          Quaternion const q_tilt = Quaternion(std::cos(phi) * sh, 0.0f, std::sin(phi) * sh, std::cos(0.5f * ang));
+          rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-1.65f + 1.1f * ix + jx, 1.0f + 1.45f * iy, 12.35f + 1.1f * iz + jz), .rotation = q_tilt, .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = 0.6f});
         }
       }
     }

@@ -621,12 +621,23 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   // statics are always "quiet"; only a non-quiet DYNAMIC partner vetoes
   bool a_loud = a_dyn && ((ra->sleep_timer & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
   bool b_loud = b_dyn && ((rb->sleep_timer & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
+  // DEPTH veto: AVBD's post-stabilization corrects penetration positionally, without
+  // velocity, so the velocity-based sleep test can freeze a deep pile mid-extraction
+  // (the box pool froze with 88-213mm of standing interpenetration). Keep the pair
+  // awake while its deepest contact is far from the surface: the penalty ramp keeps
+  // shrinking the overlap while the bodies stay quiet, and they finally sleep flush.
+  daxa_i32 cc = manifolds[m].contact_count;
+  bool deep = false;
+  for (daxa_i32 ci = 0; ci < cc; ++ci)
+  {
+    if (manifolds[m].contacts[ci].penetration < -0.05f) { deep = true; break; }
+  }
   daxa_u32 prev;
-  if (a_loud && b_dyn)
+  if ((a_loud || deep) && b_dyn)
   {
     InterlockedOr(rb->sleep_timer, BB_SLEEP_VETO_BIT, prev);
   }
-  if (b_loud && a_dyn)
+  if ((b_loud || deep) && a_dyn)
   {
     InterlockedOr(ra->sleep_timer, BB_SLEEP_VETO_BIT, prev);
   }
