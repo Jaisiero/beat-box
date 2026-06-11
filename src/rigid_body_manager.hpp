@@ -254,7 +254,7 @@ private:
   daxa::BufferId voxel_surface = {};
 
   // Simulation configuration
-  SimSolverType solver_type = SimSolverType::AVBD; // voxel testing default
+  SimSolverType solver_type = SimSolverType::PGS_SOFT;
 
   daxa_u32 shift = 0;
 };
