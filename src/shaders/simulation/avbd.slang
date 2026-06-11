@@ -48,6 +48,13 @@ bool avbd_is_dynamic(RigidBody* r)
 }
 
 // unique per-round priority: rotating hash in the high bits, body index in the low bits (no ties)
+// NOTE: `body` must be the PERSISTENT body id, not the sorted index. The sorted index
+// reshuffles with the radix sort whenever anything moves, which re-colored the graph
+// every step -> the Gauss-Seidel solve order (color = phase) changed per step -> the
+// residual redistributed differently each step ("order noise"), a micro-jitter floor
+// that kept settling crusts hovering above the sleep threshold (user-diagnosed).
+// Hashing the persistent id makes the coloring a pure function of the contact graph:
+// identical every step at rest, deterministic always.
 daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
 {
   daxa_u32 x = body * 0x9e3779b9u + round * 0x85ebca6bu;
@@ -158,6 +165,36 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   Quaternion dq = qc * qs_conj;
   daxa_f32 sign = dq.w < 0.0f ? -1.0f : 1.0f;
   r->omega = dq.v * (2.0f * sign * inv_dt);
+
+  // SETTLE ASSIST: a body that is clearly part of a settled pile (3+ manifolds) and
+  // already slow gets its residual micro-velocity sponged exponentially, so the crust
+  // crosses the sleep threshold (0.12 m/s for 30 steps) in a fraction of a second
+  // instead of simmering just above it for minutes while the neighborhood veto holds
+  // whole bubbles awake. The 3-manifold gate protects legitimate physics: a ramp
+  // slider carries 1-2 manifolds and must keep decelerating by FRICTION alone
+  // (scene_4 canonical outcomes are the regression baseline).
+  daxa_f32 v2 = dot(r->velocity, r->velocity);
+  daxa_f32 w2 = dot(r->omega, r->omega);
+  if (v2 < 0.09f && w2 < 0.16f) // (0.3 m/s)^2, (0.4 rad/s)^2
+  {
+    ManifoldNode* manifold_nodes = (ManifoldNode*)(AVBD_PC.task_head.manifold_nodes);
+    daxa_u32 manifold_node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+    daxa_u32 node = r->manifold_node_index;
+    daxa_u32 cnt = 0u;
+    daxa_u32 steps = 0u;
+    while (node != MAX_U32 && node < manifold_node_count && cnt < 3u && steps < manifold_node_count)
+    {
+      ++cnt;
+      daxa_i32 nxt = manifold_nodes[node].next;
+      node = nxt < 0 ? MAX_U32 : daxa_u32(nxt);
+      ++steps;
+    }
+    if (cnt >= 3u)
+    {
+      r->velocity *= 0.9f;
+      r->omega *= 0.9f;
+    }
+  }
 }
 
 // ----- F3: contact constraints (normal only), primal 6x6 block solve + dual updates -----
@@ -819,7 +856,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   daxa_u32 manifold_node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
   daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
 
-  daxa_u32 my_prio = avbd_priority(i, AVBD_PC.color);
+  daxa_u32 my_prio = avbd_priority(r->id, AVBD_PC.color);
 
   // pass 1: local-max test among uncolored dynamic neighbors + collect colored neighbor mask
   daxa_u32 used_mask = 0u;
@@ -839,7 +876,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
           daxa_u32 pc = body_color[p];
           if (pc == AVBD_UNCOLORED)
           {
-            if (avbd_priority(p, AVBD_PC.color) > my_prio)
+            if (avbd_priority(rp->id, AVBD_PC.color) > my_prio)
             {
               return; // a higher-priority uncolored neighbor goes first this round
             }
