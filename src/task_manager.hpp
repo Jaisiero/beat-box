@@ -235,9 +235,10 @@ struct TaskManager
     auto TG = TaskGraph(daxa::TaskGraph({
         .device = gpu->device,
         .swapchain = is_swapchain? gpu->swapchain : std::optional<daxa::Swapchain>(),
-        // the rigid-body graph carries ~1000 tasks (per-color PGS + AVBD sweeps); the 512KiB
-        // default task memory pool is too tight for that
-        .task_memory_pool_size = 1u << 21u,
+        // the rigid-body graph carries ~2600 tasks (per-color PGS + AVBD sweeps + the
+        // depth-ordered shock-propagation cascade: sweeps x layers x colors); the 512KiB
+        // default task memory pool is far too tight for that
+        .task_memory_pool_size = 1u << 23u,
         .default_queue = queue,
         .name = name,
     }), queue);

@@ -802,6 +802,14 @@ static const daxa_f32 BB_AVBD_STICK_SLOP = 0.001f;  // anchor drift deadband: be
 static const daxa_u32 BB_AVBD_ITERATIONS = 10;      // main sweeps (+1 post-stabilization sweep)
 static const daxa_u32 BB_AVBD_COLOR_ROUNDS = 16;    // Jones-Plassmann body-coloring rounds
 static const daxa_u32 BB_AVBD_MAX_BODY_COLORS = 32; // primal dispatches per sweep (empty = no-op)
+static const daxa_u32 BB_AVBD_SHOCK_LAYERS = 12;    // shock propagation: depth buckets for the
+                                                    // ORDERED post-stab cascade (and BFS relax
+                                                    // pass count). Deeper bodies saturate into
+                                                    // the last bucket - still a valid ordering.
+                                                    // Guendelman's insight: lower layers settle
+                                                    // BEFORE upper ones sample them; v1 (row
+                                                    // skipping without ordering) measured as a
+                                                    // potential-energy pump - order is the cure.
 static const daxa_u32 BB_AVBD_POST_STAB_SWEEPS = 4; // alpha=0 positional sweeps per frame. ONE
                                                     // (the reference) extracts deep piles about a
                                                     // contact layer per frame and plateaus at
@@ -905,6 +913,9 @@ struct AvbdBodyState {
   Quaternion rot_start;
   daxa_f32vec3 pos_tilde;
   Quaternion rot_tilde;
+  daxa_u32 support_depth; // shock propagation: contact-graph BFS distance from static
+                          // or sleeping support (0 = static/sleeping, 1 = resting on it,
+                          // ...; MAX_U32 = unsupported/free-falling). Rebuilt every step.
 };
 DAXA_DECL_BUFFER_PTR(AvbdBodyState)
 
@@ -1204,6 +1215,8 @@ struct AvbdPushConstants
   DAXA_TH_BLOB(AvbdTaskHead, task_head)
   daxa_u32 color;       // primal: which body color to solve; coloring rounds: the round number
   daxa_f32 stab_alpha;  // 1.0 = main sweeps (constraint delta only), 0.0 = post-stabilization
+  daxa_u32 ps_depth;    // shock propagation (post-stab only): solve ONLY bodies whose
+                        // saturated support depth equals this layer; MAX_U32 = no filter
 };
 
 

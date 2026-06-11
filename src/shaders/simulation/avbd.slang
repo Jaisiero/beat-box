@@ -463,6 +463,17 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
   AvbdBodyState* s = &states[i];
 
+  // shock propagation (post-stab cascade): each dispatch solves ONE support-depth layer,
+  // in ascending order, so this body's supports already settled within this sweep
+  if (AVBD_PC.ps_depth != MAX_U32)
+  {
+    daxa_u32 my_layer = min(s->support_depth, BB_AVBD_SHOCK_LAYERS - 1u);
+    if (my_layer != AVBD_PC.ps_depth)
+    {
+      return;
+    }
+  }
+
   daxa_f32 dt = sim_config->dt;
   daxa_f32 inv_dt2 = dt > 0.0f ? 1.0f / (dt * dt) : 0.0f;
 
@@ -522,6 +533,11 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
         AvbdBodyState* s1 = &states[b1];
         AvbdBodyState* s2 = &states[b2];
 
+        // NOTE on shock propagation: the cascade ORDERS the layer solves (dispatch
+        // order) but every row stays - including partners above. Skipping upper rows
+        // was tried TWICE (unordered v1, ordered v2) and both boiled identically: in a
+        // penalty solver the post-stab must see the same LOADS as the main sweeps, or
+        // it rebuilds an unloaded pile each frame and fights the loaded equilibrium.
         daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
         daxa_f32 mu = sqrt(max(r1->friction, 0.0f) * max(r2->friction, 0.0f));
         for (daxa_u32 j = 0u; j < cc; ++j)
@@ -598,6 +614,72 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   Quaternion qn = (dq * r->rotation).normalize();
   r->rotation.v = qn.v;
   r->rotation.w = qn.w;
+}
+
+// ----- shock propagation: support-depth BFS over the contact graph -----
+//
+// depth 0 = static or sleeping bodies (they ARE ground for whatever rests on them);
+// each relax pass lowers a body's depth to min(depth, touching partner's depth + 1).
+// BB_AVBD_SHOCK_LAYERS passes recognize piles that many layers tall; taller stacks
+// saturate into the last layer (still a consistent ordering for the cascade).
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_depth_reset(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
+  RigidBody* r = &rigid_bodies[i];
+  bool grounded = !avbd_is_dynamic(r) || (r->flags & RigidBodyFlag::SLEEPING) != RigidBodyFlag::NONE;
+  states[i].support_depth = grounded ? 0u : MAX_U32;
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_depth_relax(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 m_idx = compute_i.x;
+  daxa_u32 coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m_idx >= coll)
+  {
+    return;
+  }
+  Manifold* m = &((Manifold*)(AVBD_PC.task_head.collisions))[m_idx];
+  daxa_u32 b1 = m->obb1_index;
+  daxa_u32 b2 = m->obb2_index;
+  if (b1 >= sim_config->rigid_body_count || b2 >= sim_config->rigid_body_count || b1 == b2)
+  {
+    return;
+  }
+  if (m->contact_count <= 0)
+  {
+    return;
+  }
+  AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
+  daxa_u32 d1 = states[b1].support_depth;
+  daxa_u32 d2 = states[b2].support_depth;
+  daxa_u32 prev;
+  if (d2 != MAX_U32 && d2 + 1u < d1)
+  {
+    InterlockedMin(states[b1].support_depth, d2 + 1u, prev);
+  }
+  if (d1 != MAX_U32 && d1 + 1u < d2)
+  {
+    InterlockedMin(states[b2].support_depth, d1 + 1u, prev);
+  }
 }
 
 // dual: one thread per manifold; assign lambda = clamped force, grow the penalty linearly

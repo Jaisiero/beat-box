@@ -454,6 +454,10 @@ const auto entry_avbd_primal = "entry_avbd_primal";
 const auto avbd_primal_pipeline_name = "AVBD Primal";
 const auto entry_avbd_dual = "entry_avbd_dual";
 const auto avbd_dual_pipeline_name = "AVBD Dual";
+const auto entry_avbd_depth_reset = "entry_avbd_depth_reset";
+const auto avbd_depth_reset_pipeline_name = "AVBD Depth Reset";
+const auto entry_avbd_depth_relax = "entry_avbd_depth_relax";
+const auto avbd_depth_relax_pipeline_name = "AVBD Depth Relax";
 // island sleeping (entries in RB_sim.slang)
 const auto entry_sleep_reduce = "entry_sleep_reduce";
 const auto sleep_reduce_pipeline_name = "Sleep Reduce";
@@ -1174,6 +1178,28 @@ struct AvbdDualInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(AvbdPushConstants),
       .name = avbd_dual_pipeline_name,
+  };
+};
+struct AvbdDepthResetInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_depth_reset, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_depth_reset_pipeline_name,
+  };
+};
+struct AvbdDepthRelaxInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_depth_relax, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_depth_relax_pipeline_name,
   };
 };
 // island sleeping passes (entries in RB_sim.slang; share SleepPushConstants)
