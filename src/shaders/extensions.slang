@@ -352,12 +352,11 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
               contacts[i].anchor_a = old_contact->anchor_a;
               contacts[i].anchor_b = old_contact->anchor_b;
             }
-            // persistent-manifold POSITION hysteresis (voxel manifolds): regenerated
-            // positions micro-wobble every step (corner retreat toggles, sub-mm sample
-            // drift), continuously moving the solver's arms even though the identity
-            // matched. Keep the OLD point until it has really drifted (Box2D/Bullet
-            // keep clipped points the same way). Depth still refreshes from geometry.
-            if (voxel_m)
+            // persistent-manifold POSITION hysteresis (all manifold kinds): regenerated
+            // positions micro-wobble every step (voxel corner retreat toggles, SAT clip
+            // vertices sliding), continuously moving the solver's arms even though the
+            // identity matched. Keep the OLD point until it has really drifted
+            // (Box2D/Bullet keep clipped points the same way). Depth still refreshes.
             {
               daxa_f32vec3 dpos = contacts[i].position - old_contact->position;
               if (dot(dpos, dpos) < 0.01f) // (0.1)^2
@@ -373,20 +372,21 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
         }
       }
     }
-    // Voxel manifolds: PROXIMITY inheritance for the leftovers (persistent-manifold
-    // style). The per-region winner voxel can hop to a neighbor on micro-motion, which
-    // changes the feature id and would reset that contact's lambdas every step - the
-    // standing jitter source. If an unmatched NEW contact lies within half a voxel of an
+    // PROXIMITY inheritance for the leftovers (persistent-manifold style), ALL manifold
+    // kinds. Voxel: the per-region winner voxel can hop to a neighbor on micro-motion.
+    // OBB SAT: aligned deep stacks (the box pool) churn clip-vertex feature ids on
+    // micro-sliding - measured 380-530 lambda resets per step, which starves deep
+    // columns of converged contact forces. If an unmatched NEW contact lies near an
     // unconsumed OLD one, it inherits the old contact's physics AND identity, so the
-    // solver sees one continuous contact regardless of which voxel won the region.
-    if (voxel_m)
+    // solver sees one continuous contact regardless of feature-id churn.
     {
       for(daxa_u32 i = 0u; i < contact_count; i++) {
         if ((matched_new & (1u << i)) != 0u) { continue; }
-        daxa_f32 best_d2 = 0.36f; // (0.6)^2: must cover a FULL scene voxel (vs = 0.5) -
-                                  // winner hops move a contact one whole voxel and the
-                                  // old 0.3 radius missed them, so every hop reset its
-                                  // lambdas (measured as n4 churn bursts in the stack)
+        daxa_f32 best_d2 = voxel_m ? 0.36f // (0.6)^2: one FULL scene voxel - winner hops
+                                           // move a contact a whole voxel (0.5)
+                                   : 0.1225f; // (0.35)^2: SAT clip corners sit ~0.8-1.0
+                                              // apart on unit cubes, so the nearest
+                                              // unconsumed old point is the predecessor
         daxa_i32 best_j = -1;
         for(daxa_u32 j = 0u; j < old_manifold->contact_count; j++) {
           if ((used_old & (1u << j)) != 0u) { continue; }

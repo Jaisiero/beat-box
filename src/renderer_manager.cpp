@@ -296,8 +296,9 @@ void RendererManager::render()
                     << " nan=" << sc.gc_sat_nanflags << " y=" << sc.gc_sat_pos_y
                     << " maxv=" << sc.dbg_maxv
                     << " fresh=" << sc.dbg_fresh
-                    << " ftag=[" << (sc.dbg_fresh_tag >> 22u) << "," << ((sc.dbg_fresh_tag >> 12u) & 0x3FFu)
-                    << " k" << ((sc.dbg_fresh_tag >> 4u) & 0xFFu) << " n" << (sc.dbg_fresh_tag & 0xFu) << "]"
+                    << " ftag=[" << ((sc.dbg_fresh_tag >> 22u) & 0x1FFu) << "," << ((sc.dbg_fresh_tag >> 12u) & 0x3FFu)
+                    << " k" << ((sc.dbg_fresh_tag >> 4u) & 0xFFu) << " n" << (sc.dbg_fresh_tag & 0xFu)
+                    << (sc.dbg_fresh_tag >> 31u ? " MISS" : "") << "]"
                     << " pen=" << sc.dbg_pen
                     << " idsum=" << (daxa_i64)sc.dbg_id_sum - (daxa_i64)((daxa_u64)sc.rigid_body_count * (sc.rigid_body_count - 1) / 2)
                     << " EX[s=" << sc.dbg_ex_stage << " b=" << sc.dbg_ex_body << " f=" << sc.dbg_ex_frame

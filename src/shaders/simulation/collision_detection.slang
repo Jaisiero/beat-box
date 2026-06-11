@@ -1505,6 +1505,7 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     bool rbb_prev_exists = rbb_prev_index < previous_sim_config.rigid_body_count;
 
     daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
+    bool matched_old = false;
     if(warm_starting && rba_prev_exists && rbb_prev_exists) {
       daxa_u32 old_index = 0;
       RigidBody* prev_rba = &previous_rigid_bodies[rba_prev_index];
@@ -1517,8 +1518,9 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
 #else
       if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index)) {
 #endif
+        matched_old = true;
         manifold.update_from_old(&old_collisions[old_index]);
-      } 
+      }
     }
 
     // identity-churn probe: contacts that failed BOTH the fp match and proximity
@@ -1539,9 +1541,12 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       if (fresh > 0u)
       {
         InterlockedAdd(sim_config->dbg_fresh, fresh);
-        // culprit latch: pair + key + count of one churning manifold (Max = stable pick)
-        daxa_u32 tag = (min(rba_index, 0x3FFu) << 22u) | (min(rbb_index, 0x3FFu) << 12u) |
-                       ((daxa_u32(manifold.key) & 0xFFu) << 4u) | min(fresh, 0xFu);
+        // culprit latch: pair + key + count of one churning manifold (Max = stable pick).
+        // Bit 31 distinguishes "no old manifold FOUND for this pair+key" (key flap /
+        // first touch) from "found, but these contacts failed both matching passes".
+        daxa_u32 tag = (min(rba_index, 0x1FFu) << 22u) | (min(rbb_index, 0x3FFu) << 12u) |
+                       ((daxa_u32(manifold.key) & 0xFFu) << 4u) | min(fresh, 0xFu) |
+                       (matched_old ? 0u : 0x80000000u);
         InterlockedMax(sim_config->dbg_fresh_tag, tag);
       }
     }
