@@ -36,19 +36,19 @@ struct RigidBodyManager{
     return sim_flags;
   }
 
+  // Flag changes do NOT mark the sim dirty: the per-step "reset sim config" task
+  // already uploads `sim_flags` every step, so the toggle propagates within a frame.
+  // Marking dirty ran update_sim(), whose FULL SimConfig rewrite zeroes the previous
+  // step's g_c_info.collision_count - the next warm-start pass then found ZERO old
+  // manifolds, wiping every persisted lambda. Visible effect (user-found): pressing
+  // TAB (debug overlay) made the whole settled pile twitch and reposition.
   SimFlag clear_sim_flags(SimFlag flags) {
     sim_flags &= ~flags;
-    for(auto i = 0u; i < DOUBLE_BUFFERING; ++i) {
-      sim_flag_dirty[i] = true;
-    }
     return sim_flags;
   }
 
   SimFlag set_sim_flags(SimFlag flags) {
     sim_flags |= flags;
-    for(auto i = 0u; i < DOUBLE_BUFFERING; ++i) {
-      sim_flag_dirty[i] = true;
-    }
     return sim_flags;
   }
 
