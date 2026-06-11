@@ -469,6 +469,273 @@ public:
     push_cube(ramp_b_c, xl_b, yl_b, q_b, 0.0f, 12.2f, 1.0f, 2u, lift0);
   }
 
+  // ---- voxel collision shapes (Teardown-style concave bodies) ----
+  // Builds the occupancy bitmask, the surface-voxel list and the mass properties from a
+  // solid(x,y,z) predicate over a small grid. The BODY origin is the center of mass; the
+  // shape stores grid_origin = corner of voxel (0,0,0) in the body frame. Returns the
+  // 1-based id for RigidBody::shape_index (0 = no voxel shape).
+  struct VoxelShapeBuild
+  {
+    daxa_u32 shape_id; // 1-based
+    daxa_f32 mass;
+    daxa_f32mat3x3 inv_inertia;
+    daxa_f32vec3 minimum;
+    daxa_f32vec3 maximum;
+    daxa_u32 primitive_count;
+  };
+
+  template <typename F>
+  VoxelShapeBuild build_voxel_shape(glm::uvec3 dims, f32 vs, f32 density, F &&solid)
+  {
+    auto idx = [&](u32 x, u32 y, u32 z) { return x + y * dims.x + z * dims.x * dims.y; };
+    auto is_solid = [&](i32 x, i32 y, i32 z) -> bool {
+      if (x < 0 || y < 0 || z < 0 || x >= (i32)dims.x || y >= (i32)dims.y || z >= (i32)dims.z) return false;
+      return solid((u32)x, (u32)y, (u32)z);
+    };
+
+    // center of mass (uniform density) in grid space
+    glm::dvec3 com(0.0);
+    u32 count = 0;
+    for (u32 z = 0; z < dims.z; ++z)
+      for (u32 y = 0; y < dims.y; ++y)
+        for (u32 x = 0; x < dims.x; ++x)
+          if (solid(x, y, z)) { com += glm::dvec3(x + 0.5, y + 0.5, z + 0.5); ++count; }
+    com = com / (f64)count * (f64)vs;
+    f32 const voxel_mass = density * vs * vs * vs;
+    f32 const mass = voxel_mass * (f32)count;
+    glm::vec3 const grid_origin = -glm::vec3(com); // body frame: CoM at the origin
+
+    // occupancy bits + surface list + inertia about the CoM
+    u32 const bit_count = dims.x * dims.y * dims.z;
+    u32 const occ_offset = (u32)voxel_occ_cpu.size();
+    voxel_occ_cpu.resize(occ_offset + (bit_count + 31u) / 32u, 0u);
+    u32 const surf_offset = (u32)voxel_surf_cpu.size();
+    glm::mat3 inertia(0.0f);
+    std::vector<Aabb> prims;
+    prims.reserve(count);
+    for (u32 z = 0; z < dims.z; ++z)
+      for (u32 y = 0; y < dims.y; ++y)
+        for (u32 x = 0; x < dims.x; ++x)
+        {
+          if (!solid(x, y, z)) continue;
+          u32 const bit = idx(x, y, z);
+          voxel_occ_cpu[occ_offset + bit / 32u] |= 1u << (bit % 32u);
+          glm::vec3 const center = grid_origin + glm::vec3(x + 0.5f, y + 0.5f, z + 0.5f) * vs;
+          // parallel-axis voxel inertia: point term + own-cube term
+          f32 const r2 = glm::dot(center, center);
+          inertia += voxel_mass * (glm::mat3(r2) - glm::outerProduct(center, center));
+          inertia += glm::mat3(voxel_mass * vs * vs / 6.0f);
+          prims.push_back(Aabb(daxa_f32vec3(center.x - 0.5f * vs, center.y - 0.5f * vs, center.z - 0.5f * vs),
+                               daxa_f32vec3(center.x + 0.5f * vs, center.y + 0.5f * vs, center.z + 0.5f * vs)));
+          // surface voxel: any of the 6 neighbors empty; normal_code = first empty direction
+          i32 const nx[6][3] = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
+          for (u32 d = 0; d < 6; ++d)
+          {
+            if (!is_solid((i32)x + nx[d][0], (i32)y + nx[d][1], (i32)z + nx[d][2]))
+            {
+              voxel_surf_cpu.push_back(x | (y << 8) | (z << 16) | (d << 24));
+              break;
+            }
+          }
+        }
+
+    if (voxel_occ_cpu.size() > BB_MAX_VOXEL_OCC_U32S || voxel_surf_cpu.size() > BB_MAX_VOXEL_SURF_COUNT ||
+        voxel_shape_cpu.size() >= BB_MAX_VOXEL_SHAPE_COUNT)
+    {
+      std::cerr << "ERROR: voxel shape pools exceeded!" << std::endl;
+    }
+
+    voxel_shape_cpu.push_back(VoxelShape{
+        .dims = daxa_u32vec3(dims.x, dims.y, dims.z),
+        .voxel_size = vs,
+        .grid_origin = daxa_f32vec3(grid_origin.x, grid_origin.y, grid_origin.z),
+        .occ_offset = occ_offset,
+        .surf_offset = surf_offset,
+        .surf_count = (u32)voxel_surf_cpu.size() - surf_offset,
+    });
+    voxel_shape_prims.push_back(std::move(prims));
+
+    return VoxelShapeBuild{
+        .shape_id = (u32)voxel_shape_cpu.size(), // 1-based
+        .mass = mass,
+        .inv_inertia = daxa_mat3_from_glm_mat3(glm::inverse(inertia)),
+        .minimum = daxa_f32vec3(grid_origin.x, grid_origin.y, grid_origin.z),
+        .maximum = daxa_f32vec3(grid_origin.x + dims.x * vs, grid_origin.y + dims.y * vs, grid_origin.z + dims.z * vs),
+        .primitive_count = (u32)voxel_shape_prims.back().size(),
+    };
+  }
+
+  void push_voxel_body(VoxelShapeBuild const &s, daxa_f32vec3 pos, Quaternion rot, daxa_u32 mat, f32 friction)
+  {
+    rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY), .primitive_count = s.primitive_count, .primitive_offset = 0, .shape_index = s.shape_id, .position = pos, .rotation = rot, .minimum = s.minimum, .maximum = s.maximum, .mass = s.mass, .inv_mass = 1.0f / s.mass, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = s.inv_inertia, .restitution = 0.0f, .friction = friction});
+    rigid_bodies.back().material_index = mat;
+  }
+
+  // Voxel-shape showcase: concave bodies (L / cross / hollow frame) dropping into a pile,
+  // plus a static post under one frame (the V3 "threading" money shot). V0 INTERIM physics:
+  // bodies collide as their bounding boxes (the SAT path) until the voxel narrow phase
+  // lands, so visual interpenetration of the concave parts is expected for now.
+  void scene_5() {
+    materials = {
+      {
+        .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.55f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.30f, 0.08f, 0.06f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+    };
+
+    // floor + lighting panel (same pattern as scene_3/4)
+    rigid_bodies = {
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f}
+    };
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 22.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-5.0f, -0.2f, -5.0f), .maximum = daxa_f32vec3(5.0f, 0.2f, 5.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 1u; // emissive
+
+    // static post for the frame-threading showcase (dark red, world +x = screen-left)
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(8.0f, 4.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.35f, -4.0f, -0.35f), .maximum = daxa_f32vec3(0.35f, 4.0f, 0.35f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 7u;
+
+    f32 const vs = 0.5f;
+    f32 const density = 2.0f;
+    // L: 6x2x2 base + 2x4x2 column (40 voxels, 3x3x1 world units)
+    auto l_shape = build_voxel_shape(glm::uvec3(6, 6, 2), vs, density,
+        [](u32 x, u32 y, u32) { return y < 2 || x < 2; });
+    // cross / plus (40 voxels)
+    auto cross_shape = build_voxel_shape(glm::uvec3(6, 6, 2), vs, density,
+        [](u32 x, u32 y, u32) { return (x >= 2 && x < 4) || (y >= 2 && y < 4); });
+    // hollow frame: 8x8x2 closed ring with a 4x4 hole (2x2 world units - the 0.7-wide
+    // post threads with clearance). The hole predicate is for an 8x8 grid: with the old
+    // 6x6 dims it silently produced an OPEN corner (two walls), not a ring
+    auto frame_shape = build_voxel_shape(glm::uvec3(8, 8, 2), vs, density,
+        [](u32 x, u32 y, u32) { return !(x >= 2 && x < 6 && y >= 2 && y < 6); });
+
+    Quaternion const q_id = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    Quaternion const q_x90 = Quaternion(0.7071f, 0.0f, 0.0f, 0.7071f); // hole axis vertical
+
+    // small pile of concave bodies (greens = L, yellow = cross, violet = frame)
+    push_voxel_body(l_shape,     daxa_f32vec3(-6.0f, 2.5f, 13.0f), q_id, 2u, 0.6f);
+    push_voxel_body(l_shape,     daxa_f32vec3(-5.4f, 5.5f, 14.6f), q_x90, 2u, 0.6f);
+    push_voxel_body(l_shape,     daxa_f32vec3(-2.0f, 8.0f, 13.8f), q_id, 2u, 0.6f);
+    push_voxel_body(cross_shape, daxa_f32vec3(-3.5f, 2.5f, 14.8f), q_id, 4u, 0.6f);
+    push_voxel_body(cross_shape, daxa_f32vec3(-4.5f, 11.0f, 14.0f), q_x90, 4u, 0.6f);
+    push_voxel_body(cross_shape, daxa_f32vec3(0.5f, 4.0f, 14.2f), q_id, 4u, 0.6f);
+    push_voxel_body(frame_shape, daxa_f32vec3(-1.0f, 12.5f, 14.4f), q_id, 5u, 0.6f);
+    push_voxel_body(frame_shape, daxa_f32vec3(2.5f, 7.0f, 13.4f), q_x90, 5u, 0.6f);
+    // the showcase frame: spawns flat above the post (threads onto it once the voxel
+    // narrow phase exists; rests on the post's bounding box until then)
+    push_voxel_body(frame_shape, daxa_f32vec3(8.0f, 11.0f, 14.0f), q_x90, 5u, 0.6f);
+  }
+
+  // DETERMINISTIC voxel jitter probe: three isolated test cases, tiny settle gaps, no
+  // randomness - run-to-run comparable, and spatially separated so the accumulator
+  // render (sharp = asleep, blurry = dancing) attributes jitter to a specific case.
+  //   A (x ~ -6): one L flat on the floor              -> must sleep almost instantly
+  //   B (x ~  0): one L leaning ~30 deg on a block     -> tilted-contact stability
+  //   C (x ~ +6): cross + two Ls stacked into a tangle -> multi-direction contacts
+  void scene_6() {
+    materials = {
+      {
+        .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.55f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.30f, 0.08f, 0.06f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+    };
+
+    rigid_bodies = {
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f}
+    };
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 22.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-5.0f, -0.2f, -5.0f), .maximum = daxa_f32vec3(5.0f, 0.2f, 5.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 1u; // emissive
+
+    // case B's static block (dark red)
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.8f, 1.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -1.0f, -2.0f), .maximum = daxa_f32vec3(0.5f, 1.0f, 2.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 7u;
+
+    f32 const vs = 0.5f;
+    f32 const density = 2.0f;
+    auto l_shape = build_voxel_shape(glm::uvec3(6, 6, 2), vs, density,
+        [](u32 x, u32 y, u32) { return y < 2 || x < 2; });
+    auto cross_shape = build_voxel_shape(glm::uvec3(6, 6, 2), vs, density,
+        [](u32 x, u32 y, u32) { return (x >= 2 && x < 4) || (y >= 2 && y < 4); });
+
+    Quaternion const q_id = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    Quaternion const q_x90 = Quaternion(0.7071f, 0.0f, 0.0f, 0.7071f);   // lying flat
+    Quaternion const q_lean = Quaternion(0.0f, 0.0f, 0.2588f, 0.9659f);  // 30 deg about Z
+    Quaternion const q_tilt = Quaternion(0.2164f, 0.0f, 0.0f, 0.9763f);  // 25 deg about X
+
+    // A: L lying flat on the floor (green)
+    push_voxel_body(l_shape, daxa_f32vec3(-6.0f, 0.51f, 14.0f), q_x90, 2u, 0.6f);
+    // B: L spawned tilted 30 deg next to the block; falls a few mm and leans on it (yellow)
+    push_voxel_body(l_shape, daxa_f32vec3(-0.9f, 1.65f, 14.0f), q_lean, 4u, 0.6f);
+    // C: tangle - cross flat on the floor, an L tilted 25 deg resting across it, and a
+    //    second L leaning onto the first (violet/green/yellow)
+    push_voxel_body(cross_shape, daxa_f32vec3(6.0f, 0.51f, 14.0f), q_x90, 5u, 0.6f);
+    push_voxel_body(l_shape, daxa_f32vec3(6.2f, 1.45f, 14.3f), q_tilt, 2u, 0.6f);
+    push_voxel_body(l_shape, daxa_f32vec3(7.3f, 1.30f, 13.8f), q_lean, 4u, 0.6f);
+    // D: STACK - L flat dropped centered onto a flat cross (the user-reported unstable
+    //    configuration: a body resting entirely on another's small top faces)
+    push_voxel_body(cross_shape, daxa_f32vec3(-12.0f, 0.51f, 14.0f), q_x90, 5u, 0.6f);
+    push_voxel_body(l_shape, daxa_f32vec3(-12.0f, 1.56f, 14.0f), q_x90, 2u, 0.6f);
+    // E: CANTILEVERED stack - L dropped OFF-CENTER onto a flat cross so it overhangs
+    //    (marginal support near the patch edge, the tangle-like case)
+    push_voxel_body(cross_shape, daxa_f32vec3(-18.0f, 0.51f, 14.0f), q_x90, 5u, 0.6f);
+    push_voxel_body(l_shape, daxa_f32vec3(-17.2f, 1.56f, 14.6f), q_x90, 4u, 0.6f);
+  }
+
   bool load_scene()
   {
     if (!initialized)
@@ -481,8 +748,10 @@ public:
 
     // scene_1();
     // scene_2();
-    scene_3();
+    // scene_3();
     // scene_4();
+    scene_5(); // V3 showcase: frame threads onto the post + mixed concave pile
+    // scene_6(); // deterministic stability probe (rests + stacks; fresh/pen must read 0/single-digit)
 
     std::uniform_int_distribution<> distr(1, static_cast<int>(materials.size() - 1)); // define the range
 
@@ -496,8 +765,19 @@ public:
       rigid_body.active_index = MAX_U32;
       rigid_body.inv_mass = rigid_body.mass == 0.0f ? 0.0f :
       1.0f / rigid_body.mass;
-      rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);
-      aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
+      if (rigid_body.shape_index == 0u)
+      {
+        // legacy OBB body: cuboid inertia + a single box primitive
+        rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);
+        aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
+      }
+      else
+      {
+        // voxel body: inertia from the voxel sum (set by build_voxel_shape) and one AABB
+        // primitive per solid voxel (the BLAS builder consumes primitive_count in body order)
+        auto const &prims = voxel_shape_prims.at(rigid_body.shape_index - 1u);
+        aabb.insert(aabb.end(), prims.begin(), prims.end());
+      }
       // scenes may pre-assign a material (e.g. scene_4 color-codes friction); 0 = unset
       if (rigid_body.material_index == 0u)
       {
@@ -527,6 +807,18 @@ public:
 
     material_TG.execute();
     light_TG.execute();
+
+    // upload the voxel shape pools (static for the scene's lifetime; host-writable buffers
+    // owned by the rigid body manager, read by the narrow phase)
+    if (!voxel_shape_cpu.empty())
+    {
+      std::memcpy(device.buffer_host_address_as<VoxelShape>(rigid_body_manager->get_voxel_shapes_buffer()).value(),
+                  voxel_shape_cpu.data(), voxel_shape_cpu.size() * sizeof(VoxelShape));
+      std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer()).value(),
+                  voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
+      std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_surface_buffer()).value(),
+                  voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
+    }
 
     // TODO: Handle error
     if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb)) {
@@ -590,6 +882,11 @@ private:
   // TODO: Fill in scene data from file?
   std::vector<RigidBody> rigid_bodies;
   std::vector<Aabb> aabb;
+  // voxel collision shape pools (built by build_voxel_shape, uploaded once at load)
+  std::vector<VoxelShape> voxel_shape_cpu;
+  std::vector<daxa_u32> voxel_occ_cpu;
+  std::vector<daxa_u32> voxel_surf_cpu;
+  std::vector<std::vector<Aabb>> voxel_shape_prims; // BLAS primitives per shape (body frame)
 
   // Active rigid body buffer
   daxa::BufferId active_rigid_body_buffer;

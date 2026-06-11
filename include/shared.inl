@@ -346,6 +346,8 @@ struct RigidBody
 #endif // BB_DEBUG
   daxa_u32 primitive_count;
   daxa_u32 primitive_offset;
+  // voxel collision shape: 0 = none (legacy OBB body), otherwise voxel_shapes[shape_index - 1]
+  daxa_u32 shape_index;
   daxa_f32vec3 position;
   Quaternion rotation;
   daxa_f32vec3 minimum;
@@ -604,9 +606,15 @@ struct SimConfig
   daxa_f32 dbg_ex_vel;
   daxa_f32 dbg_ex_y;
   daxa_f32 dbg_ex_vy;
-  daxa_u32 dbg_maxv;               // per-frame max |v| over dynamic bodies, integer m/s (reset each frame)
+  daxa_u32 dbg_maxv;               // per-frame max |v| over dynamic bodies, integer mm/s (reset each frame)
   daxa_u32 dbg_id_sum;             // per-frame sum of body ids over all rows; constant unless the
                                    // sort/reorder permutation duplicates one row and drops another
+  daxa_u32 dbg_fresh;              // per-frame contacts whose identity failed warm-start matching
+                                   // (warm_start==0 = lambda reset; nonzero at rest = contact churn)
+  daxa_u32 dbg_fresh_tag;          // one churning manifold: rbaIdx<<22 | rbbIdx<<12 | key<<4 | n
+  daxa_u32 dbg_pen;                // per-frame deepest contact penetration in integer mm:
+                                   // standing nonzero value at rest = frozen interpenetration
+  daxa_u32 dbg_pad1;               // keep the trailing u64 block 8-byte aligned
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
@@ -616,6 +624,12 @@ struct SimConfig
   // after it (g_c_info.collision_count in particular). With the u64 last, all
   // count fields + g_c_info land at offsets shared by C++ and the shader.
   daxa_u64 frame_count;
+  // voxel collision shape pools as raw device addresses (the buffers are written once by
+  // the CPU at scene load and never touched by the GPU afterwards, so they can safely
+  // bypass the task graph - the NarrowPhase head sits exactly at the 128B push limit)
+  daxa_u64 voxel_shapes_addr;
+  daxa_u64 voxel_occupancy_addr;
+  daxa_u64 voxel_surface_addr;
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
   [mutating] bool has_flag(SimFlag flag)
   {
@@ -688,7 +702,8 @@ void bb_dbg_velocity_probe(SimConfig* sc, daxa_u32 stage, daxa_u32 body, daxa_f3
 {
   daxa_f32 v2 = dot(v, v);
   daxa_u32 prev;
-  InterlockedMax(sc->dbg_maxv, daxa_u32(min(sqrt(v2), 1.0e6f)), prev);
+  // mm/s so resting JITTER is visible (integer m/s truncated everything below 1 m/s)
+  InterlockedMax(sc->dbg_maxv, daxa_u32(min(sqrt(v2) * 1000.0f, 1.0e9f)), prev);
   if (v2 > BB_DBG_EXPLODE_VEL2)
   {
     InterlockedCompareExchange(sc->dbg_ex_stage, 0u, stage, prev);
@@ -737,6 +752,10 @@ static const daxa::u32 ITERATIONS = 4;    // 4 iterations for 32-bit daxa_u32s
 static const daxa::u32 BIT_SHIFT = BITS / ITERATIONS; // 8
 
 static const daxa_u32 BB_MAX_RIGID_BODY_COUNT = 1024;
+// voxel shapes (prototype scale: grids up to ~32 per axis)
+static const daxa_u32 BB_MAX_VOXEL_SHAPE_COUNT = 64;
+static const daxa_u32 BB_MAX_VOXEL_OCC_U32S = 16384;   // shared occupancy bit pool (u32s)
+static const daxa_u32 BB_MAX_VOXEL_SURF_COUNT = 16384; // shared surface-voxel pool (packed u32)
 static const daxa_u32 BB_MAX_COLLISION_COUNT = BB_MAX_RIGID_BODY_COUNT * (BB_MAX_RIGID_BODY_COUNT - 1) / 2;
 static const daxa_u32 BB_MAX_MANIFOLD_NODE_COUNT = BB_MAX_COLLISION_COUNT * 2;
 // Graph-coloring solver: a contact gets one of BB_MAX_COLORS colors (bit per color in a u32 body mask);
@@ -879,7 +898,23 @@ struct AvbdBodyState {
 };
 DAXA_DECL_BUFFER_PTR(AvbdBodyState)
 
-struct BodyLink 
+// Voxel collision shape (Teardown-style concave bodies): an occupancy BITMASK over a small
+// grid plus the precomputed SURFACE voxel list. The body's origin is its center of mass;
+// grid_origin is the world-side corner of voxel (0,0,0) in the BODY frame. Occupancy bits
+// are x-major: bit index = x + y*dims.x + z*dims.x*dims.y, packed into u32s at occ_offset.
+// Surface entries pack x | y<<8 | z<<16 | normal_code<<24 (normal_code 0..5 = -x,+x,-y,+y,-z,+z).
+struct VoxelShape
+{
+  daxa_u32vec3 dims;
+  daxa_f32 voxel_size;
+  daxa_f32vec3 grid_origin;
+  daxa_u32 occ_offset;  // first u32 of this shape's occupancy bits in the shared pool
+  daxa_u32 surf_offset; // first entry of this shape's surface list in the shared pool
+  daxa_u32 surf_count;
+};
+DAXA_DECL_BUFFER_PTR(VoxelShape)
+
+struct BodyLink
 {
   daxa_u32 active_index; // atomic compare exchange
   daxa_u32 island_index;

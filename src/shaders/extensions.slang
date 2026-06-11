@@ -14,6 +14,7 @@ void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
 #endif // BB_DEBUG
   dst->primitive_count = src->primitive_count;
   dst->primitive_offset = src->primitive_offset;
+  dst->shape_index = src->shape_index;
   dst->position = src->position;
   dst->rotation.v = src->rotation.v;
   dst->rotation.w = src->rotation.w;
@@ -304,19 +305,37 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
     if (key != old_manifold->key) {
       return;
     }
+    // voxel manifolds (key 99): the dominant normal is assembled from QUANTIZED voxel
+    // sample normals and can flap a few degrees frame-to-frame at rest, which re-excites
+    // the contacts and blocks sleeping. While the rebuilt normal stays within ~25 deg of
+    // last step's, reuse the old normal (and its tangent basis) verbatim.
+    if (key >= 90 && key <= 95)
+    {
+      daxa_f32 ndot = dot(normal, old_manifold->normal);
+      if (ndot > 0.9f)
+      {
+        normal = old_manifold->normal;
+        compute_basis();
+      }
+      else if (ndot < -0.5f)
+      {
+        // the cluster flipped sides since last step: carrying the persisted lambdas
+        // across the flip would apply them along the INVERTED normal (attraction).
+        // Treat the manifold as fresh instead.
+        return;
+      }
+    }
     daxa_f32vec3 otv0  = old_manifold->tangent_vectors[0];
     daxa_f32vec3 otv1  = old_manifold->tangent_vectors[1];
 
-    // bool _found[4] = {false, false, false, false};
+    bool voxel_m = key >= 90 && key <= 95;
+    daxa_u32 used_old = 0u;    // old contacts already inherited (never duplicate lambdas)
+    daxa_u32 matched_new = 0u; // new contacts already matched by feature ids
     for(daxa_u32 i = 0u; i < contact_count; i++) {
-      // bool found = false;
       for(daxa_u32 j = 0u; j < old_manifold->contact_count; j++) {
+        if ((used_old & (1u << j)) != 0u) { continue; }
         Contact* old_contact = &old_manifold->contacts[j];
         if(is_same_contact(old_contact, contacts[i].fp)) {
-          // found = true;
-          // _found[j] = true;
-          // printf("update - old fp %d %d %d %d fp %d %d %d %d ws: %d\n", old_manifold.contacts[j].fp.in_reference, old_manifold.contacts[j].fp.out_reference, old_manifold.contacts[j].fp.in_incident, old_manifold.contacts[j].fp.out_incident, contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, old_manifold.contacts[j].warm_start);
-
             contacts[i].normal_impulse = old_contact->normal_impulse;
             contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0];
             contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
@@ -333,15 +352,67 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
               contacts[i].anchor_a = old_contact->anchor_a;
               contacts[i].anchor_b = old_contact->anchor_b;
             }
+            // persistent-manifold POSITION hysteresis (voxel manifolds): regenerated
+            // positions micro-wobble every step (corner retreat toggles, sub-mm sample
+            // drift), continuously moving the solver's arms even though the identity
+            // matched. Keep the OLD point until it has really drifted (Box2D/Bullet
+            // keep clipped points the same way). Depth still refreshes from geometry.
+            if (voxel_m)
+            {
+              daxa_f32vec3 dpos = contacts[i].position - old_contact->position;
+              if (dot(dpos, dpos) < 0.01f) // (0.1)^2
+              {
+                contacts[i].position = old_contact->position;
+              }
+            }
 
             contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
+            used_old |= 1u << j;
+            matched_new |= 1u << i;
           break;
-        } 
+        }
       }
-
-      // if(!found) {
-      //   printf("Not updated - fp %d %d %d %d ws: %d\n",  contacts[i].fp.in_reference, contacts[i].fp.out_reference, contacts[i].fp.in_incident, contacts[i].fp.out_incident, contacts[i].warm_start);
-      // }
+    }
+    // Voxel manifolds: PROXIMITY inheritance for the leftovers (persistent-manifold
+    // style). The per-region winner voxel can hop to a neighbor on micro-motion, which
+    // changes the feature id and would reset that contact's lambdas every step - the
+    // standing jitter source. If an unmatched NEW contact lies within half a voxel of an
+    // unconsumed OLD one, it inherits the old contact's physics AND identity, so the
+    // solver sees one continuous contact regardless of which voxel won the region.
+    if (voxel_m)
+    {
+      for(daxa_u32 i = 0u; i < contact_count; i++) {
+        if ((matched_new & (1u << i)) != 0u) { continue; }
+        daxa_f32 best_d2 = 0.36f; // (0.6)^2: must cover a FULL scene voxel (vs = 0.5) -
+                                  // winner hops move a contact one whole voxel and the
+                                  // old 0.3 radius missed them, so every hop reset its
+                                  // lambdas (measured as n4 churn bursts in the stack)
+        daxa_i32 best_j = -1;
+        for(daxa_u32 j = 0u; j < old_manifold->contact_count; j++) {
+          if ((used_old & (1u << j)) != 0u) { continue; }
+          daxa_f32vec3 dpos = contacts[i].position - old_manifold->contacts[j].position;
+          daxa_f32 d2 = dot(dpos, dpos);
+          if (d2 < best_d2) { best_d2 = d2; best_j = daxa_i32(j); }
+        }
+        if (best_j >= 0) {
+          Contact* old_contact = &old_manifold->contacts[daxa_u32(best_j)];
+          contacts[i].normal_impulse = old_contact->normal_impulse;
+          contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0];
+          contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
+          contacts[i].mass_coefficient = old_contact->mass_coefficient;
+          contacts[i].tangent_mass[0] = old_contact->tangent_mass[0];
+          contacts[i].tangent_mass[1] = old_contact->tangent_mass[1];
+          contacts[i].stick = old_contact->stick;
+          if (old_contact->stick != 0u)
+          {
+            contacts[i].anchor_a = old_contact->anchor_a;
+            contacts[i].anchor_b = old_contact->anchor_b;
+          }
+          contacts[i].fp = old_contact->fp; // adopt the IDENTITY: matching stays stable
+          contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
+          used_old |= 1u << daxa_u32(best_j);
+        }
+      }
     }
   }
 };

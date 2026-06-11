@@ -109,6 +109,11 @@ struct RigidBodyManager{
   // AVBD
   daxa::TaskBuffer task_avbd_state{{.buffer = {}, .name = "RB_avbd_state_task"}};
   daxa::TaskBuffer task_avbd_body_color{{.buffer = {}, .name = "RB_avbd_body_color_task"}};
+  // voxel collision shape pools (static after scene load; host-writable, filled by the
+  // SceneManager and addressed through SimConfig - no task-graph attachments needed)
+  daxa::BufferId get_voxel_shapes_buffer() const { return voxel_shapes; }
+  daxa::BufferId get_voxel_occupancy_buffer() const { return voxel_occupancy; }
+  daxa::BufferId get_voxel_surface_buffer() const { return voxel_surface; }
 
 private:
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
@@ -243,6 +248,10 @@ private:
   // AVBD
   daxa::BufferId avbd_state = {};
   daxa::BufferId avbd_body_color = {};
+  // voxel collision shapes
+  daxa::BufferId voxel_shapes = {};
+  daxa::BufferId voxel_occupancy = {};
+  daxa::BufferId voxel_surface = {};
 
   // Simulation configuration
   SimSolverType solver_type = SimSolverType::PGS_SOFT;

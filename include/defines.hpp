@@ -353,7 +353,7 @@ static constexpr u32 DOUBLE_BUFFERING = 2;
 
 static constexpr f32 TIME_STEP = 0.01667f;
 static constexpr f32 GRAVITY = 9.81f;
-static constexpr u32 MAX_PRIMITIVE_COUNT = 1024;
+static constexpr u32 MAX_PRIMITIVE_COUNT = 16384; // voxel bodies emit one AABB primitive per voxel
 static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
 static constexpr u32 MAX_COLLISION_COUNT = MAX_RIGID_BODY_COUNT * (MAX_RIGID_BODY_COUNT - 1) / 2;
 static constexpr u32 MAX_LBVH_NODE_COUNT = MAX_RIGID_BODY_COUNT * 2 - 1;
