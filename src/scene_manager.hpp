@@ -736,6 +736,80 @@ public:
     push_voxel_body(l_shape, daxa_f32vec3(-17.2f, 1.56f, 14.6f), q_x90, 4u, 0.6f);
   }
 
+  // scene_7: BOX POOL - a narrow, TALL pit filled by a deep stack of unit cubes.
+  // Depth (a ~8-cube column once settled) maximizes per-contact load and the length of
+  // the warm-start convergence chain: THE stress test for stacked contacts. Walls
+  // confine the crust so nothing rolls away. Success criterion: EVERY cube asleep
+  // (sleeping=192, fresh=0, maxv=0), red contact points only.
+  void scene_7() {
+    materials = {
+      {
+        .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.55f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.30f, 0.08f, 0.06f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+    };
+
+    // floor + lighting panel (same pattern as scene_3/4/5)
+    rigid_bodies = {
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f}
+    };
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 24.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-5.0f, -0.2f, -5.0f), .maximum = daxa_f32vec3(5.0f, 0.2f, 5.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 1u; // emissive
+
+    // the pit: interior 5x5 world units, walls 14 high (dark red statics; the pile
+    // settles ~8 deep, well below the rim). Static-static wall/floor pairs are skipped
+    // by the narrow phase, overlapping corners are free.
+    auto push_wall = [&](daxa_f32vec3 pos, daxa_f32vec3 half) {
+      rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = pos, .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-half.x, -half.y, -half.z), .maximum = half, .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+      rigid_bodies.back().material_index = 7u;
+    };
+    push_wall(daxa_f32vec3( 2.75f, 7.0f, 14.0f), daxa_f32vec3(0.25f, 7.0f, 3.0f));
+    push_wall(daxa_f32vec3(-2.75f, 7.0f, 14.0f), daxa_f32vec3(0.25f, 7.0f, 3.0f));
+    push_wall(daxa_f32vec3(0.0f, 7.0f, 16.75f), daxa_f32vec3(3.0f, 7.0f, 0.25f));
+    push_wall(daxa_f32vec3(0.0f, 7.0f, 11.25f), daxa_f32vec3(3.0f, 7.0f, 0.25f));
+
+    // 12 layers x 4x4 unit cubes dropped into the pit. Deterministic sub-cube jitter
+    // (index-hashed, NO RNG) so columns do not land in a degenerate perfect lattice
+    // and the run is exactly reproducible.
+    for (u32 iy = 0; iy < 12; ++iy) {
+      for (u32 iz = 0; iz < 4; ++iz) {
+        for (u32 ix = 0; ix < 4; ++ix) {
+          f32 const jx = (f32((ix * 3u + iy * 5u + iz * 7u) % 11u) - 5.0f) * 0.02f;
+          f32 const jz = (f32((ix * 7u + iy * 3u + iz * 5u) % 11u) - 5.0f) * 0.02f;
+          rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(-1.8f + 1.2f * ix + jx, 1.0f + 1.2f * iy, 12.2f + 1.2f * iz + jz), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = 0.6f});
+        }
+      }
+    }
+  }
+
   bool load_scene()
   {
     if (!initialized)
@@ -750,8 +824,9 @@ public:
     // scene_2();
     // scene_3();
     // scene_4();
-    scene_5(); // V3 showcase: frame threads onto the post + mixed concave pile
+    // scene_5(); // V3 showcase: frame threads onto the post + mixed concave pile
     // scene_6(); // deterministic stability probe (rests + stacks; fresh/pen must read 0/single-digit)
+    scene_7(); // box pool: deep-stack convergence stress (all 192 cubes must sleep)
 
     std::uniform_int_distribution<> distr(1, static_cast<int>(materials.size() - 1)); // define the range
 
