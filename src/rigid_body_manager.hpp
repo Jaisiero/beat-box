@@ -253,8 +253,10 @@ private:
   daxa::BufferId voxel_occupancy = {};
   daxa::BufferId voxel_surface = {};
 
-  // Simulation configuration
-  SimSolverType solver_type = SimSolverType::PGS_SOFT;
+  // Simulation configuration. AVBD is the default solver (user decision after the A/B
+  // campaign: rests flush at pen~0 vs 13mm Baumgarte sink, true zero residual velocity,
+  // ~40% cheaper, and it holds towers/piles PGS_SOFT cannot); PGS_SOFT stays on key 2.
+  SimSolverType solver_type = SimSolverType::AVBD;
 
   daxa_u32 shift = 0;
 };
