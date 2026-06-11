@@ -1028,6 +1028,7 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
     daxa_f32 pe;
     daxa_f32vec3 n_out2; // outward from body 2's solid at the sample (world)
     daxa_u32 fb;
+    daxa_u32 sample_code; // contact axis+sign in body2's local frame (0..5)
     if (s2_is_voxel)
     {
       daxa_f32 vs2 = s2->voxel_size;
@@ -1076,6 +1077,7 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
                                           best_axis == 2 ? best_sign : 0.0f);
       n_out2 = r2->rotate_vector(n_local);
       pe = -best;
+      sample_code = daxa_u32(best_axis) * 2u + (best_sign > 0.0f ? 1u : 0u);
       fb = daxa_u32(c.x & 0xFF) | (daxa_u32(c.y & 0xFF) << 8u) | (daxa_u32(c.z & 0xFF) << 16u);
     }
     else
@@ -1099,11 +1101,15 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       n_out2 = r2->rotate_vector(axis * (lk >= 0.0f ? 1.0f : -1.0f));
       pe = qk;
       fb = k;
+      sample_code = k * 2u + (lk >= 0.0f ? 1u : 0u);
     }
     if (pe >= 0.02f) { continue; } // margin band: resting contacts (pen ~ -0.0005) must
                                    // not flicker across the cutoff and lose their lambdas
-    if (mode == 1u && dot(n_out2, ref_n) < 0.0f) { continue; }
-    if (mode == 2u && dot(n_out2, ref_n) >= 0.0f) { continue; }
+    // per-axis manifolds: mode 16+code keeps only samples whose contact face matches
+    // that (axis, sign) in body2's LOCAL frame - a deterministic partition with no
+    // boundary churn (any single-axis cluster split left orthogonal contacts sitting
+    // exactly on a boundary; edge contacts emit BOTH face manifolds and rest as a wedge)
+    if (mode >= 16u && sample_code != mode - 16u) { continue; }
     // depth caps: half a voxel between voxel bodies (pen feeds AVBD's positional sweep -
     // full-voxel corrections pop), but a FULL voxel against statics/OBBs: fast spawns
     // tunnel into the floor and a half-voxel extraction rate loses to gravity, leaving
@@ -1145,16 +1151,18 @@ daxa_b32 voxel_obb_prefilter(RigidBody* a, RigidBody* b)
 // full voxel narrow phase for a candidate pair; emits the standard Manifold.
 // emit one reduced cluster as a standard Manifold (normal from the cluster's own
 // |pen|-weighted sample normals; key identifies the cluster for warm-start matching)
-daxa_b32 voxel_emit_manifold(VoxelManifoldReducer red, bool flip, daxa_i32 key, out Manifold manifold)
+daxa_b32 voxel_emit_manifold(VoxelManifoldReducer red, bool flip, daxa_i32 key, daxa_f32vec3 n_sep, out Manifold manifold)
 {
   manifold.contact_count = 0;
   manifold.key = key;
   manifold.error = 0;
-  if (red.sample_count == 0u || dot(red.normal_sum, red.normal_sum) < 1e-10f)
+  if (red.sample_count == 0u)
   {
     return false;
   }
-  daxa_f32vec3 n_sep = normalize(red.normal_sum); // separation direction for the SAMPLED body
+  // n_sep: the EXACT contact axis in world (separation direction for the sampled body) -
+  // a per-manifold constant, so the tangent basis and the persisted lambdas never see a
+  // wiggling normal (the SAT cubes that slept perfectly have this same property)
   manifold.normal = flip ? n_sep : -n_sep;
   daxa_u32 out_n = 0u;
   [unroll]
@@ -1191,16 +1199,19 @@ daxa_b32 voxel_emit_manifold(VoxelManifoldReducer red, bool flip, daxa_i32 key, 
 // and the bodies random-walk INTO each other (the reported "collapse into one point").
 // When cancellation is detected, the samples are split into two clusters around the
 // deepest sample's normal and emitted as TWO manifolds (keys 99 / 98).
-daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBody* rB,
-                                   out Manifold manifold, out Manifold manifold2, out daxa_b32 has2)
+// Per-LOCAL-AXIS voxel narrow phase: one manifold per contact face direction of the
+// NON-sampled body (code = axis*2 + sign, keys 90..95). Each manifold's normal is the
+// EXACT world-rotated axis - a constant, like the SAT face normals of the cubes that
+// slept perfectly. Orthogonal contact directions coexist as separate manifolds instead
+// of fighting across a cluster boundary, and an edge contact emits BOTH face manifolds
+// (a stable two-row wedge - previously a relaxation oscillator that flipped one face).
+// qu3e-inspired: deterministic feature-derived contacts + stable per-region winners.
+daxa_b32 voxel_axis_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBody* rB,
+                                        daxa_u32 code, out Manifold manifold)
 {
   manifold.contact_count = 0;
-  manifold.key = 99;
+  manifold.key = daxa_i32(90u + code);
   manifold.error = 0;
-  manifold2.contact_count = 0;
-  manifold2.key = 98;
-  manifold2.error = 0;
-  has2 = false;
 
   if (!voxel_obb_prefilter(rA, rB))
   {
@@ -1216,9 +1227,8 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
   VoxelShape* sA = &shapes[a_vox ? rA->shape_index - 1u : 0u];
   VoxelShape* sB = &shapes[b_vox ? rB->shape_index - 1u : 0u];
 
-  // sample from the voxel body with the smaller surface list (both directions would be
-  // more complete; one-sided is the prototype trade-off). Counts hoisted to locals: the
-  // Slang parser chokes on chained -> derefs inside && expressions (E30101).
+  // sample from the voxel body with the smaller surface list (counts hoisted: the Slang
+  // parser chokes on chained -> derefs inside && expressions, E30101)
   daxa_u32 sa_n = sA->surf_count;
   daxa_u32 sb_n = sB->surf_count;
   bool flip = !a_vox || (b_vox && sb_n < sa_n); // sampled body = obb2
@@ -1230,14 +1240,14 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
 
   VoxelManifoldReducer red;
   red.init();
-  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red, daxa_f32vec3(0.0f, 1.0f, 0.0f), 0u);
+  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red, daxa_f32vec3(0.0f, 1.0f, 0.0f), 16u + code);
   if (red.sample_count == 0u)
   {
-    if (red.interior_hits > 0u)
+    if (code == 0u && red.interior_hits > 0u)
     {
-      // deep-interpenetration rescue: every sample fell in interior cells (no surface
-      // signal anywhere) - emit a single center-to-center contact so the bodies separate
-      // along a sane direction instead of sinking further
+      // deep-interpenetration rescue (interior cells have no outward-feasible axis, so
+      // they are counted in EVERY pass - code 0 owns the rescue): one center-to-center
+      // contact so the bodies separate along a sane direction instead of sinking
       daxa_f32vec3 d = r1->position - r2->position;
       daxa_f32vec3 n_res = dot(d, d) > 1e-8f ? normalize(d) : daxa_f32vec3(0.0f, 1.0f, 0.0f);
       manifold.normal = flip ? n_res : -n_res;
@@ -1258,56 +1268,13 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
     return false;
   }
 
-  // ALWAYS split by the stable center-to-center reference - no coherence threshold.
-  // The old "one manifold when coherent" test sat near its threshold for resting pieces
-  // (mostly-up normals + some lateral) and FLAPPED the pair between 1- and 2-manifold
-  // structures every few frames, rebuilding lambdas each time (the visible standing
-  // jitter; manifold count oscillated 8-11 at rest). With an unconditional split the
-  // opposing cluster is simply empty for coherent contact sets (has2 = false), and the
-  // structure is deterministic frame to frame. The deepest sample's
-  // normal flip-flopped between steps, swapping which wall was "cluster 99" - and since
-  // warm-start persists lambda BY KEY, the persisted lambda then acted along the flipped
-  // normal and ATTRACTED the bodies (the observed collapse-into-one-point). The
-  // center-to-center direction never flips for a resting pair.
-  // cluster reference = the STABLE deepest sample's normal (quantized-depth bucket +
-  // lowest-voxel-id winner - the same persistent identity the reducer uses, so it does
-  // not flip-flop). The previous center-to-center reference was stable but geometrically
-  // wrong as a discriminant: for side-by-side pieces the contact normals are
-  // PERPENDICULAR to the center line, so every sample sat exactly ON the cluster
-  // boundary and micro-rotations flipped it between manifolds 99/98, resetting its
-  // lambdas each time - the accumulator-visible piece-piece jitter (floor contacts,
-  // whose normals align with the center line, stayed sharp).
-  daxa_f32vec3 ref_n = daxa_f32vec3(0.0f, 1.0f, 0.0f);
-  daxa_f32 ref_quant = 0.5f * s1->voxel_size;
-  daxa_f32 best_qb = 1.0e9f;
-  daxa_u32 best_id = 0xFFFFFFFFu;
-  [unroll]
-  for (daxa_u32 o = 0u; o < 8u; ++o)
-  {
-    if (red.pen[o] > 0.5e9f) { continue; } // empty slot
-    daxa_f32 qb = floor(red.pen[o] / ref_quant);
-    if (qb < best_qb || (qb == best_qb && red.fp_a[o] < best_id))
-    {
-      best_qb = qb;
-      best_id = red.fp_a[o];
-      ref_n = red.nrm[o];
-    }
-  }
-  VoxelManifoldReducer red1;
-  red1.init();
-  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red1, ref_n, 1u);
-  VoxelManifoldReducer red2;
-  red2.init();
-  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red2, ref_n, 2u);
-  daxa_b32 ok1 = voxel_emit_manifold(red1, flip, 99, manifold);
-  has2 = voxel_emit_manifold(red2, flip, 98, manifold2);
-  if (!ok1 && has2)
-  {
-    manifold = manifold2;
-    has2 = false;
-    ok1 = true;
-  }
-  return ok1;
+  // the manifold normal is the exact contact axis in world space (outward of body2 =
+  // separation direction for the sampled body r1)
+  daxa_u32 ax = code / 2u;
+  daxa_f32 sgn = (code & 1u) != 0u ? 1.0f : -1.0f;
+  daxa_f32vec3 n_local = daxa_f32vec3(ax == 0u ? sgn : 0.0f, ax == 1u ? sgn : 0.0f, ax == 2u ? sgn : 0.0f);
+  daxa_f32vec3 n_world = r2->rotate_vector(n_local);
+  return voxel_emit_manifold(red, flip, daxa_i32(90u + code), n_world, manifold);
 }
 
 func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rigid_boy_map, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, CollisionEntry* collision_map, Manifold* collisions, RigidBodyEntry* previous_rigid_body_map, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, CollisionEntry* collision_map_prev, Manifold* old_collisions, BodyLink* body_links) -> void
@@ -1321,31 +1288,28 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   IslandBuilder island_builder = IslandBuilder(sim_config.active_rigid_body_count, body_links);
 
   Manifold manifold;
-  Manifold manifold2;
-  daxa_b32 has2 = false;
 
   var obb1_faces = 0u;
   var obb2_faces = 0u;
 
-  // voxel bodies use the occupancy-bitmask narrow phase; OBB pairs keep the SAT path.
-  // Voxel pairs may emit TWO manifolds (opposing-normal clusters of interlocked shapes).
-  var collision = false;
-  if (r->shape_index != 0u || r2->shape_index != 0u)
+  // voxel pairs emit up to SIX manifolds (one per contact-face direction in the other
+  // body's local frame, keys 90..95); OBB pairs keep the single-manifold SAT path
+  bool voxel_pair = r->shape_index != 0u || r2->shape_index != 0u;
+  bool first_emit = true;
+  
+  for (daxa_u32 emit_i = 0u; emit_i < 6u; ++emit_i)
   {
-    collision = voxel_collision_detection(sim_config, r, r2, manifold, manifold2, has2);
+  var have = false;
+  if (voxel_pair)
+  {
+    have = voxel_axis_collision_detection(sim_config, r, r2, emit_i, manifold);
   }
   else
   {
-    collision = OBBvsOBBCollision.collision_detection(r, r2, manifold, obb1_faces, obb2_faces);
+    if (emit_i > 0u) { break; }
+    have = OBBvsOBBCollision.collision_detection(r, r2, manifold, obb1_faces, obb2_faces);
   }
-  
-  daxa_u32 emit_count = collision ? (has2 ? 2u : 1u) : 0u;
-  for (daxa_u32 emit_i = 0u; emit_i < emit_count; ++emit_i)
-  {
-  if (emit_i == 1u)
-  {
-    manifold = manifold2;
-  }
+  if (!have) { continue; }
   manifold.obb1_index = rba_index;
   manifold.obb2_index = rbb_index;
   manifold.anchor_a = r->position;
@@ -1403,9 +1367,10 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
 
     // Link the bodies (once per PAIR: the union-find CAS loop is not safe to re-enter
     // from the same thread for an already-merged pair - it hung the GPU on manifold 2)
-    if (emit_i == 0u)
+    if (first_emit)
     {
       island_builder.link_bodies(in_first, in_second);
+      first_emit = false;
     }
     // ISLAND BUILDER
 #endif // BB_SIM_DEBUG

@@ -651,6 +651,81 @@ public:
     push_voxel_body(frame_shape, daxa_f32vec3(8.0f, 11.0f, 14.0f), q_x90, 5u, 0.6f);
   }
 
+  // DETERMINISTIC voxel jitter probe: three isolated test cases, tiny settle gaps, no
+  // randomness - run-to-run comparable, and spatially separated so the accumulator
+  // render (sharp = asleep, blurry = dancing) attributes jitter to a specific case.
+  //   A (x ~ -6): one L flat on the floor              -> must sleep almost instantly
+  //   B (x ~  0): one L leaning ~30 deg on a block     -> tilted-contact stability
+  //   C (x ~ +6): cross + two Ls stacked into a tangle -> multi-direction contacts
+  void scene_6() {
+    materials = {
+      {
+        .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(1.0f, 1.0f, 0.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.55f, 0.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+      {
+        .albedo = daxa_f32vec3(0.30f, 0.08f, 0.06f),
+        .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f),
+      },
+    };
+
+    rigid_bodies = {
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f}
+    };
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 22.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-5.0f, -0.2f, -5.0f), .maximum = daxa_f32vec3(5.0f, 0.2f, 5.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 1u; // emissive
+
+    // case B's static block (dark red)
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.8f, 1.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -1.0f, -2.0f), .maximum = daxa_f32vec3(0.5f, 1.0f, 2.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 7u;
+
+    f32 const vs = 0.5f;
+    f32 const density = 2.0f;
+    auto l_shape = build_voxel_shape(glm::uvec3(6, 6, 2), vs, density,
+        [](u32 x, u32 y, u32) { return y < 2 || x < 2; });
+    auto cross_shape = build_voxel_shape(glm::uvec3(6, 6, 2), vs, density,
+        [](u32 x, u32 y, u32) { return (x >= 2 && x < 4) || (y >= 2 && y < 4); });
+
+    Quaternion const q_id = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    Quaternion const q_x90 = Quaternion(0.7071f, 0.0f, 0.0f, 0.7071f);   // lying flat
+    Quaternion const q_lean = Quaternion(0.0f, 0.0f, 0.2588f, 0.9659f);  // 30 deg about Z
+    Quaternion const q_tilt = Quaternion(0.2164f, 0.0f, 0.0f, 0.9763f);  // 25 deg about X
+
+    // A: L lying flat on the floor (green)
+    push_voxel_body(l_shape, daxa_f32vec3(-6.0f, 0.51f, 14.0f), q_x90, 2u, 0.6f);
+    // B: L spawned tilted 30 deg next to the block; falls a few mm and leans on it (yellow)
+    push_voxel_body(l_shape, daxa_f32vec3(-0.9f, 1.65f, 14.0f), q_lean, 4u, 0.6f);
+    // C: tangle - cross flat on the floor, an L tilted 25 deg resting across it, and a
+    //    second L leaning onto the first (violet/green/yellow)
+    push_voxel_body(cross_shape, daxa_f32vec3(6.0f, 0.51f, 14.0f), q_x90, 5u, 0.6f);
+    push_voxel_body(l_shape, daxa_f32vec3(6.2f, 1.45f, 14.3f), q_tilt, 2u, 0.6f);
+    push_voxel_body(l_shape, daxa_f32vec3(7.3f, 1.30f, 13.8f), q_lean, 4u, 0.6f);
+  }
+
   bool load_scene()
   {
     if (!initialized)
@@ -665,7 +740,8 @@ public:
     // scene_2();
     // scene_3();
     // scene_4();
-    scene_5();
+    // scene_5();
+    scene_6();
 
     std::uniform_int_distribution<> distr(1, static_cast<int>(materials.size() - 1)); // define the range
 

@@ -309,7 +309,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
     // sample normals and can flap a few degrees frame-to-frame at rest, which re-excites
     // the contacts and blocks sleeping. While the rebuilt normal stays within ~25 deg of
     // last step's, reuse the old normal (and its tangent basis) verbatim.
-    if (key == 99 || key == 98)
+    if (key >= 90 && key <= 95)
     {
       daxa_f32 ndot = dot(normal, old_manifold->normal);
       if (ndot > 0.9f)
@@ -328,7 +328,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
     daxa_f32vec3 otv0  = old_manifold->tangent_vectors[0];
     daxa_f32vec3 otv1  = old_manifold->tangent_vectors[1];
 
-    bool voxel_m = key == 99 || key == 98;
+    bool voxel_m = key >= 90 && key <= 95;
     daxa_u32 used_old = 0u;    // old contacts already inherited (never duplicate lambdas)
     daxa_u32 matched_new = 0u; // new contacts already matched by feature ids
     for(daxa_u32 i = 0u; i < contact_count; i++) {

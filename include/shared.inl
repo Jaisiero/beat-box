@@ -606,7 +606,7 @@ struct SimConfig
   daxa_f32 dbg_ex_vel;
   daxa_f32 dbg_ex_y;
   daxa_f32 dbg_ex_vy;
-  daxa_u32 dbg_maxv;               // per-frame max |v| over dynamic bodies, integer m/s (reset each frame)
+  daxa_u32 dbg_maxv;               // per-frame max |v| over dynamic bodies, integer mm/s (reset each frame)
   daxa_u32 dbg_id_sum;             // per-frame sum of body ids over all rows; constant unless the
                                    // sort/reorder permutation duplicates one row and drops another
   daxa_f32 dt;
@@ -696,7 +696,8 @@ void bb_dbg_velocity_probe(SimConfig* sc, daxa_u32 stage, daxa_u32 body, daxa_f3
 {
   daxa_f32 v2 = dot(v, v);
   daxa_u32 prev;
-  InterlockedMax(sc->dbg_maxv, daxa_u32(min(sqrt(v2), 1.0e6f)), prev);
+  // mm/s so resting JITTER is visible (integer m/s truncated everything below 1 m/s)
+  InterlockedMax(sc->dbg_maxv, daxa_u32(min(sqrt(v2) * 1000.0f, 1.0e9f)), prev);
   if (v2 > BB_DBG_EXPLODE_VEL2)
   {
     InterlockedCompareExchange(sc->dbg_ex_stage, 0u, stage, prev);
