@@ -352,6 +352,19 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
               contacts[i].anchor_a = old_contact->anchor_a;
               contacts[i].anchor_b = old_contact->anchor_b;
             }
+            // persistent-manifold POSITION hysteresis (voxel manifolds): regenerated
+            // positions micro-wobble every step (corner retreat toggles, sub-mm sample
+            // drift), continuously moving the solver's arms even though the identity
+            // matched. Keep the OLD point until it has really drifted (Box2D/Bullet
+            // keep clipped points the same way). Depth still refreshes from geometry.
+            if (voxel_m)
+            {
+              daxa_f32vec3 dpos = contacts[i].position - old_contact->position;
+              if (dot(dpos, dpos) < 0.01f) // (0.1)^2
+              {
+                contacts[i].position = old_contact->position;
+              }
+            }
 
             contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
             used_old |= 1u << j;

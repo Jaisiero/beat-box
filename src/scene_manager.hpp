@@ -728,6 +728,10 @@ public:
     //    configuration: a body resting entirely on another's small top faces)
     push_voxel_body(cross_shape, daxa_f32vec3(-12.0f, 0.51f, 14.0f), q_x90, 5u, 0.6f);
     push_voxel_body(l_shape, daxa_f32vec3(-12.0f, 1.56f, 14.0f), q_x90, 2u, 0.6f);
+    // E: CANTILEVERED stack - L dropped OFF-CENTER onto a flat cross so it overhangs
+    //    (marginal support near the patch edge, the tangle-like case)
+    push_voxel_body(cross_shape, daxa_f32vec3(-18.0f, 0.51f, 14.0f), q_x90, 5u, 0.6f);
+    push_voxel_body(l_shape, daxa_f32vec3(-17.2f, 1.56f, 14.6f), q_x90, 4u, 0.6f);
   }
 
   bool load_scene()
