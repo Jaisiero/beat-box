@@ -173,6 +173,10 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   // whole bubbles awake. The 3-manifold gate protects legitimate physics: a ramp
   // slider carries 1-2 manifolds and must keep decelerating by FRICTION alone
   // (scene_4 canonical outcomes are the regression baseline).
+  // NOTE: a wider/stronger sponge (0.5 m/s band, x0.85) was measured NET NEGATIVE:
+  // draining harder settles bodies "lighter", leaving more contacts hovering at
+  // pen ~ 0 whose manifolds flicker and re-excite the crust (full-sleep regressed
+  // from sample ~201 to stalls at 419-431/432). These gentler values are the optimum.
   daxa_f32 v2 = dot(r->velocity, r->velocity);
   daxa_f32 w2 = dot(r->omega, r->omega);
   if (v2 < 0.09f && w2 < 0.16f) // (0.3 m/s)^2, (0.4 rad/s)^2

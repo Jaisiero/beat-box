@@ -104,8 +104,13 @@ daxa_u32 gc_pick_color(daxa_u32 a, daxa_u32 b, bool sa, bool sb, daxa_u32* mask)
 
 // Fair arbitration (Luby / Jones-Plassmann): each round a *different* contact should be able to win a
 // contested (body,color), so low-id contacts don't starve. Priority = per-round hash in the high bits
-// (rotates the winner each round) + manifold id in the low bits (unique => no ties => no double-commit).
-// Manifold ids are < BB_MAX_COLLISION_COUNT < 2^20, so they fit in the low 20 bits.
+// (rotates the winner each round) + a PERSISTENT pair-identity hash in the low bits.
+// DETERMINISM (user-diagnosed dancing colors): the priority used to take the PACKED manifold index,
+// which is InterlockedAdd allocation order - random every frame - so the whole coloring (and the
+// PGS per-color solve order behind it) re-rolled per step. Keying on persistent body ids + manifold
+// key makes the arbitration a pure function of the contact graph: identical colors at rest.
+// (Low-bit hash collisions between two manifolds contending the same (body,color) cell are possible
+// but ~1e-4 rare; the validator + overflow bucket already absorb them.)
 daxa_u32 gc_hash(daxa_u32 x)
 {
   x ^= x >> 16;
@@ -115,11 +120,21 @@ daxa_u32 gc_hash(daxa_u32 x)
   x ^= x >> 16;
   return x;
 }
-daxa_u32 gc_priority(daxa_u32 m, daxa_u32 round)
+daxa_u32 gc_pair_id(daxa_u32 m)
 {
-  daxa_u32 h = gc_hash(m * 0x9e3779b9u + round * 0x85ebca6bu) & 0xFFFu; // 12-bit per-round hash
-  if (h == 0u) h = 1u;                                                  // keep priority > 0 (owner resets to 0)
-  return (h << 20) | (m & 0xFFFFFu);
+  RigidBody* rigid_bodies = (RigidBody*)(GC.task_head.rigid_bodies);
+  Manifold* collisions = (Manifold*)(GC.task_head.collisions);
+  daxa_u32 ida = rigid_bodies[collisions[m].obb1_index].id;
+  daxa_u32 idb = rigid_bodies[collisions[m].obb2_index].id;
+  daxa_u32 lo = min(ida, idb);
+  daxa_u32 hi = max(ida, idb);
+  return gc_hash(lo * 0x9e3779b9u + hi * 0x85ebca6bu + daxa_u32(collisions[m].key) * 0xc2b2ae35u);
+}
+daxa_u32 gc_priority(daxa_u32 pair_id, daxa_u32 round)
+{
+  daxa_u32 h = gc_hash(pair_id + round * 0x85ebca6bu) & 0xFFFu; // 12-bit per-round hash
+  if (h == 0u) h = 1u;                                          // keep priority > 0 (owner resets to 0)
+  return (h << 20) | (pair_id & 0xFFFFFu);
 }
 
 // load the contact's two body indices; returns false if the contact is degenerate/out of range
@@ -155,7 +170,7 @@ bool gc_load_pair(daxa_u32 m, out daxa_u32 a, out daxa_u32 b)
   if (c >= BB_MAX_COLORS) return;
 
   daxa_u32* owner = (daxa_u32*)(GC.task_head.body_color_owner);
-  daxa_u32 prio = gc_priority(m, sim_config->gc_round);
+  daxa_u32 prio = gc_priority(gc_pair_id(m), sim_config->gc_round);
   daxa_u32 prev;
   if (!sa) InterlockedMax(owner[a * BB_MAX_COLORS + c], prio, prev);
   if (!sb) InterlockedMax(owner[b * BB_MAX_COLORS + c], prio, prev);
@@ -184,7 +199,7 @@ bool gc_load_pair(daxa_u32 m, out daxa_u32 a, out daxa_u32 b)
   if (c >= BB_MAX_COLORS) return;
 
   daxa_u32* owner = (daxa_u32*)(GC.task_head.body_color_owner);
-  daxa_u32 prio = gc_priority(m, sim_config->gc_round);
+  daxa_u32 prio = gc_priority(gc_pair_id(m), sim_config->gc_round);
   bool won_a = sa || (owner[a * BB_MAX_COLORS + c] == prio);
   bool won_b = sb || (owner[b * BB_MAX_COLORS + c] == prio);
   if (won_a && won_b)

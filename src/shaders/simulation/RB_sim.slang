@@ -629,7 +629,9 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   // The threshold IS the standing rest depth, so it belongs just ABOVE the solver's
   // achievable equilibrium: under a ~7-cube column the penalty springs compress to
   // ~45mm at the pile BOTTOM (buried, invisible - surface contacts rest millimetric),
-  // and a tighter veto just trapped those pairs awake forever at maxv=0.
+  // and a tighter veto just trapped those pairs awake forever at maxv=0. (Chasing
+  // deeper landings with a bigger veto was measured unproductive - the occasional
+  // 55-65mm pocket leaves one still body unflagged, which is acceptable.)
   daxa_i32 cc = manifolds[m].contact_count;
   bool deep = false;
   for (daxa_i32 ci = 0; ci < cc; ++ci)

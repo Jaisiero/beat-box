@@ -64,8 +64,14 @@ struct OBBvsOBBCollision {
       daxa_f32vec3 normal;
   };
 
+  // NOTE: a Box2D-style speculative margin was attempted THREE times here and reverted
+  // each time (see project log): hover placeholders stole lambdas via proximity
+  // inheritance (v1), latched spurious sticking anchors and doubled the manifold
+  // population (v3), and moving the existence cliff to the fattened broad boundary just
+  // relocated the pair-level flicker (v3). The flicker pockets need a stateful grace
+  // mechanism, not a wider stateless band.
   static daxa_b32 track_face_axis(inout daxa_i32 axis, daxa_i32 n, daxa_f32 s, inout daxa_f32 s_max, const daxa_f32vec3 normal, inout daxa_f32vec3 axis_normal) {
-    if( s > 0.0f) 
+    if( s > 0.0f)
     {
       return true;
     }
@@ -80,7 +86,7 @@ struct OBBvsOBBCollision {
   }
 
   static daxa_b32 track_edge_axis(inout daxa_i32 axis, daxa_i32 n, daxa_f32 s, inout daxa_f32 s_max, const daxa_f32vec3 normal, inout daxa_f32vec3 axis_normal) {
-    if( s > 0.0f) 
+    if( s > 0.0f)
     {
       return true;
     }
@@ -859,8 +865,9 @@ struct OBBvsOBBCollision {
     }
     manifold.key = axis;
 
-
-    return true;
+    // a speculative pair can clip to zero points (axis within the margin but the
+    // reference-face footprint already past it): no manifold, not an empty allocation
+    return manifold.contact_count > 0;
   }
 };
 
