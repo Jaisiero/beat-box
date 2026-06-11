@@ -1060,7 +1060,10 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
         if (voxel_occ_bit(occ, s2, nb)) { continue; } // that way is more solid: not an exit
         daxa_f32 sup_ax = ax == 0u ? sup.x : (ax == 1u ? sup.y : sup.z);
         daxa_f32 ov = (0.5f * vs2 + sup_ax) - abs(di);
-        if (ov < best) { best = ov; best_axis = daxa_i32(ax); best_sign = sgn; }
+        // deterministic tie band: TILTED contacts have two near-equal minimal axes and a
+        // raw argmin flips the normal 90 deg between steps (the "dancing" leaning pieces);
+        // a later axis must beat the current pick by a clear margin to displace it
+        if (ov < best - 0.05f * vs2) { best = ov; best_axis = daxa_i32(ax); best_sign = sgn; }
       }
       if (best_axis < 0)
       {
@@ -1086,7 +1089,10 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       if (q.x > sup.x || q.y > sup.y || q.z > sup.z) { continue; }
       // exit along the least-penetrated face (per-axis rotated support, as above)
       daxa_f32vec3 qs = q - sup;
-      daxa_u32 k = (qs.x > qs.y && qs.x > qs.z) ? 0u : (qs.y > qs.z ? 1u : 2u);
+      // same deterministic tie band as the voxel-voxel mini-SAT (edge-resting pieces
+      // have two near-equal exit faces; raw argmax flips the normal between steps)
+      daxa_f32 tie = 0.05f * vs1;
+      daxa_u32 k = (qs.x > qs.y + tie && qs.x > qs.z + tie) ? 0u : (qs.y > qs.z + tie ? 1u : 2u);
       daxa_f32 lk = k == 0u ? l2.x : (k == 1u ? l2.y : l2.z);
       daxa_f32 qk = k == 0u ? qs.x : (k == 1u ? qs.y : qs.z);
       daxa_f32vec3 axis = daxa_f32vec3(k == 0u ? 1.0f : 0.0f, k == 1u ? 1.0f : 0.0f, k == 2u ? 1.0f : 0.0f);
