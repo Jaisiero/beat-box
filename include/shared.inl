@@ -612,7 +612,9 @@ struct SimConfig
   daxa_u32 dbg_fresh;              // per-frame contacts whose identity failed warm-start matching
                                    // (warm_start==0 = lambda reset; nonzero at rest = contact churn)
   daxa_u32 dbg_fresh_tag;          // one churning manifold: rbaIdx<<22 | rbbIdx<<12 | key<<4 | n
-                                   // (also keeps the trailing u64 block 8-byte aligned)
+  daxa_u32 dbg_pen;                // per-frame deepest contact penetration in integer mm:
+                                   // standing nonzero value at rest = frozen interpenetration
+  daxa_u32 dbg_pad1;               // keep the trailing u64 block 8-byte aligned
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;

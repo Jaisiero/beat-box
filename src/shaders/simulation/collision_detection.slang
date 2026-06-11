@@ -1056,7 +1056,37 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       sv = axk == 2u ? l2.y : l2.z;
       daxa_f32vec3 g = (l2 - s2->grid_origin) / vs2;
       daxa_i32vec3 c = daxa_i32vec3(daxa_i32(floor(g.x)), daxa_i32(floor(g.y)), daxa_i32(floor(g.z)));
-      if (!voxel_occ_bit(occ, s2, c)) { continue; }
+      if (!voxel_occ_bit(occ, s2, c))
+      {
+        // HOVER band: the center sits in an EMPTY cell - check the cell just behind it
+        // along this pass's axis. Gating contacts on center-in-occupied-cell gave the
+        // voxel-voxel branch a HALF-VOXEL dead zone (the OBB/floor branch is continuous
+        // from the surface): real overlaps up to 0.5*vs generated NO contacts at all,
+        // so stacked pieces froze visibly interpenetrated with nothing to extract them,
+        // and extraction past the cell boundary dropped the contact in a 0.25 jump
+        // (stacks never reached total rest). Measuring from the occupied neighbor makes
+        // the depth cross 0 exactly at true surface contact.
+        daxa_i32vec3 c_in = c;
+        if (axk == 0u) { c_in.x -= daxa_i32(sgn_pass); }
+        else if (axk == 1u) { c_in.y -= daxa_i32(sgn_pass); }
+        else { c_in.z -= daxa_i32(sgn_pass); }
+        if (!voxel_occ_bit(occ, s2, c_in)) { continue; }
+        daxa_f32 go_a = axk == 0u ? s2->grid_origin.x : (axk == 1u ? s2->grid_origin.y : s2->grid_origin.z);
+        daxa_f32 ci_a = daxa_f32(axk == 0u ? c_in.x : (axk == 1u ? c_in.y : c_in.z));
+        daxa_f32 l2_a = axk == 0u ? l2.x : (axk == 1u ? l2.y : l2.z);
+        daxa_f32 sup_h = axk == 0u ? sup.x : (axk == 1u ? sup.y : sup.z);
+        daxa_f32 dh = l2_a - (go_a + (ci_a + 0.5f) * vs2);
+        daxa_f32 ovh = (0.5f * vs2 + sup_h) - sgn_pass * dh; // continuous with the
+                                                             // occupied-cell formula at
+                                                             // the boundary (both = sup)
+        n_out2 = r2->rotate_vector(daxa_f32vec3(axk == 0u ? sgn_pass : 0.0f,
+                                                axk == 1u ? sgn_pass : 0.0f,
+                                                axk == 2u ? sgn_pass : 0.0f));
+        pe = -ovh;
+        fb = daxa_u32(c_in.x & 0xFF) | (daxa_u32(c_in.y & 0xFF) << 8u) | (daxa_u32(c_in.z & 0xFF) << 16u);
+      }
+      else
+      {
       // CELL-FACE contact in B's grid. The smallest feasible exit (outward-feasible =
       // EMPTY neighbor that way) is only a REFERENCE for the dominance band below - it
       // no longer picks the axis, so its flips between near-equal exits are harmless.
@@ -1106,6 +1136,7 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       n_out2 = r2->rotate_vector(n_local);
       pe = -ovp;
       fb = daxa_u32(c.x & 0xFF) | (daxa_u32(c.y & 0xFF) << 8u) | (daxa_u32(c.z & 0xFF) << 16u);
+      }
     }
     else
     {
@@ -1498,6 +1529,12 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       for (daxa_i32 ci = 0; ci < manifold.contact_count; ++ci)
       {
         if (manifold.contacts[ci].warm_start == 0u) { ++fresh; }
+        daxa_f32 cpen = manifold.contacts[ci].penetration;
+        if (cpen < 0.0f)
+        {
+          daxa_u32 prev_pen;
+          InterlockedMax(sim_config->dbg_pen, daxa_u32(min(-cpen * 1000.0f, 1.0e9f)), prev_pen);
+        }
       }
       if (fresh > 0u)
       {
