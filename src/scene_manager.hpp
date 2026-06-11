@@ -630,8 +630,10 @@ public:
     // cross / plus (40 voxels)
     auto cross_shape = build_voxel_shape(glm::uvec3(6, 6, 2), vs, density,
         [](u32 x, u32 y, u32) { return (x >= 2 && x < 4) || (y >= 2 && y < 4); });
-    // hollow frame: 6x6x2 with a 2x2 hole (64 voxels; the hole is 1x1 world units)
-    auto frame_shape = build_voxel_shape(glm::uvec3(6, 6, 2), vs, density,
+    // hollow frame: 8x8x2 closed ring with a 4x4 hole (2x2 world units - the 0.7-wide
+    // post threads with clearance). The hole predicate is for an 8x8 grid: with the old
+    // 6x6 dims it silently produced an OPEN corner (two walls), not a ring
+    auto frame_shape = build_voxel_shape(glm::uvec3(8, 8, 2), vs, density,
         [](u32 x, u32 y, u32) { return !(x >= 2 && x < 6 && y >= 2 && y < 6); });
 
     Quaternion const q_id = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
@@ -748,8 +750,8 @@ public:
     // scene_2();
     // scene_3();
     // scene_4();
-    // scene_5();
-    scene_6();
+    scene_5(); // V3 showcase: frame threads onto the post + mixed concave pile
+    // scene_6(); // deterministic stability probe (rests + stacks; fresh/pen must read 0/single-digit)
 
     std::uniform_int_distribution<> distr(1, static_cast<int>(materials.size() - 1)); // define the range
 
