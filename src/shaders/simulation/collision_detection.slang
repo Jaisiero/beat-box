@@ -968,7 +968,7 @@ struct VoxelManifoldReducer
   [mutating] void init()
   {
     [unroll]
-    for (daxa_u32 i = 0u; i < 8u; ++i) { pen[i] = 0.0f; fp_a[i] = 0u; }
+    for (daxa_u32 i = 0u; i < 8u; ++i) { pen[i] = 1.0e9f; fp_a[i] = 0u; } // 1e9 = empty
     normal_sum = daxa_f32vec3(0.0f, 0.0f, 0.0f);
     weight_sum = 0.0f;
     sample_count = 0u;
@@ -984,15 +984,16 @@ struct VoxelManifoldReducer
   {
     daxa_f32vec3 d = p - center;
     daxa_u32 oct = (d.x > 0.0f ? 1u : 0u) | (d.y > 0.0f ? 2u : 0u) | (d.z > 0.0f ? 4u : 0u);
+    bool empty = pen[oct] > 0.5e9f;
     daxa_i32 nb = daxa_i32(floor(pe / quant));
-    daxa_i32 ob = daxa_i32(floor(pen[oct] / quant));
-    bool empty = pen[oct] >= 0.0f;
+    daxa_i32 ob = empty ? 0 : daxa_i32(floor(pen[oct] / quant));
     if (empty || nb < ob || (nb == ob && fa < fp_a[oct]))
     {
       pos[oct] = p; pen[oct] = pe; nrm[oct] = n; fp_a[oct] = fa; fp_b[oct] = fb;
     }
-    normal_sum += n * (-pe);
-    weight_sum += -pe;
+    daxa_f32 w = max(-pe, 0.1f * quant); // band samples (pe >~ 0) still steer the normal
+    normal_sum += n * w;
+    weight_sum += w;
     ++sample_count;
   }
 };
@@ -1008,6 +1009,15 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
 {
   daxa_f32 vs1 = s1->voxel_size;
   daxa_u32 found = 0u;
+  // per-axis support radius of the (rotated) sample voxel in body2's frame: a flat
+  // 0.5*vs1 underestimates the overlap of rotated bodies by up to sqrt(3), which showed
+  // as visible standing interpenetration at rotated piece-piece contacts
+  daxa_f32vec3 a0 = r2->rotate_vector_inverse(r1->rotate_vector(daxa_f32vec3(1.0f, 0.0f, 0.0f)));
+  daxa_f32vec3 a1 = r2->rotate_vector_inverse(r1->rotate_vector(daxa_f32vec3(0.0f, 1.0f, 0.0f)));
+  daxa_f32vec3 a2 = r2->rotate_vector_inverse(r1->rotate_vector(daxa_f32vec3(0.0f, 0.0f, 1.0f)));
+  daxa_f32vec3 sup = 0.5f * vs1 * daxa_f32vec3(abs(a0.x) + abs(a1.x) + abs(a2.x),
+                                               abs(a0.y) + abs(a1.y) + abs(a2.y),
+                                               abs(a0.z) + abs(a1.z) + abs(a2.z));
   for (daxa_u32 i = 0u; i < s1->surf_count; ++i)
   {
     daxa_u32 e = surf[s1->surf_offset + i];
@@ -1034,7 +1044,7 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       // gravity (bodies half-buried in the floor / clumped into each other, then slept).
       daxa_f32vec3 cc_l = s2->grid_origin + (daxa_f32vec3(daxa_f32(c.x), daxa_f32(c.y), daxa_f32(c.z)) + daxa_f32vec3(0.5f, 0.5f, 0.5f)) * vs2;
       daxa_f32vec3 dl = l2 - cc_l;
-      daxa_f32 half_sum = 0.5f * (vs1 + vs2);
+
       daxa_f32 best = 1e9f;
       daxa_i32 best_axis = -1;
       daxa_f32 best_sign = 1.0f;
@@ -1048,7 +1058,8 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
         else if (ax == 1u) { nb.y += daxa_i32(sgn); }
         else { nb.z += daxa_i32(sgn); }
         if (voxel_occ_bit(occ, s2, nb)) { continue; } // that way is more solid: not an exit
-        daxa_f32 ov = half_sum - abs(di);
+        daxa_f32 sup_ax = ax == 0u ? sup.x : (ax == 1u ? sup.y : sup.z);
+        daxa_f32 ov = (0.5f * vs2 + sup_ax) - abs(di);
         if (ov < best) { best = ov; best_axis = daxa_i32(ax); best_sign = sgn; }
       }
       if (best_axis < 0)
@@ -1071,19 +1082,20 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       daxa_f32vec3 half = (r2->maximum - r2->minimum) * 0.5f;
       daxa_f32vec3 center_off = (r2->maximum + r2->minimum) * 0.5f;
       l2 = l2 - center_off;
-      daxa_f32 rad = 0.5f * vs1;
       daxa_f32vec3 q = abs(l2) - half;
-      if (q.x > rad || q.y > rad || q.z > rad) { continue; }
-      // exit along the least-penetrated face
-      daxa_u32 k = (q.x > q.y && q.x > q.z) ? 0u : (q.y > q.z ? 1u : 2u);
+      if (q.x > sup.x || q.y > sup.y || q.z > sup.z) { continue; }
+      // exit along the least-penetrated face (per-axis rotated support, as above)
+      daxa_f32vec3 qs = q - sup;
+      daxa_u32 k = (qs.x > qs.y && qs.x > qs.z) ? 0u : (qs.y > qs.z ? 1u : 2u);
       daxa_f32 lk = k == 0u ? l2.x : (k == 1u ? l2.y : l2.z);
-      daxa_f32 qk = k == 0u ? q.x : (k == 1u ? q.y : q.z);
+      daxa_f32 qk = k == 0u ? qs.x : (k == 1u ? qs.y : qs.z);
       daxa_f32vec3 axis = daxa_f32vec3(k == 0u ? 1.0f : 0.0f, k == 1u ? 1.0f : 0.0f, k == 2u ? 1.0f : 0.0f);
       n_out2 = r2->rotate_vector(axis * (lk >= 0.0f ? 1.0f : -1.0f));
-      pe = qk - rad;
+      pe = qk;
       fb = k;
     }
-    if (pe >= 0.0f) { continue; } // grazing sample: occupied cell but no overlap along n
+    if (pe >= 0.02f) { continue; } // margin band: resting contacts (pen ~ -0.0005) must
+                                   // not flicker across the cutoff and lose their lambdas
     if (mode == 1u && dot(n_out2, ref_n) < 0.0f) { continue; }
     if (mode == 2u && dot(n_out2, ref_n) >= 0.0f) { continue; }
     // depth caps: half a voxel between voxel bodies (pen feeds AVBD's positional sweep -
@@ -1142,7 +1154,7 @@ daxa_b32 voxel_emit_manifold(VoxelManifoldReducer red, bool flip, daxa_i32 key, 
   [unroll]
   for (daxa_u32 o = 0u; o < 8u; ++o)
   {
-    if (red.pen[o] >= 0.0f) { continue; }
+    if (red.pen[o] >= 0.02f) { continue; } // band contacts emit; empty slots (1e9) drop
     // depths were measured along each sample's own normal but get RESOLVED along the
     // cluster normal: project them (and drop near-orthogonal stragglers, which would
     // otherwise be squeezed sideways by the full unprojected depth)
@@ -1240,13 +1252,13 @@ daxa_b32 voxel_collision_detection(SimConfig* sim_config, RigidBody* rA, RigidBo
     return false;
   }
 
-  // coherent normals (resting on a face, leaning on a wall): one manifold suffices
-  if (length(red.normal_sum) > 0.5f * red.weight_sum)
-  {
-    return voxel_emit_manifold(red, flip, 99, manifold);
-  }
-
-  // opposing-normal cancellation: split around a STABLE reference. The deepest sample's
+  // ALWAYS split by the stable center-to-center reference - no coherence threshold.
+  // The old "one manifold when coherent" test sat near its threshold for resting pieces
+  // (mostly-up normals + some lateral) and FLAPPED the pair between 1- and 2-manifold
+  // structures every few frames, rebuilding lambdas each time (the visible standing
+  // jitter; manifold count oscillated 8-11 at rest). With an unconditional split the
+  // opposing cluster is simply empty for coherent contact sets (has2 = false), and the
+  // structure is deterministic frame to frame. The deepest sample's
   // normal flip-flopped between steps, swapping which wall was "cluster 99" - and since
   // warm-start persists lambda BY KEY, the persisted lambda then acted along the flipped
   // normal and ATTRACTED the bodies (the observed collapse-into-one-point). The
