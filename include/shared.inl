@@ -614,7 +614,23 @@ struct SimConfig
   daxa_u32 dbg_fresh_tag;          // one churning manifold: rbaIdx<<22 | rbbIdx<<12 | key<<4 | n
   daxa_u32 dbg_pen;                // per-frame deepest contact penetration in integer mm:
                                    // standing nonzero value at rest = frozen interpenetration
-  daxa_u32 dbg_pad1;               // keep the trailing u64 block 8-byte aligned
+  daxa_u32 dbg_pad1;               // fa churn-anatomy latch (fresh|new_cc|had_old|old_cc|pair)
+  // DEEP-MISS probe: a pair >=10cm interpenetrated whose previous-frame manifold cannot
+  // be found is the open existence-flicker anomaly. First event per frame latches the
+  // persistent body ids and a diagnostic RE-WALK of BOTH bodies' previous manifold
+  // chains (reason<<30 | found_any_order<<29 | steps<<16 | other_pair_manifolds_seen).
+  daxa_u32 dbg_dm_count;
+  daxa_u32 dbg_np_processed;       // narrow-phase COVERAGE: threads that passed the bounds
+                                   // check this frame; < broad_phase_collision_count on any
+                                   // frame = indirect dispatch truncation (measured: never)
+  daxa_u32 dbg_dm_mon;             // per-frame MONITOR bits for the latched dm pair:
+                                   // 1 = an NP thread processed the pair this frame,
+                                   // 2 = SAT produced a manifold, 4 = warm-start matched.
+                                   // Anomaly frames read 0 (broad miss!) or 1 (SAT false)
+                                   // --- per-frame reset boundary (see reset_fresh array) ---
+  daxa_u32 dbg_dm_ids;             // PERSISTENT: first deep-MISS pair ever ((idA<<16)|idB)
+  daxa_u32 dbg_dm_walk_a;          // PERSISTENT: that event's chain-walk forensics
+  daxa_u32 dbg_dm_walk_b;
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;

@@ -332,7 +332,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         // dbg_fresh accumulates in the narrow phase, so its reset must precede it (the
         // graph-coloring stat reset runs between narrow phase and readback and would
         // wipe the value before the CPU ever saw it)
-        auto reset_fresh = std::array<daxa_u32, 4>{}; // dbg_fresh, dbg_fresh_tag, dbg_pen, pad
+        auto reset_fresh = std::array<daxa_u32, 7>{}; // dbg_fresh..dbg_dm_mon (per-frame block;
+                                                      // dm_ids/walk_a/walk_b persist as the latch)
         allocate_fill_copy(ti, reset_fresh, ti.get(task_sim_config), offsetof(SimConfig, dbg_fresh));
 
         // DIAG: zero the explosion-latch fields once per config buffer (device memory starts
@@ -343,6 +344,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
           ++dbg_latch_init_runs;
           auto zeroes = std::array<daxa_u32, 8>{}; // dbg_ex_stage..dbg_id_sum are contiguous
           allocate_fill_copy(ti, zeroes, ti.get(task_sim_config), offsetof(SimConfig, dbg_ex_stage));
+          auto zeroes_dm = std::array<daxa_u32, 3>{}; // persistent dm latch (dm_ids..dm_walk_b)
+          allocate_fill_copy(ti, zeroes_dm, ti.get(task_sim_config), offsetof(SimConfig, dbg_dm_ids));
         }
       },
       .name = "reset sim config",

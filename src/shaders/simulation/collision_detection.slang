@@ -697,6 +697,11 @@ struct OBBvsOBBCollision {
           axis[i1] = -C[j][i2];
           axis[i2] = C[j][i1];
 
+          // NOTE: a near-parallel edge-axis guard (skip when cross_len2 < 1e-4) was tested
+          // for the deep-MISS anomaly and FALSIFIED (dm events unchanged) - quantitatively
+          // the cancellation noise can only flip the sign when |cross| ~ noise/|overlap|,
+          // far below any sane threshold. Removed per the no-unproven-pipeline-changes law.
+
           // Track the axis
           if (track_edge_axis(e_axis, get_axis_enum(i * 3 + j), s, e_max, axis, n_e))
           {
@@ -906,11 +911,13 @@ struct BodyLinkManifold {
   // pool) flap the SAT winner between near-tied axes, and every flap used to lose the
   // whole manifold (the MISS storms that kept re-waking the pile). update_from_old
   // guards the cross-key inheritance with a normal-coherence check.
-  static daxa_b32 find_old_collision(daxa_u32 a, daxa_u32 b, daxa_i32 want_key, daxa_u32 first_manifold_node_index, daxa_u32 manifold_node_count, daxa_u32 collision_count, CollisionEntry* collision_map, ManifoldNode* manifold_nodes, Manifold* old_collisions, out daxa_u32 old_index) {
+  static daxa_b32 find_old_collision(daxa_u32 a, daxa_u32 b, daxa_i32 want_key, daxa_u32 first_manifold_node_index, daxa_u32 manifold_node_count, daxa_u32 collision_count, CollisionEntry* collision_map, ManifoldNode* manifold_nodes, Manifold* old_collisions, out daxa_u32 old_index, out daxa_u32 swapped) {
     daxa_u32 current = first_manifold_node_index;
     daxa_u32 steps = 0u;
     daxa_u32 fallback = MAX_U32;
+    daxa_u32 fallback_swapped = MAX_U32;
     bool exact_only = want_key >= 90 && want_key <= 95;
+    swapped = 0u;
     while (current != MAX_U32 && current < manifold_node_count && steps < manifold_node_count) {
       daxa_u32 id = manifold_nodes[current].manifold_id;
       if (id >= collision_count) {
@@ -929,6 +936,16 @@ struct BodyLinkManifold {
           fallback = index;
         }
       }
+      // SWAPPED-ORDER fallback (OBB pairs): the broad phase orders pairs by CURRENT
+      // sorted index (LBVH check_index), which flips when the radix sort swaps two
+      // bodies across a Morton boundary - the pair's manifold then sits on the chain
+      // with the roles reversed and the exact-order match above misses it, wiping the
+      // whole manifold's lambdas (the deep-MISS anomaly: walk_diag found the manifolds
+      // present with order swapped at every latched event). update_from_old performs
+      // the role-swapped hand-off (normal flip, anchor swap, tangent sign).
+      else if (!exact_only && old_collisions[index].obb1_index == b && old_collisions[index].obb2_index == a) {
+        fallback_swapped = index;
+      }
       daxa_i32 next = manifold_nodes[current].next;
       current = next < 0 ? MAX_U32 : daxa_u32(next);
       ++steps;
@@ -937,7 +954,46 @@ struct BodyLinkManifold {
       old_index = fallback;
       return true;
     }
+    if (fallback_swapped != MAX_U32) {
+      old_index = fallback_swapped;
+      swapped = 1u;
+      return true;
+    }
     return false;
+  }
+
+  // DEEP-MISS diagnostic re-walk (probe only, runs on anomalous manifolds): like
+  // find_old_collision but records WHY the walk ended and whether the pair's manifold
+  // exists under EITHER body order. Encoding:
+  //   bits 30-31 reason: 0 = chain head empty, 1 = node id out of bounds (chain
+  //                      corruption), 2 = collision_map entry out of bounds, 3 = chain
+  //                      end reached (pair genuinely absent from this chain)
+  //   bit  29    pair manifold FOUND on this chain (any key, any body order)
+  //   bits 16-28 steps walked
+  //   bits 0-15  manifolds of OTHER pairs seen on the chain
+  static daxa_u32 walk_diag(daxa_u32 a, daxa_u32 b, daxa_u32 head, daxa_u32 manifold_node_count, daxa_u32 collision_count, CollisionEntry* collision_map, ManifoldNode* manifold_nodes, Manifold* old_collisions)
+  {
+    if (head == MAX_U32) { return 0u; }
+    if (head >= manifold_node_count) { return (1u << 30) | 0x8000u; } // corrupt head marker
+    daxa_u32 current = head;
+    daxa_u32 steps = 0u;
+    daxa_u32 others = 0u;
+    daxa_u32 found = 0u;
+    daxa_u32 reason = 3u << 30;
+    while (current != MAX_U32 && current < manifold_node_count && steps < manifold_node_count)
+    {
+      daxa_u32 id = manifold_nodes[current].manifold_id;
+      if (id >= collision_count) { reason = 1u << 30; break; }
+      daxa_u32 index = collision_map[id].index;
+      if (index >= collision_count) { reason = 2u << 30; break; }
+      bool is_pair = (old_collisions[index].obb1_index == a && old_collisions[index].obb2_index == b) ||
+                     (old_collisions[index].obb1_index == b && old_collisions[index].obb2_index == a);
+      if (is_pair) { found = 1u; } else { ++others; }
+      daxa_i32 next = manifold_nodes[current].next;
+      current = next < 0 ? MAX_U32 : daxa_u32(next);
+      ++steps;
+    }
+    return reason | (found << 29) | (min(steps, 0x1FFFu) << 16) | min(others, 0xFFFFu);
   }
 };
 
@@ -1455,7 +1511,7 @@ daxa_b32 voxel_axis_collision_detection(SimConfig* sim_config, RigidBody* rA, Ri
                              r2, s2, s2_is_voxel, occ, ax, manifold);
 }
 
-func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rigid_boy_map, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, CollisionEntry* collision_map, Manifold* collisions, RigidBodyEntry* previous_rigid_body_map, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, CollisionEntry* collision_map_prev, Manifold* old_collisions, BodyLink* body_links) -> void
+func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rigid_boy_map, RigidBody* rigid_bodies, SimConfig* sim_config, SimConfig previous_sim_config, ManifoldNode* manifold_nodes, CollisionEntry* collision_map, Manifold* collisions, RigidBodyEntry* previous_rigid_body_map, RigidBody* previous_rigid_bodies, ManifoldNode* previous_manifold_nodes, CollisionEntry* collision_map_prev, Manifold* old_collisions, BodyLink* body_links, daxa_u32 bp_index) -> void
 {
   daxa::u32 rba_index = broad_phase_collision.body_a_index;
   daxa::u32 rbb_index = broad_phase_collision.body_b_index;
@@ -1482,7 +1538,21 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   // body's local frame, keys 90..95); OBB pairs keep the single-manifold SAT path
   bool voxel_pair = r->shape_index != 0u || r2->shape_index != 0u;
   bool first_emit = true;
-  
+
+  // deep-MISS MONITOR: once a pair has been latched (dbg_dm_ids, persistent), report per
+  // frame how far its pipeline got: 1 = this NP thread processed the pair (it WAS in the
+  // broad list), 2 = detection produced a manifold, 4 = warm-start matched. An anomaly
+  // frame reading 0 = broad-phase miss; 1 = SAT false at deep overlap.
+  daxa_u32 mon_ids = sim_config->dbg_dm_ids;
+  bool monitored = mon_ids != 0u &&
+                   (((((r->id & 0xFFFFu) << 16) | (r2->id & 0xFFFFu)) == mon_ids) ||
+                    ((((r2->id & 0xFFFFu) << 16) | (r->id & 0xFFFFu)) == mon_ids));
+  if (monitored)
+  {
+    daxa_u32 _m;
+    InterlockedOr(sim_config->dbg_dm_mon, 1u, _m);
+  }
+
   for (daxa_u32 emit_i = 0u; emit_i < 6u; ++emit_i)
   {
   var have = false;
@@ -1518,6 +1588,11 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     // with persisted-lambda, do NOT reshape contact identity to chase convergence.
   }
   if (!have) { continue; }
+  if (monitored)
+  {
+    daxa_u32 _m;
+    InterlockedOr(sim_config->dbg_dm_mon, 2u, _m);
+  }
   manifold.obb1_index = rba_index;
   manifold.obb2_index = rbb_index;
   manifold.anchor_a = r->position;
@@ -1555,19 +1630,55 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     daxa_i32 old_cc_dbg = -1; // churn-anatomy probe: previous contact count of the matched manifold
     if(warm_starting && rba_prev_exists && rbb_prev_exists) {
       daxa_u32 old_index = 0;
+      daxa_u32 old_swapped = 0u;
       RigidBody* prev_rba = &previous_rigid_bodies[rba_prev_index];
       daxa_u32 previous_manifold_node_count = min(previous_sim_config.manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
       daxa_u32 previous_collision_count = min(previous_sim_config.g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
 
 #if defined(BB_SIM_DEBUG)
-      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index))
+      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index, old_swapped))
       {
 #else
-      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index)) {
+      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index, old_swapped)) {
 #endif
         matched_old = true;
         old_cc_dbg = old_collisions[old_index].contact_count;
-        manifold.update_from_old(&old_collisions[old_index]);
+        manifold.update_from_old(&old_collisions[old_index], old_swapped);
+      }
+    }
+    if (monitored && matched_old)
+    {
+      daxa_u32 _m;
+      InterlockedOr(sim_config->dbg_dm_mon, 4u, _m);
+    }
+
+    // DEEP-MISS probe: a pair >= 10cm interpenetrated MUST have existed last frame -
+    // failing to find its manifold is the open existence-flicker anomaly. The FIRST
+    // event EVER latches the pair persistently (dm_ids survives frames); from then on
+    // the monitor below reports, per frame, where that pair's pipeline stops.
+    if (warm_starting && rba_prev_exists && rbb_prev_exists && !matched_old)
+    {
+      daxa_f32 deepest = 0.0f;
+      for (daxa_i32 ci = 0; ci < manifold.contact_count; ++ci)
+      {
+        deepest = min(deepest, manifold.contacts[ci].penetration);
+      }
+      if (deepest < -0.1f)
+      {
+        daxa_u32 prev_events = 0u;
+        InterlockedAdd(sim_config->dbg_dm_count, 1u, prev_events);
+        if (prev_events == 0u && sim_config->dbg_dm_ids == 0u)
+        {
+          daxa_u32 pmnc = min(previous_sim_config.manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+          daxa_u32 pcc = min(previous_sim_config.g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+          sim_config->dbg_dm_ids = ((r->id & 0xFFFFu) << 16) | (r2->id & 0xFFFFu);
+          sim_config->dbg_dm_walk_a = BodyLinkManifold::walk_diag(
+              rba_prev_index, rbb_prev_index, previous_rigid_bodies[rba_prev_index].manifold_node_index,
+              pmnc, pcc, collision_map_prev, previous_manifold_nodes, old_collisions);
+          sim_config->dbg_dm_walk_b = BodyLinkManifold::walk_diag(
+              rba_prev_index, rbb_prev_index, previous_rigid_bodies[rbb_prev_index].manifold_node_index,
+              pmnc, pcc, collision_map_prev, previous_manifold_nodes, old_collisions);
+        }
       }
     }
 

@@ -468,6 +468,10 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   {
     return;
   }
+  { // narrow-phase COVERAGE probe: must equal the broad count every frame (truncation check)
+    daxa_u32 _np_prev;
+    InterlockedAdd(sim_config->dbg_np_processed, 1u, _np_prev);
+  }
 
   let previous_sim_config =
       *NP.task_head.previous_sim_config;
@@ -508,7 +512,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   var bp_collision =
       (BroadPhaseCollision)(NP.task_head.broad_phase_collisions[index]);
 
-  narrow_phase(bp_collision, rigid_body_map, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collision_map, collisions, previous_rigid_body_map, previous_rigid_bodies, previous_rigid_body_link_manifolds, collision_map_prev, old_collisions, body_links);
+  narrow_phase(bp_collision, rigid_body_map, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collision_map, collisions, previous_rigid_body_map, previous_rigid_bodies, previous_rigid_body_link_manifolds, collision_map_prev, old_collisions, body_links, index);
 }
 
 [shader("compute")]

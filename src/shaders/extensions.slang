@@ -296,7 +296,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
   }
 
   [mutating]
-  void update_from_old(Manifold* old_manifold) {
+  void update_from_old(Manifold* old_manifold, daxa_u32 swapped = 0u) {
     // With a different key the normal/feature interpretation changed - and the contact
     // feature ids are not comparable across axes, so cross-key fp matches would be
     // false positives. But REJECTING the whole manifold meant tilted deep stacks (the
@@ -305,11 +305,20 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
     // physical contact is the same while the planes agree: accept the cross-key carry,
     // skip the fp pass (ids incomparable) and let PROXIMITY inheritance move the
     // lambdas. Voxel manifolds (90-95) are per-axis by design and stay key-exact.
-    bool cross_key = key != old_manifold->key;
+    //
+    // SWAPPED roles (the old manifold stored the pair as (b,a) after a sort-order flip):
+    // physically the same contact seen from the other side - the old normal points the
+    // opposite way and the anchors belong to the opposite bodies. The hand-off below:
+    // dot-gate against the FLIPPED old normal, fp pass skipped (incident ids live on the
+    // other body now), anchors swapped at inheritance, tangent lambda[0] negated
+    // (compute_basis(-n) yields t0' = -t0, t1' = +t1), normal lambda kept (scalar along
+    // a flipped axis = the same physical force).
+    daxa_f32 old_n_sign = swapped != 0u ? -1.0f : 1.0f;
+    bool cross_key = key != old_manifold->key || swapped != 0u;
     if (cross_key) {
       bool any_voxel = (key >= 90 && key <= 95) || (old_manifold->key >= 90 && old_manifold->key <= 95);
       if (any_voxel) { return; }
-      if (dot(normal, old_manifold->normal) <= 0.7f) { return; } // plane really changed
+      if (dot(normal, old_manifold->normal * old_n_sign) <= 0.7f) { return; } // plane really changed
     }
     // voxel manifolds (key 99): the dominant normal is assembled from QUANTIZED voxel
     // sample normals and can flap a few degrees frame-to-frame at rest, which re-excites
@@ -403,7 +412,8 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
         if (best_j >= 0) {
           Contact* old_contact = &old_manifold->contacts[daxa_u32(best_j)];
           contacts[i].normal_impulse = old_contact->normal_impulse;
-          contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0];
+          // swapped roles: old basis t0 = -t0_new, t1 = +t1_new (compute_basis algebra)
+          contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0] * old_n_sign;
           contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
           contacts[i].mass_coefficient = old_contact->mass_coefficient;
           contacts[i].tangent_mass[0] = old_contact->tangent_mass[0];
@@ -411,8 +421,9 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
           contacts[i].stick = old_contact->stick;
           if (old_contact->stick != 0u)
           {
-            contacts[i].anchor_a = old_contact->anchor_a;
-            contacts[i].anchor_b = old_contact->anchor_b;
+            // swapped roles: the old anchor_a lives in old-A's local frame = our body B
+            contacts[i].anchor_a = swapped != 0u ? old_contact->anchor_b : old_contact->anchor_a;
+            contacts[i].anchor_b = swapped != 0u ? old_contact->anchor_a : old_contact->anchor_b;
           }
           contacts[i].fp = old_contact->fp; // adopt the IDENTITY: matching stays stable
           contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
