@@ -584,7 +584,15 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   daxa_f32 lin2 = dot(r->velocity, r->velocity);
   daxa_f32 ang2 = dot(r->omega, r->omega);
   daxa_u32 timer = r->sleep_timer & BB_SLEEP_TIMER_MASK; // also clears last step's veto bit
-  r->sleep_timer = (lin2 < BB_SLEEP_LIN_VEL2 && ang2 < BB_SLEEP_ANG_VEL2) ? (timer + 1u) : 0u;
+  // DECAY instead of hard reset: a settling crust body spikes above the velocity
+  // threshold for a frame or two and used to pay 30 fresh quiet steps each time —
+  // that re-arming is most of the full-sleep tail. Capping the timer at the threshold
+  // and bleeding 4/loud-frame makes recovery proportional to the disturbance (~5x its
+  // duration, max 30): a 1-frame spike costs 4 quiet steps, a real kick re-arms fully.
+  // Genuine oscillators that are quiet >4/5 of the time get ratcheted to sleep — that
+  // FREEZES the limit cycle (velocity zeroed), and the depth/partner vetoes still hold.
+  bool calm = lin2 < BB_SLEEP_LIN_VEL2 && ang2 < BB_SLEEP_ANG_VEL2;
+  r->sleep_timer = calm ? min(timer + 1u, BB_SLEEP_STEPS) : (timer >= 4u ? timer - 4u : 0u);
 }
 
 // entry_sleep_veto: one thread per manifold; a contact whose partner is not quiet vetoes the body
