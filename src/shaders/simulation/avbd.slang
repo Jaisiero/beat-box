@@ -48,6 +48,13 @@ bool avbd_is_dynamic(RigidBody* r)
 }
 
 // unique per-round priority: rotating hash in the high bits, body index in the low bits (no ties)
+// NOTE: `body` must be the PERSISTENT body id, not the sorted index. The sorted index
+// reshuffles with the radix sort whenever anything moves, which re-colored the graph
+// every step -> the Gauss-Seidel solve order (color = phase) changed per step -> the
+// residual redistributed differently each step ("order noise"), a micro-jitter floor
+// that kept settling crusts hovering above the sleep threshold (user-diagnosed).
+// Hashing the persistent id makes the coloring a pure function of the contact graph:
+// identical every step at rest, deterministic always.
 daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
 {
   daxa_u32 x = body * 0x9e3779b9u + round * 0x85ebca6bu;
@@ -158,6 +165,40 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   Quaternion dq = qc * qs_conj;
   daxa_f32 sign = dq.w < 0.0f ? -1.0f : 1.0f;
   r->omega = dq.v * (2.0f * sign * inv_dt);
+
+  // SETTLE ASSIST: a body that is clearly part of a settled pile (3+ manifolds) and
+  // already slow gets its residual micro-velocity sponged exponentially, so the crust
+  // crosses the sleep threshold (0.12 m/s for 30 steps) in a fraction of a second
+  // instead of simmering just above it for minutes while the neighborhood veto holds
+  // whole bubbles awake. The 3-manifold gate protects legitimate physics: a ramp
+  // slider carries 1-2 manifolds and must keep decelerating by FRICTION alone
+  // (scene_4 canonical outcomes are the regression baseline).
+  // NOTE: a wider/stronger sponge (0.5 m/s band, x0.85) was measured NET NEGATIVE:
+  // draining harder settles bodies "lighter", leaving more contacts hovering at
+  // pen ~ 0 whose manifolds flicker and re-excite the crust (full-sleep regressed
+  // from sample ~201 to stalls at 419-431/432). These gentler values are the optimum.
+  daxa_f32 v2 = dot(r->velocity, r->velocity);
+  daxa_f32 w2 = dot(r->omega, r->omega);
+  if (v2 < 0.09f && w2 < 0.16f) // (0.3 m/s)^2, (0.4 rad/s)^2
+  {
+    ManifoldNode* manifold_nodes = (ManifoldNode*)(AVBD_PC.task_head.manifold_nodes);
+    daxa_u32 manifold_node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+    daxa_u32 node = r->manifold_node_index;
+    daxa_u32 cnt = 0u;
+    daxa_u32 steps = 0u;
+    while (node != MAX_U32 && node < manifold_node_count && cnt < 3u && steps < manifold_node_count)
+    {
+      ++cnt;
+      daxa_i32 nxt = manifold_nodes[node].next;
+      node = nxt < 0 ? MAX_U32 : daxa_u32(nxt);
+      ++steps;
+    }
+    if (cnt >= 3u)
+    {
+      r->velocity *= 0.9f;
+      r->omega *= 0.9f;
+    }
+  }
 }
 
 // ----- F3: contact constraints (normal only), primal 6x6 block solve + dual updates -----
@@ -463,6 +504,17 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
   AvbdBodyState* s = &states[i];
 
+  // shock propagation (post-stab cascade): each dispatch solves ONE support-depth layer,
+  // in ascending order, so this body's supports already settled within this sweep
+  if (AVBD_PC.ps_depth != MAX_U32)
+  {
+    daxa_u32 my_layer = min(s->support_depth, BB_AVBD_SHOCK_LAYERS - 1u);
+    if (my_layer != AVBD_PC.ps_depth)
+    {
+      return;
+    }
+  }
+
   daxa_f32 dt = sim_config->dt;
   daxa_f32 inv_dt2 = dt > 0.0f ? 1.0f / (dt * dt) : 0.0f;
 
@@ -522,6 +574,11 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
         AvbdBodyState* s1 = &states[b1];
         AvbdBodyState* s2 = &states[b2];
 
+        // NOTE on shock propagation: the cascade ORDERS the layer solves (dispatch
+        // order) but every row stays - including partners above. Skipping upper rows
+        // was tried TWICE (unordered v1, ordered v2) and both boiled identically: in a
+        // penalty solver the post-stab must see the same LOADS as the main sweeps, or
+        // it rebuilds an unloaded pile each frame and fights the loaded equilibrium.
         daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
         daxa_f32 mu = sqrt(max(r1->friction, 0.0f) * max(r2->friction, 0.0f));
         for (daxa_u32 j = 0u; j < cc; ++j)
@@ -598,6 +655,72 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   Quaternion qn = (dq * r->rotation).normalize();
   r->rotation.v = qn.v;
   r->rotation.w = qn.w;
+}
+
+// ----- shock propagation: support-depth BFS over the contact graph -----
+//
+// depth 0 = static or sleeping bodies (they ARE ground for whatever rests on them);
+// each relax pass lowers a body's depth to min(depth, touching partner's depth + 1).
+// BB_AVBD_SHOCK_LAYERS passes recognize piles that many layers tall; taller stacks
+// saturate into the last layer (still a consistent ordering for the cascade).
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_depth_reset(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
+  RigidBody* r = &rigid_bodies[i];
+  bool grounded = !avbd_is_dynamic(r) || (r->flags & RigidBodyFlag::SLEEPING) != RigidBodyFlag::NONE;
+  states[i].support_depth = grounded ? 0u : MAX_U32;
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_depth_relax(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 m_idx = compute_i.x;
+  daxa_u32 coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m_idx >= coll)
+  {
+    return;
+  }
+  Manifold* m = &((Manifold*)(AVBD_PC.task_head.collisions))[m_idx];
+  daxa_u32 b1 = m->obb1_index;
+  daxa_u32 b2 = m->obb2_index;
+  if (b1 >= sim_config->rigid_body_count || b2 >= sim_config->rigid_body_count || b1 == b2)
+  {
+    return;
+  }
+  if (m->contact_count <= 0)
+  {
+    return;
+  }
+  AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
+  daxa_u32 d1 = states[b1].support_depth;
+  daxa_u32 d2 = states[b2].support_depth;
+  daxa_u32 prev;
+  if (d2 != MAX_U32 && d2 + 1u < d1)
+  {
+    InterlockedMin(states[b1].support_depth, d2 + 1u, prev);
+  }
+  if (d1 != MAX_U32 && d1 + 1u < d2)
+  {
+    InterlockedMin(states[b2].support_depth, d1 + 1u, prev);
+  }
 }
 
 // dual: one thread per manifold; assign lambda = clamped force, grow the penalty linearly
@@ -737,7 +860,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   daxa_u32 manifold_node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
   daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
 
-  daxa_u32 my_prio = avbd_priority(i, AVBD_PC.color);
+  daxa_u32 my_prio = avbd_priority(r->id, AVBD_PC.color);
 
   // pass 1: local-max test among uncolored dynamic neighbors + collect colored neighbor mask
   daxa_u32 used_mask = 0u;
@@ -757,7 +880,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
           daxa_u32 pc = body_color[p];
           if (pc == AVBD_UNCOLORED)
           {
-            if (avbd_priority(p, AVBD_PC.color) > my_prio)
+            if (avbd_priority(rp->id, AVBD_PC.color) > my_prio)
             {
               return; // a higher-priority uncolored neighbor goes first this round
             }

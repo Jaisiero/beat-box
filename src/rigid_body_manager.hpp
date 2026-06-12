@@ -36,19 +36,19 @@ struct RigidBodyManager{
     return sim_flags;
   }
 
+  // Flag changes do NOT mark the sim dirty: the per-step "reset sim config" task
+  // already uploads `sim_flags` every step, so the toggle propagates within a frame.
+  // Marking dirty ran update_sim(), whose FULL SimConfig rewrite zeroes the previous
+  // step's g_c_info.collision_count - the next warm-start pass then found ZERO old
+  // manifolds, wiping every persisted lambda. Visible effect (user-found): pressing
+  // TAB (debug overlay) made the whole settled pile twitch and reposition.
   SimFlag clear_sim_flags(SimFlag flags) {
     sim_flags &= ~flags;
-    for(auto i = 0u; i < DOUBLE_BUFFERING; ++i) {
-      sim_flag_dirty[i] = true;
-    }
     return sim_flags;
   }
 
   SimFlag set_sim_flags(SimFlag flags) {
     sim_flags |= flags;
-    for(auto i = 0u; i < DOUBLE_BUFFERING; ++i) {
-      sim_flag_dirty[i] = true;
-    }
     return sim_flags;
   }
 
@@ -202,6 +202,8 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_WS;   // AVBD lambda/k warm-start scaling
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_PRIM; // AVBD per-color primal 6x6 block solve
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DUAL; // AVBD dual lambda/penalty updates
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DRST; // shock propagation: depth reset
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DRLX; // shock propagation: depth BFS relax
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CPS_OV; // overflow pre-solver (serial)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CS_OV;  // overflow solver (serial)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CSR_OV; // overflow relax (serial)
@@ -253,8 +255,10 @@ private:
   daxa::BufferId voxel_occupancy = {};
   daxa::BufferId voxel_surface = {};
 
-  // Simulation configuration
-  SimSolverType solver_type = SimSolverType::PGS_SOFT;
+  // Simulation configuration. AVBD is the default solver (user decision after the A/B
+  // campaign: rests flush at pen~0 vs 13mm Baumgarte sink, true zero residual velocity,
+  // ~40% cheaper, and it holds towers/piles PGS_SOFT cannot); PGS_SOFT stays on key 2.
+  SimSolverType solver_type = SimSolverType::AVBD;
 
   daxa_u32 shift = 0;
 };

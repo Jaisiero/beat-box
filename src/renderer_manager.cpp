@@ -282,6 +282,14 @@ void RendererManager::render()
           double _ms = std::chrono::duration<double, std::milli>(_t1 - _t0).count() / 31.0; _t0 = _t1;
           double _sim_ms = _sim_ms_n ? (_sim_ms_accum / (double)_sim_ms_n) : 0.0;   // [PERF]
           _sim_ms_accum = 0.0; _sim_ms_n = 0;                                        // [PERF]
+          // deep-MISS walk diagnostic decode (see BodyLinkManifold::walk_diag)
+          auto dm_walk_str = [](daxa_u32 w) {
+            static char const *reasons[4] = {"EMPTY", "IDBRK", "MAPBRK", "END"};
+            std::string s = reasons[(w >> 30u) & 3u];
+            if ((w >> 29u) & 1u) s += "+FOUND";
+            s += " s" + std::to_string((w >> 16u) & 0x1FFFu) + " o" + std::to_string(w & 0xFFFFu);
+            return s;
+          };
           auto const &sc = rigid_body_manager->get_sim_config_reference();
           std::cout << "[PERF] manifolds=" << sc.g_c_info.collision_count
                     << " sleeping=" << sc.sleeping_count
@@ -296,8 +304,16 @@ void RendererManager::render()
                     << " nan=" << sc.gc_sat_nanflags << " y=" << sc.gc_sat_pos_y
                     << " maxv=" << sc.dbg_maxv
                     << " fresh=" << sc.dbg_fresh
-                    << " ftag=[" << (sc.dbg_fresh_tag >> 22u) << "," << ((sc.dbg_fresh_tag >> 12u) & 0x3FFu)
-                    << " k" << ((sc.dbg_fresh_tag >> 4u) & 0xFFu) << " n" << (sc.dbg_fresh_tag & 0xFu) << "]"
+                    << " ftag=[" << ((sc.dbg_fresh_tag >> 22u) & 0x1FFu) << "," << ((sc.dbg_fresh_tag >> 12u) & 0x3FFu)
+                    << " k" << ((sc.dbg_fresh_tag >> 4u) & 0xFFu) << " n" << (sc.dbg_fresh_tag & 0xFu)
+                    << (sc.dbg_fresh_tag >> 31u ? " MISS" : "") << "]"
+                    << " fa=[f" << ((sc.dbg_pad1 >> 28u) & 0xFu) << " n" << ((sc.dbg_pad1 >> 24u) & 0xFu)
+                    << " o" << (((sc.dbg_pad1 >> 23u) & 1u) ? std::to_string((sc.dbg_pad1 >> 19u) & 0xFu) : std::string("-"))
+                    << " " << ((sc.dbg_pad1 >> 10u) & 0x1FFu) << "," << (sc.dbg_pad1 & 0x3FFu) << "]"
+                    << " dm=[n" << sc.dbg_dm_count << " mon" << sc.dbg_dm_mon
+                    << " " << ((sc.dbg_dm_ids >> 16u) & 0xFFFFu) << "," << (sc.dbg_dm_ids & 0xFFFFu)
+                    << " A:" << dm_walk_str(sc.dbg_dm_walk_a) << " B:" << dm_walk_str(sc.dbg_dm_walk_b) << "]"
+                    << " np=" << sc.dbg_np_processed << "/" << sc.broad_phase_collision_count
                     << " pen=" << sc.dbg_pen
                     << " idsum=" << (daxa_i64)sc.dbg_id_sum - (daxa_i64)((daxa_u64)sc.rigid_body_count * (sc.rigid_body_count - 1) / 2)
                     << " EX[s=" << sc.dbg_ex_stage << " b=" << sc.dbg_ex_body << " f=" << sc.dbg_ex_frame

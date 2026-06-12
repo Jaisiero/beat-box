@@ -111,14 +111,15 @@ daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, RigidBody* r, daxa_u32 pr
 {
     Aabb aabb = r->get_aabb_by_index(prim_index, aabbs);
 
-    daxa_f32vec3 center = aabb.center();
-    center = r->object_to_world(center);
+    // The dominant-axis pick is only valid on a UNIT cube: divide the local offset by
+    // the half-extents first. On elongated boxes (the pool walls are 0.5 x 10 x 9) the
+    // unscaled offset near the top of a side face has |dy| > |dx| and the side got the
+    // TOP face's normal - the triangular shading bleed on every non-cubic body.
+    daxa_f32vec3 local = r->world_to_object(hit_location);
+    daxa_f32vec3 half = (aabb.maximum - aabb.minimum) * 0.5f;
+    daxa_f32vec3 rel = (local - aabb.center()) / max(half, daxa_f32vec3(1.0e-6f, 1.0e-6f, 1.0e-6f));
 
-    daxa_f32vec3 normal = normalize(hit_location - center);
-    normal = r->rotate_vector_inverse(normal);
-
-    // Cube normal calculation
-    normal = compute_cube_normal(normal);
+    daxa_f32vec3 normal = compute_cube_normal(rel);
 
     normal = r->rotate_vector(normal);
     return normal;
@@ -127,14 +128,12 @@ daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, RigidBody* r, daxa_u32 pr
 // Function to compute the normal at the hit point
 daxa_f32vec3 compute_normal(daxa_f32vec3 hit_location, Aabb aabb)
 {
-    daxa_f32vec3 center = aabb.center();
+    // same half-extent normalization as the rigid-body overload: the dominant-axis
+    // pick is only valid on a unit cube (flat panels/lights are anything but)
+    daxa_f32vec3 half = (aabb.maximum - aabb.minimum) * 0.5f;
+    daxa_f32vec3 rel = (hit_location - aabb.center()) / max(half, daxa_f32vec3(1.0e-6f, 1.0e-6f, 1.0e-6f));
 
-    daxa_f32vec3 normal = normalize(hit_location - center);
-
-    // Cube normal calculation
-    normal = compute_cube_normal(normal);
-
-    return normal;
+    return compute_cube_normal(rel);
 }
 
 // Define the AreaLight struct and initialize it

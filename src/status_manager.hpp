@@ -135,6 +135,13 @@ struct StatusManager
     simulating = !simulating;
     if(simulating)
     {
+      // cancel any pending pause-flush (user-found: pressing Space twice quickly froze
+      // the render): the stop path schedules two frames of CURRENT->PREVIOUS buffer
+      // copies meant for a STATIC paused frame; overlapping them with live sim steps
+      // after an immediate resume corrupts the double-buffer parity. A running sim
+      // refreshes every buffer per step, so the flush is obsolete on resume.
+      update_sim_buffer = false;
+      double_buffering_counter = 0;
       rigid_body_manager->skip_warm_starting_once();
     }
     else

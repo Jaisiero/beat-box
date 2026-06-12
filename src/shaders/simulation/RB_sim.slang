@@ -468,6 +468,10 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   {
     return;
   }
+  { // narrow-phase COVERAGE probe: must equal the broad count every frame (truncation check)
+    daxa_u32 _np_prev;
+    InterlockedAdd(sim_config->dbg_np_processed, 1u, _np_prev);
+  }
 
   let previous_sim_config =
       *NP.task_head.previous_sim_config;
@@ -508,7 +512,7 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   var bp_collision =
       (BroadPhaseCollision)(NP.task_head.broad_phase_collisions[index]);
 
-  narrow_phase(bp_collision, rigid_body_map, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collision_map, collisions, previous_rigid_body_map, previous_rigid_bodies, previous_rigid_body_link_manifolds, collision_map_prev, old_collisions, body_links);
+  narrow_phase(bp_collision, rigid_body_map, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collision_map, collisions, previous_rigid_body_map, previous_rigid_bodies, previous_rigid_body_link_manifolds, collision_map_prev, old_collisions, body_links, index);
 }
 
 [shader("compute")]
@@ -581,10 +585,36 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
+  // SUPPORT-LOSS WAKE (user-found "floating sleeper"): a sleeping body's supporters can
+  // slide out from under it during an avalanche WITHOUT touching it - the neighborhood
+  // veto only propagates through EXISTING manifolds, so the frozen body never re-evaluates
+  // its support and floats mid-air forever. An EMPTY manifold chain this frame means
+  // contactless (the chain head is reset to MAX_U32 every frame in the end-of-frame copy
+  // and re-linked by the narrow phase, which runs before this pass). Bleed the timer hard
+  // instead of zeroing: settling piles open 1-frame mm-gaps under sleepers when neighbors
+  // extract, and waking on a single gap frame is a wake-storm pump - a REAL floater stays
+  // contactless and wakes after ~3 consecutive frames (timer < threshold -> apply() wakes,
+  // gravity resumes), which is still visually instant.
+  if (r->manifold_node_index == MAX_U32 &&
+      (r->flags & RigidBodyFlag::SLEEPING) != RigidBodyFlag::NONE)
+  {
+    daxa_u32 t = r->sleep_timer & BB_SLEEP_TIMER_MASK;
+    r->sleep_timer = t >= 10u ? t - 10u : 0u;
+    return;
+  }
+
   daxa_f32 lin2 = dot(r->velocity, r->velocity);
   daxa_f32 ang2 = dot(r->omega, r->omega);
   daxa_u32 timer = r->sleep_timer & BB_SLEEP_TIMER_MASK; // also clears last step's veto bit
-  r->sleep_timer = (lin2 < BB_SLEEP_LIN_VEL2 && ang2 < BB_SLEEP_ANG_VEL2) ? (timer + 1u) : 0u;
+  // DECAY instead of hard reset: a settling crust body spikes above the velocity
+  // threshold for a frame or two and used to pay 30 fresh quiet steps each time —
+  // that re-arming is most of the full-sleep tail. Capping the timer at the threshold
+  // and bleeding 4/loud-frame makes recovery proportional to the disturbance (~5x its
+  // duration, max 30): a 1-frame spike costs 4 quiet steps, a real kick re-arms fully.
+  // Genuine oscillators that are quiet >4/5 of the time get ratcheted to sleep — that
+  // FREEZES the limit cycle (velocity zeroed), and the depth/partner vetoes still hold.
+  bool calm = lin2 < BB_SLEEP_LIN_VEL2 && ang2 < BB_SLEEP_ANG_VEL2;
+  r->sleep_timer = calm ? min(timer + 1u, BB_SLEEP_STEPS) : (timer >= 4u ? timer - 4u : 0u);
 }
 
 // entry_sleep_veto: one thread per manifold; a contact whose partner is not quiet vetoes the body
@@ -621,12 +651,40 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   // statics are always "quiet"; only a non-quiet DYNAMIC partner vetoes
   bool a_loud = a_dyn && ((ra->sleep_timer & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
   bool b_loud = b_dyn && ((rb->sleep_timer & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
+  // DEPTH veto: AVBD's post-stabilization corrects penetration positionally, without
+  // velocity, so the velocity-based sleep test can freeze a deep pile mid-extraction
+  // (the box pool froze with 88-213mm of standing interpenetration). Keep the pair
+  // awake while its deepest contact is far from the surface: the penalty ramp keeps
+  // shrinking the overlap while the bodies stay quiet, and they finally sleep flush.
+  // The threshold IS the standing rest depth, so it belongs just ABOVE the solver's
+  // achievable equilibrium: under a ~7-cube column the penalty springs compress to
+  // ~45mm at the pile BOTTOM (buried, invisible - surface contacts rest millimetric),
+  // and a tighter veto just trapped those pairs awake forever at maxv=0. (Chasing
+  // deeper landings with a bigger veto was measured unproductive - the occasional
+  // 55-65mm pocket leaves one still body unflagged, which is acceptable.)
+  daxa_i32 cc = manifolds[m].contact_count;
+  bool deep = false;
+  // STALLED-EXTRACTION RELEASE: the deep veto exists to keep pairs awake while the
+  // post-stab is still extracting them positionally (velocity cannot see that motion).
+  // Once the depth trend (Manifold.error, tenth-mm/frame, written by update_from_old)
+  // flatlines under 1mm/frame, the pair sits at the solver's achievable equilibrium for
+  // THIS landing - holding it awake is a permanent trap (measured: 430/432 plateau at
+  // pen 53-55, maxv=0, for 250+ samples against the fixed 50mm threshold). Unknown
+  // trend (sentinel, fresh manifold) stays conservative: veto applies.
+  bool stalled = manifolds[m].error != 0x7FFFFFFF && abs(manifolds[m].error) < 10;
+  if (!stalled)
+  {
+    for (daxa_i32 ci = 0; ci < cc; ++ci)
+    {
+      if (manifolds[m].contacts[ci].penetration < -0.05f) { deep = true; break; }
+    }
+  }
   daxa_u32 prev;
-  if (a_loud && b_dyn)
+  if ((a_loud || deep) && b_dyn)
   {
     InterlockedOr(rb->sleep_timer, BB_SLEEP_VETO_BIT, prev);
   }
-  if (b_loud && a_dyn)
+  if ((b_loud || deep) && a_dyn)
   {
     InterlockedOr(ra->sleep_timer, BB_SLEEP_VETO_BIT, prev);
   }

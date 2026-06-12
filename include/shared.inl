@@ -614,7 +614,23 @@ struct SimConfig
   daxa_u32 dbg_fresh_tag;          // one churning manifold: rbaIdx<<22 | rbbIdx<<12 | key<<4 | n
   daxa_u32 dbg_pen;                // per-frame deepest contact penetration in integer mm:
                                    // standing nonzero value at rest = frozen interpenetration
-  daxa_u32 dbg_pad1;               // keep the trailing u64 block 8-byte aligned
+  daxa_u32 dbg_pad1;               // fa churn-anatomy latch (fresh|new_cc|had_old|old_cc|pair)
+  // DEEP-MISS probe: a pair >=10cm interpenetrated whose previous-frame manifold cannot
+  // be found is the open existence-flicker anomaly. First event per frame latches the
+  // persistent body ids and a diagnostic RE-WALK of BOTH bodies' previous manifold
+  // chains (reason<<30 | found_any_order<<29 | steps<<16 | other_pair_manifolds_seen).
+  daxa_u32 dbg_dm_count;
+  daxa_u32 dbg_np_processed;       // narrow-phase COVERAGE: threads that passed the bounds
+                                   // check this frame; < broad_phase_collision_count on any
+                                   // frame = indirect dispatch truncation (measured: never)
+  daxa_u32 dbg_dm_mon;             // per-frame MONITOR bits for the latched dm pair:
+                                   // 1 = an NP thread processed the pair this frame,
+                                   // 2 = SAT produced a manifold, 4 = warm-start matched.
+                                   // Anomaly frames read 0 (broad miss!) or 1 (SAT false)
+                                   // --- per-frame reset boundary (see reset_fresh array) ---
+  daxa_u32 dbg_dm_ids;             // PERSISTENT: first deep-MISS pair ever ((idA<<16)|idB)
+  daxa_u32 dbg_dm_walk_a;          // PERSISTENT: that event's chain-walk forensics
+  daxa_u32 dbg_dm_walk_b;
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
@@ -802,6 +818,24 @@ static const daxa_f32 BB_AVBD_STICK_SLOP = 0.001f;  // anchor drift deadband: be
 static const daxa_u32 BB_AVBD_ITERATIONS = 10;      // main sweeps (+1 post-stabilization sweep)
 static const daxa_u32 BB_AVBD_COLOR_ROUNDS = 16;    // Jones-Plassmann body-coloring rounds
 static const daxa_u32 BB_AVBD_MAX_BODY_COLORS = 32; // primal dispatches per sweep (empty = no-op)
+static const daxa_u32 BB_AVBD_SHOCK_LAYERS = 12;    // shock propagation: depth buckets for the
+                                                    // ORDERED post-stab cascade (and BFS relax
+                                                    // pass count). Deeper bodies saturate into
+                                                    // the last bucket - still a valid ordering.
+                                                    // Guendelman's insight: lower layers settle
+                                                    // BEFORE upper ones sample them; v1 (row
+                                                    // skipping without ordering) measured as a
+                                                    // potential-energy pump - order is the cure.
+static const daxa_u32 BB_AVBD_POST_STAB_SWEEPS = 4; // alpha=0 positional sweeps per frame. ONE
+                                                    // (the reference) extracts deep piles about a
+                                                    // contact layer per frame and plateaus at
+                                                    // 40-50mm standing depth under load; 4 halve
+                                                    // it to ~23mm at negligible cost. MEASURED: 8
+                                                    // DIVERGE (alpha=0 is full-strength positional
+                                                    // Gauss-Seidel - iterating it without under-
+                                                    // relaxation ratchets closed-loop piles into
+                                                    // MISS storms). More sweeps need a relaxation
+                                                    // factor first.
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_POINT_COUNT = 8192;
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_LINE_VERTEX_COUNT = BB_MAX_DEBUG_CONTACT_POINT_COUNT * 2;
 
@@ -895,6 +929,9 @@ struct AvbdBodyState {
   Quaternion rot_start;
   daxa_f32vec3 pos_tilde;
   Quaternion rot_tilde;
+  daxa_u32 support_depth; // shock propagation: contact-graph BFS distance from static
+                          // or sleeping support (0 = static/sleeping, 1 = resting on it,
+                          // ...; MAX_U32 = unsupported/free-falling). Rebuilt every step.
 };
 DAXA_DECL_BUFFER_PTR(AvbdBodyState)
 
@@ -1194,6 +1231,8 @@ struct AvbdPushConstants
   DAXA_TH_BLOB(AvbdTaskHead, task_head)
   daxa_u32 color;       // primal: which body color to solve; coloring rounds: the round number
   daxa_f32 stab_alpha;  // 1.0 = main sweeps (constraint delta only), 0.0 = post-stabilization
+  daxa_u32 ps_depth;    // shock propagation (post-stab only): solve ONLY bodies whose
+                        // saturated support depth equals this layer; MAX_U32 = no filter
 };
 
 
