@@ -813,11 +813,14 @@ static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
 // momentum); velocities are reconstructed BEFORE one extra stabilization sweep that corrects C0
 // positionally. lambda <= 0 (force convention), persisted fully across steps; the penalty grows
 // LINEARLY (k += BETA*|C|) while the contact is active and decays by GAMMA at warm-start.
-// 1e4 = the official avbd-demo3d betaLin (we had carried the 2D demo's 1e5). The ramp
-// rate is the ELASTICITY of fresh impacts: a rain cube punching 150mm deep stores
-// beta-scaled spring energy within the step and fires it back as separation velocity -
-// the energetic settle jitter (user-observed; the official showcases settle calm).
-static const daxa_f32 BB_AVBD_BETA = 10000.0f;
+// BETA TRADE-OFF (both directions measured, user-judged): the ramp rate controls BOTH
+// contact stiffness AND impact elasticity. 1e4 (the official avbd-demo3d value) settles
+// 10x calmer (peak 1.6 vs 16-20 m/s - the spring stores 10x less energy per impact) but
+// visibly DEEPER interpenetration during settling, which reads worse ("mucha mas
+// interpenetracion"). 1e5 keeps contacts stiff at the price of impact bounce. The real
+// both-worlds fix is velocity-level inelastic impact treatment (post-FIN e=0 pass that
+// removes the separation velocity of contacts that arrived approaching), not this dial.
+static const daxa_f32 BB_AVBD_BETA = 100000.0f;
 static const daxa_f32 BB_AVBD_GAMMA = 0.99f;
 static const daxa_f32 BB_AVBD_PENALTY_MIN = 1.0f;
 static const daxa_f32 BB_AVBD_PENALTY_MAX = 1000000000.0f;
