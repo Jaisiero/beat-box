@@ -120,6 +120,13 @@ daxa_u32 gc_hash(daxa_u32 x)
   x ^= x >> 16;
   return x;
 }
+// EXACT unique manifold code (user-found: the G view still danced at rest). The previous
+// version HASHED the pair into the priority's low bits - hash collisions tie, and the up
+// to six manifolds of one voxel pair (keys 90-95) share the pair hash entirely, so the
+// InterlockedMax arbitration fell to a thread race and the coloring re-rolled every
+// frame. Exact packing: lo(10) | hi(10) | key(4) - ids < 1024, and within one pair the
+// low key nibble distinguishes the voxel axes (90-95 -> 10-15). Unique = tie-free =
+// the coloring is a pure function of the contact graph (determinism + a still G view).
 daxa_u32 gc_pair_id(daxa_u32 m)
 {
   RigidBody* rigid_bodies = (RigidBody*)(GC.task_head.rigid_bodies);
@@ -128,13 +135,13 @@ daxa_u32 gc_pair_id(daxa_u32 m)
   daxa_u32 idb = rigid_bodies[collisions[m].obb2_index].id;
   daxa_u32 lo = min(ida, idb);
   daxa_u32 hi = max(ida, idb);
-  return gc_hash(lo * 0x9e3779b9u + hi * 0x85ebca6bu + daxa_u32(collisions[m].key) * 0xc2b2ae35u);
+  return ((lo & 0x3FFu) << 14) | ((hi & 0x3FFu) << 4) | (daxa_u32(collisions[m].key) & 0xFu);
 }
 daxa_u32 gc_priority(daxa_u32 pair_id, daxa_u32 round)
 {
-  daxa_u32 h = gc_hash(pair_id + round * 0x85ebca6bu) & 0xFFFu; // 12-bit per-round hash
-  if (h == 0u) h = 1u;                                          // keep priority > 0 (owner resets to 0)
-  return (h << 20) | (pair_id & 0xFFFFFu);
+  daxa_u32 h = gc_hash(pair_id + round * 0x85ebca6bu) & 0xFFu; // 8-bit per-round fairness hash
+  if (h == 0u) h = 1u;                                         // keep priority > 0 (owner resets to 0)
+  return (h << 24) | (pair_id & 0xFFFFFFu);
 }
 
 // load the contact's two body indices; returns false if the contact is degenerate/out of range
