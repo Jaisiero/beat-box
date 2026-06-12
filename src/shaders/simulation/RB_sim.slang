@@ -100,14 +100,22 @@ bool rb_is_awake_dynamic(RigidBody* r)
   const daxa_f32vec3 WORLD_MAX = daxa_f32vec3(64.0f, 64.0f, 64.0f);
   daxa_f32vec3 normalized_position = (r->position - WORLD_MIN) / (WORLD_MAX - WORLD_MIN);
 
+  // UNIQUE SORT KEYS (determinism): deeply overlapping bodies quantize to the SAME
+  // Morton cell, and the radix tie order for equal keys is a thread race - the sorted
+  // index assignment (and everything its order feeds) then differs run to run. Keep the
+  // top 21 Morton bits (7/axis = 128^3 cells over the +-64 world ~= one cube per cell,
+  // plenty of BVH granularity; overlap tests stay exact) and break ties with the
+  // PERSISTENT body id in the low 10 bits: keys are unique, so the sort order is a pure
+  // function of body poses regardless of radix stability.
   let morton_code = MortonCodeGenerator.morton3D(normalized_position);
+  let unique_key = ((morton_code >> 9u) << 10u) | (r->id & 0x3FFu);
 
 #if defined(BB_DEBUG)
   r->clear_flag(RigidBodyFlag::COLLIDING);
   r->face_collided = 0u;
 #endif // BB_DEBUG
 
-  morton_codes[index] = MortonCode(morton_code, index);
+  morton_codes[index] = MortonCode(unique_key, index);
 }
 
 #if defined(BB_RADIX_SORT_HISTOGRAM)
