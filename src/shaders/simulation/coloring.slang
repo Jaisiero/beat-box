@@ -19,6 +19,9 @@
 [[vk::push_constant]] RigidBodyDispatcherPushConstants GCD; // coloring dispatcher reuses the dispatcher head (writes dispatch_buffer)
 
 static const daxa_u32 GC_UNCOLORED = MAX_U32;
+// p1 stores its contended proposal as GC_PROPOSED_BASE | color; p2 commits or clears it.
+// Intermediate states never escape a round (consumers read manifold_color after all rounds).
+static const daxa_u32 GC_PROPOSED_BASE = 0x80000000u;
 
 // ----- compute the indirect dispatch for all coloring passes: ceil(max(collision_count, rigid_body_count)/X) -----
 // Runs after the narrow phase so g_c_info.collision_count is final. One thread.
@@ -181,6 +184,12 @@ bool gc_load_pair(daxa_u32 m, out daxa_u32 a, out daxa_u32 b)
   daxa_u32 prev;
   if (!sa) InterlockedMax(owner[a * BB_MAX_COLORS + c], prio, prev);
   if (!sb) InterlockedMax(owner[b * BB_MAX_COLORS + c], prio, prev);
+  // store the proposal so p2 commits EXACTLY what was contended (user-found dancing at
+  // rest: p2 used to RE-COMPUTE the color from the live masks, which other p2 threads
+  // were already updating in the same dispatch - the recomputed color depended on thread
+  // order, so commits landed on cells never contended and the coloring re-rolled every
+  // frame; with the stored proposal p2 never reads the masks)
+  manifold_color[m] = GC_PROPOSED_BASE | c;
 }
 
 // ----- round phase 2: commit the color if we won the arbitration on both bodies -----
@@ -193,18 +202,19 @@ bool gc_load_pair(daxa_u32 m, out daxa_u32 a, out daxa_u32 b)
   if (m >= coll_count) return;
 
   daxa_u32* manifold_color = (daxa_u32*)(GC.task_head.manifold_color);
-  if (manifold_color[m] != GC_UNCOLORED) return;
+  daxa_u32 stored = manifold_color[m];
+  if ((stored & GC_PROPOSED_BASE) == 0u || stored == GC_UNCOLORED) return; // not contending this round
+  daxa_u32 c = stored & 0xFFu; // the EXACT color contended in p1 (never recomputed: the
+                               // masks are being updated by other commits in this very
+                               // dispatch, and reading them here was a thread-order race)
 
   daxa_u32 a, b;
-  if (!gc_load_pair(m, a, b)) return;
+  if (!gc_load_pair(m, a, b)) { manifold_color[m] = GC_UNCOLORED; return; }
 
   RigidBody* rigid_bodies = (RigidBody*)(GC.task_head.rigid_bodies);
   bool sa = gc_is_static(&rigid_bodies[a]);
   bool sb = gc_is_static(&rigid_bodies[b]);
   daxa_u32* mask = (daxa_u32*)(GC.task_head.body_color_mask);
-  daxa_u32 c = gc_pick_color(a, b, sa, sb, mask);
-  if (c >= BB_MAX_COLORS) return;
-
   daxa_u32* owner = (daxa_u32*)(GC.task_head.body_color_owner);
   daxa_u32 prio = gc_priority(gc_pair_id(m), sim_config->gc_round);
   bool won_a = sa || (owner[a * BB_MAX_COLORS + c] == prio);
@@ -215,6 +225,10 @@ bool gc_load_pair(daxa_u32 m, out daxa_u32 a, out daxa_u32 b)
     daxa_u32 prev;
     if (!sa) InterlockedOr(mask[a], 1u << c, prev);
     if (!sb) InterlockedOr(mask[b], 1u << c, prev);
+  }
+  else
+  {
+    manifold_color[m] = GC_UNCOLORED; // lost this round: contend again next round
   }
 }
 

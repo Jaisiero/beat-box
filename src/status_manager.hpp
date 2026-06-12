@@ -142,7 +142,14 @@ struct StatusManager
       // refreshes every buffer per step, so the flush is obsolete on resume.
       update_sim_buffer = false;
       double_buffering_counter = 0;
-      rigid_body_manager->skip_warm_starting_once();
+      // NO warm-start suppression on resume (user-found: pause+resume DURING settling
+      // EXPLODED the pile to 280+ m/s): clearing WARM_STARTING for one frame re-enters
+      // every contact of a loaded pile with lambda=0 and penalty k=1 - a pillow frame
+      // that moving stacks tunnel through, and the penalty ramp then fires on the deep
+      // burials. The suppression was vestigial: with the flush cancellation above the
+      // previous-frame buffers are ALWAYS coherent for matching (a genuine previous
+      // step on quick resume, or a self-consistent snapshot of the current state after
+      // a completed pause flush - both inherit lambdas correctly).
     }
     else
     {
