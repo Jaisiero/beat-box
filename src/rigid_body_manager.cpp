@@ -65,6 +65,8 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_AVBD_WS = task_manager->create_compute(AvbdWarmstartInfo{}.info);
     pipeline_AVBD_PRIM = task_manager->create_compute(AvbdPrimalInfo{}.info);
     pipeline_AVBD_DUAL = task_manager->create_compute(AvbdDualInfo{}.info);
+    pipeline_AVBD_IMPJ = task_manager->create_compute(AvbdImpactJInfo{}.info);
+    pipeline_AVBD_IMPA = task_manager->create_compute(AvbdImpactApplyInfo{}.info);
     pipeline_AVBD_DRST = task_manager->create_compute(AvbdDepthResetInfo{}.info);
     pipeline_AVBD_DRLX = task_manager->create_compute(AvbdDepthRelaxInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
@@ -1268,6 +1270,15 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_AVBD_DUAL = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_DUAL)>;
   TTask_AVBD_DUAL task_AVBD_DUAL(avbd_views, user_callback_AVBD_DUAL);
 
+  // inelastic impact treatment (e=0), post-FIN: J computes per-contact rebound-removal
+  // impulses (per manifold, reads only), APPLY gathers each body's own share (per body)
+  auto user_callback_AVBD_IMPJ = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_IMPJ, 0u, 1.0f, COLLISION_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_IMPJ = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_IMPJ)>;
+  TTask_AVBD_IMPJ task_AVBD_IMPJ(avbd_views, user_callback_AVBD_IMPJ);
+  auto user_callback_AVBD_IMPA = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_IMPA, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_IMPA = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_IMPA)>;
+  TTask_AVBD_IMPA task_AVBD_IMPA(avbd_views, user_callback_AVBD_IMPA);
+
   // ---- per-color solver tasks (Phase 3): one dispatch per color, each filters manifold_color==color ----
   static const daxa_u32 MAX_COLORS_SOLVE = BB_MAX_COLORS_SOLVE; // shared.inl: per-color solver dispatch count; empty colors are cheap no-ops
   auto gc_solve_views = std::array{
@@ -1430,6 +1441,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       RB_TG.add_task(task_CSR);
   }
   RB_TG.add_task(task_AVBD_FIN); // AVBD: reconstruct velocities from the pose delta
+  RB_TG.add_task(task_AVBD_IMPJ);  // inelastic impact (e=0): rebound-removal impulses
+  RB_TG.add_task(task_AVBD_IMPA);  // inelastic impact (e=0): per-body application
   // AVBD post-stabilization (reference postStabilize): primal passes with alpha = 0
   // (full C0) AFTER velocities are reconstructed -> corrects pre-existing penetration
   // positionally without injecting momentum. Multiple sweeps converge deep piles, and

@@ -454,6 +454,10 @@ const auto entry_avbd_primal = "entry_avbd_primal";
 const auto avbd_primal_pipeline_name = "AVBD Primal";
 const auto entry_avbd_dual = "entry_avbd_dual";
 const auto avbd_dual_pipeline_name = "AVBD Dual";
+const auto entry_avbd_impact_j = "entry_avbd_impact_j";
+const auto avbd_impact_j_pipeline_name = "AVBD Impact J";
+const auto entry_avbd_impact_apply = "entry_avbd_impact_apply";
+const auto avbd_impact_apply_pipeline_name = "AVBD Impact Apply";
 const auto entry_avbd_depth_reset = "entry_avbd_depth_reset";
 const auto avbd_depth_reset_pipeline_name = "AVBD Depth Reset";
 const auto entry_avbd_depth_relax = "entry_avbd_depth_relax";
@@ -1195,6 +1199,28 @@ struct AvbdDualInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(AvbdPushConstants),
       .name = avbd_dual_pipeline_name,
+  };
+};
+struct AvbdImpactJInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_impact_j, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_impact_j_pipeline_name,
+  };
+};
+struct AvbdImpactApplyInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_impact_apply, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_impact_apply_pipeline_name,
   };
 };
 struct AvbdDepthResetInfo {
