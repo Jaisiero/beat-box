@@ -436,6 +436,18 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
       m->contacts[j].tangent_mass[1] = BB_AVBD_PENALTY_MIN;
       m->contacts[j].stick = 0u;
     }
+    else if (!dyn1 && !dyn2)
+    {
+      // SLEEPING STASIS (user-found chain-reaction wakes: "a small perturbation turns
+      // whole red regions blue in a propagating wave"): the gamma decay below used to
+      // run on SLEEPING pairs too, so a contact asleep N frames had its stiffness
+      // collapse k *= 0.99^N toward 1 while its lambda stayed loaded. Waking the region
+      // resumed the solver on force-without-stiffness contacts: the area SANK under its
+      // own weight while the ramp regrew k from 1, the motion churned the clips (fresh,
+      // blue) and woke the neighbors - whose k had also collapsed - a propagating
+      // softness wave. A sleeping contact is in STASIS: keep k and lambda bit-exact.
+      m->contacts[j].normal_impulse = min(m->contacts[j].normal_impulse, 0.0f);
+    }
     else
     {
       // post-stabilization mode (reference solver.cpp): keep the FULL lambda from last step
