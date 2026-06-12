@@ -827,6 +827,12 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_islands),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_contact_islands),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_contact_islands),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_collision_scratch),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_old_collisions),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_body_link_manifolds),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_rigid_body_link_manifolds),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_collision_entries),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_collision_entries_previous),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, gui_manager->task_vertex_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, gui_manager->task_previous_vertex_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, gui_manager->task_line_vertex_buffer),
@@ -882,6 +888,42 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
               .dst_buffer = ti.get(rigid_body_manager->task_previous_contact_islands).id,
               .size = rigid_body_count * sizeof(ContactIsland),
           });
+
+          // COHERENT pause flush (user-found: pause+resume launched boxes, violently):
+          // the copies above include each body's manifold chain HEAD (RigidBody.
+          // manifold_node_index, valid in the CURRENT node buffer) and the current
+          // counts (SimConfig copy) - but the collision-side buffers those heads and
+          // counts refer to were NOT copied, so after a pause the warm-start walked
+          // current-frame chain heads inside the LAST pre-pause step's node buffer:
+          // garbage links, wrong-pair lambda inheritance, violent impulses on resume.
+          // Copy the used prefix of all three so the previous side is a self-consistent
+          // snapshot (the suppressed-warm-start band-aid this replaces wiped ALL lambdas
+          // for a frame, which itself exploded settling piles).
+          auto coll_count = sim_config->g_c_info.collision_count > BB_MAX_COLLISION_COUNT
+                              ? BB_MAX_COLLISION_COUNT
+                              : sim_config->g_c_info.collision_count;
+          if(coll_count > 0) {
+            ti.recorder.copy_buffer_to_buffer({
+                .src_buffer = ti.get(rigid_body_manager->task_collision_scratch).id,
+                .dst_buffer = ti.get(rigid_body_manager->task_old_collisions).id,
+                .size = coll_count * sizeof(Manifold),
+            });
+            ti.recorder.copy_buffer_to_buffer({
+                .src_buffer = ti.get(rigid_body_manager->task_collision_entries).id,
+                .dst_buffer = ti.get(rigid_body_manager->task_collision_entries_previous).id,
+                .size = coll_count * sizeof(CollisionEntry),
+            });
+          }
+          auto mnode_count = sim_config->manifold_node_count > BB_MAX_MANIFOLD_NODE_COUNT
+                               ? BB_MAX_MANIFOLD_NODE_COUNT
+                               : sim_config->manifold_node_count;
+          if(mnode_count > 0) {
+            ti.recorder.copy_buffer_to_buffer({
+                .src_buffer = ti.get(rigid_body_manager->task_rigid_body_link_manifolds).id,
+                .dst_buffer = ti.get(rigid_body_manager->task_previous_rigid_body_link_manifolds).id,
+                .size = mnode_count * sizeof(ManifoldNode),
+            });
+          }
         }
 
         auto point_count = sim_config->g_c_info.collision_point_count > BB_MAX_DEBUG_CONTACT_POINT_COUNT
@@ -922,7 +964,7 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
     task0,
   };
 
-  std::array<daxa::TaskBuffer, 19> buffers = {
+  std::array<daxa::TaskBuffer, 25> buffers = {
     rigid_body_manager->task_sim_config_host,
     rigid_body_manager->task_rigid_bodies,
     rigid_body_manager->task_previous_rigid_bodies,
@@ -942,6 +984,13 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
     gui_manager->task_line_vertex_buffer,
     gui_manager->task_previous_axes_vertex_buffer,
     gui_manager->task_axes_vertex_buffer,
+    // coherent pause flush: the collision-side buffers the chain heads/counts refer to
+    rigid_body_manager->task_collision_scratch,
+    rigid_body_manager->task_old_collisions,
+    rigid_body_manager->task_rigid_body_link_manifolds,
+    rigid_body_manager->task_previous_rigid_body_link_manifolds,
+    rigid_body_manager->task_collision_entries,
+    rigid_body_manager->task_collision_entries_previous,
   };
 
   AS_buffers_TG = task_manager->create_task_graph("Update Acceleration Structure Buffers", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);

@@ -436,6 +436,18 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
       m->contacts[j].tangent_mass[1] = BB_AVBD_PENALTY_MIN;
       m->contacts[j].stick = 0u;
     }
+    else if (!dyn1 && !dyn2)
+    {
+      // SLEEPING STASIS (user-found chain-reaction wakes: "a small perturbation turns
+      // whole red regions blue in a propagating wave"): the gamma decay below used to
+      // run on SLEEPING pairs too, so a contact asleep N frames had its stiffness
+      // collapse k *= 0.99^N toward 1 while its lambda stayed loaded. Waking the region
+      // resumed the solver on force-without-stiffness contacts: the area SANK under its
+      // own weight while the ramp regrew k from 1, the motion churned the clips (fresh,
+      // blue) and woke the neighbors - whose k had also collapsed - a propagating
+      // softness wave. A sleeping contact is in STASIS: keep k and lambda bit-exact.
+      m->contacts[j].normal_impulse = min(m->contacts[j].normal_impulse, 0.0f);
+    }
     else
     {
       // post-stabilization mode (reference solver.cpp): keep the FULL lambda from last step
@@ -805,6 +817,166 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
     // the last one decides whether the next step reuses the anchors)
     m->contacts[j].stick = (stick_ok && drift2 < BB_AVBD_STICK_THRESH * BB_AVBD_STICK_THRESH) ? 1u : 0u;
   }
+}
+
+// ----- inelastic impact treatment (e = 0), post-FIN velocity passes -----
+//
+// The penalty ramp couples contact stiffness with impact ELASTICITY: a rain cube punching
+// deep stores beta-scaled spring energy within the step and fires it back as separation
+// velocity (user-judged trade-off: beta=1e4 settles 10x calmer but interpenetrates too
+// visibly; beta=1e5 is stiff but bouncy). This pass keeps the stiff ramp and removes the
+// bounce AT THE SOURCE: any contact whose bodies arrived APPROACHING faster than
+// ~2*g*dt and ended the step SEPARATING gets the separation velocity removed (perfectly
+// inelastic impact). Resting contacts never pass the approach gate, so stacks, sliders
+// and sleeping are untouched.
+//
+// Two races-free passes: IMP_J (per manifold, READS only) computes the per-contact
+// impulse scalar into Contact.normal_mass (a PGS-only scratch field, dead under AVBD);
+// IMP_APPLY (per awake dynamic body) walks the body's own chain and applies its own
+// dv/dw share - both bodies compute the same j from the same inputs, no atomics needed.
+
+bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1, out daxa_u32 b2)
+{
+  b1 = m->obb1_index;
+  b2 = m->obb2_index;
+  return !(b1 >= sim_config->rigid_body_count || b2 >= sim_config->rigid_body_count || b1 == b2);
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_impact_j(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 m_idx = compute_i.x;
+  daxa_u32 coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m_idx >= coll)
+  {
+    return;
+  }
+  Manifold* m = &((Manifold*)(AVBD_PC.task_head.collisions))[m_idx];
+  daxa_u32 b1, b2;
+  if (!avbd_impact_pair_gates(sim_config, m, b1, b2))
+  {
+    return;
+  }
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  RigidBody* r1 = &rigid_bodies[b1];
+  RigidBody* r2 = &rigid_bodies[b2];
+  bool dyn1 = avbd_is_dynamic(r1) && (r1->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE;
+  bool dyn2 = avbd_is_dynamic(r2) && (r2->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE;
+  daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
+  if (!dyn1 && !dyn2)
+  {
+    for (daxa_u32 j = 0u; j < cc; ++j) { m->contacts[j].normal_mass = 0.0f; }
+    return;
+  }
+
+  daxa_f32vec3 n = m->normal; // points from body1 toward body2 (SAT convention)
+  daxa_f32mat3x3 inv_i1 = r1->get_transformed_inertia();
+  daxa_f32mat3x3 inv_i2 = r2->get_transformed_inertia();
+  daxa_f32 inv_m1 = dyn1 ? r1->inv_mass : 0.0f; // sleeping/static side acts as an anchor
+  daxa_f32 inv_m2 = dyn2 ? r2->inv_mass : 0.0f;
+
+  for (daxa_u32 j = 0u; j < cc; ++j)
+  {
+    m->contacts[j].normal_mass = 0.0f; // scratch must be defined for IMP_APPLY either way
+    daxa_f32vec3 p = m->contacts[j].position;
+    daxa_f32vec3 ra = p - r1->position;
+    daxa_f32vec3 rb = p - r2->position;
+
+    // entry (pre-step) approach velocity: prev_velocity holds the step-entry linear
+    // velocity (saved by FIN); omegas approximate entry values (no prev_omega stored)
+    daxa_f32vec3 vrel_pre = (r2->prev_velocity + cross(r2->omega, rb)) - (r1->prev_velocity + cross(r1->omega, ra));
+    daxa_f32 vn_pre = dot(n, vrel_pre);
+    if (vn_pre > -2.0f * 9.8f * sim_config->dt) // not a real approach: resting/sliding contact
+    {
+      continue;
+    }
+    // post-step (reconstructed) relative normal velocity
+    daxa_f32vec3 vrel = (r2->velocity + cross(r2->omega, rb)) - (r1->velocity + cross(r1->omega, ra));
+    daxa_f32 vn = dot(n, vrel);
+    if (vn <= 1.0e-4f) // not rebounding
+    {
+      continue;
+    }
+    // effective mass along n and the impulse that zeroes the rebound (e = 0)
+    daxa_f32vec3 t1 = dyn1 ? cross(mul(inv_i1, cross(ra, n)), ra) : daxa_f32vec3(0.0f);
+    daxa_f32vec3 t2 = dyn2 ? cross(mul(inv_i2, cross(rb, n)), rb) : daxa_f32vec3(0.0f);
+    daxa_f32 K = inv_m1 + inv_m2 + dot(n, t1 + t2);
+    if (K <= 1.0e-9f)
+    {
+      continue;
+    }
+    m->contacts[j].normal_mass = -vn / K; // attractive: removes exactly the rebound
+  }
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_impact_apply(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  RigidBody* r = &rigid_bodies[i];
+  if (!avbd_is_dynamic(r) || (r->flags & RigidBodyFlag::SLEEPING) != RigidBodyFlag::NONE)
+  {
+    return;
+  }
+  ManifoldNode* nodes = (ManifoldNode*)(AVBD_PC.task_head.manifold_nodes);
+  CollisionEntry* cmap = (CollisionEntry*)(AVBD_PC.task_head.collision_map);
+  Manifold* colls = (Manifold*)(AVBD_PC.task_head.collisions);
+  daxa_u32 node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+  daxa_u32 coll_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+
+  daxa_f32mat3x3 inv_i = r->get_transformed_inertia();
+  daxa_f32 inv_m = r->inv_mass;
+  daxa_f32vec3 dv = daxa_f32vec3(0.0f);
+  daxa_f32vec3 dw = daxa_f32vec3(0.0f);
+
+  daxa_u32 current = r->manifold_node_index;
+  daxa_u32 steps = 0u;
+  while (current != MAX_U32 && current < node_count && steps < node_count)
+  {
+    daxa_u32 packed = avbd_node_to_packed(current, node_count, coll_count, nodes, cmap);
+    if (packed != MAX_U32)
+    {
+      Manifold* m = &colls[packed];
+      daxa_u32 b1, b2;
+      if (avbd_impact_pair_gates(sim_config, m, b1, b2) && (b1 == i || b2 == i))
+      {
+        daxa_f32 side = (b2 == i) ? 1.0f : -1.0f; // impulse +p*n on body2, -p*n on body1
+        daxa_f32vec3 n = m->normal;
+        daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
+        for (daxa_u32 j = 0u; j < cc; ++j)
+        {
+          daxa_f32 p_imp = m->contacts[j].normal_mass;
+          if (p_imp == 0.0f)
+          {
+            continue;
+          }
+          daxa_f32vec3 arm = m->contacts[j].position - r->position;
+          dv += n * (side * p_imp * inv_m);
+          dw += mul(inv_i, cross(arm, n)) * (side * p_imp);
+        }
+      }
+    }
+    daxa_i32 nx = nodes[current].next;
+    current = nx < 0 ? MAX_U32 : daxa_u32(nx);
+    ++steps;
+  }
+  r->velocity += dv;
+  r->omega += dw;
 }
 
 // ----- coloring passes -----

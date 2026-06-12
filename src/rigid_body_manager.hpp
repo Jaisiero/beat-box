@@ -162,6 +162,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_NPD;
   std::shared_ptr<daxa::ComputePipeline> pipeline_NP;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_CHS; // canonical chain sort (determinism)
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_ID;
   std::shared_ptr<daxa::ComputePipeline> pipeline_IC;
@@ -202,6 +203,8 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_WS;   // AVBD lambda/k warm-start scaling
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_PRIM; // AVBD per-color primal 6x6 block solve
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DUAL; // AVBD dual lambda/penalty updates
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_IMPJ; // inelastic impact: per-contact impulse
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_IMPA; // inelastic impact: per-body apply
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DRST; // shock propagation: depth reset
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DRLX; // shock propagation: depth BFS relax
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CPS_OV; // overflow pre-solver (serial)

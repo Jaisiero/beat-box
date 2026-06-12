@@ -627,6 +627,17 @@ struct SimConfig
                                    // 1 = an NP thread processed the pair this frame,
                                    // 2 = SAT produced a manifold, 4 = warm-start matched.
                                    // Anomaly frames read 0 (broad miss!) or 1 (SAT false)
+  daxa_u32 dbg_poshash;            // DETERMINISM gauge: XOR of asuint(position.xyz) over all
+                                   // dynamic bodies (XOR = exactly order-independent). Two
+                                   // same-seed runs must produce identical values at rest;
+                                   // the first diverging frame localizes residual
+                                   // nondeterminism. Constant once the pile fully sleeps.
+  daxa_u32 dbg_rothash;            // same, over asuint(rotation.xyzw)
+  daxa_u32 dbg_pocket_a;           // POCKET AUTOPSY (the deep-pocket oscillators = the last
+                                   // accumulator-blur foci): fastest awake body seen by the
+                                   // veto pass this frame: vmm(22) << 10 | row(10)
+  daxa_u32 dbg_pocket_b;           // same winner (vmm-prefixed InterlockedMax):
+                                   // vmm(14) << 18 | deepest pen mm(10) << 8 | min(|l|/100,255)
                                    // --- per-frame reset boundary (see reset_fresh array) ---
   daxa_u32 dbg_dm_ids;             // PERSISTENT: first deep-MISS pair ever ((idA<<16)|idB)
   daxa_u32 dbg_dm_walk_a;          // PERSISTENT: that event's chain-walk forensics
@@ -718,8 +729,11 @@ void bb_dbg_velocity_probe(SimConfig* sc, daxa_u32 stage, daxa_u32 body, daxa_f3
 {
   daxa_f32 v2 = dot(v, v);
   daxa_u32 prev;
-  // mm/s so resting JITTER is visible (integer m/s truncated everything below 1 m/s)
-  InterlockedMax(sc->dbg_maxv, daxa_u32(min(sqrt(v2) * 1000.0f, 1.0e9f)), prev);
+  // mm/s so resting JITTER is visible (integer m/s truncated everything below 1 m/s).
+  // The fastest body's INDEX rides in the low 10 bits (InterlockedMax orders by the
+  // velocity in the high bits) - identifies kicked/escaped bodies from the [PERF] line.
+  daxa_u32 v_mm = daxa_u32(min(sqrt(v2) * 1000.0f, 4194303.0f)); // 22 bits
+  InterlockedMax(sc->dbg_maxv, (v_mm << 10) | (body & 0x3FFu), prev);
   if (v2 > BB_DBG_EXPLODE_VEL2)
   {
     InterlockedCompareExchange(sc->dbg_ex_stage, 0u, stage, prev);
@@ -804,6 +818,13 @@ static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
 // momentum); velocities are reconstructed BEFORE one extra stabilization sweep that corrects C0
 // positionally. lambda <= 0 (force convention), persisted fully across steps; the penalty grows
 // LINEARLY (k += BETA*|C|) while the contact is active and decays by GAMMA at warm-start.
+// BETA TRADE-OFF (both directions measured, user-judged): the ramp rate controls BOTH
+// contact stiffness AND impact elasticity. 1e4 (the official avbd-demo3d value) settles
+// 10x calmer (peak 1.6 vs 16-20 m/s - the spring stores 10x less energy per impact) but
+// visibly DEEPER interpenetration during settling, which reads worse ("mucha mas
+// interpenetracion"). 1e5 keeps contacts stiff at the price of impact bounce. The real
+// both-worlds fix is velocity-level inelastic impact treatment (post-FIN e=0 pass that
+// removes the separation velocity of contacts that arrived approaching), not this dial.
 static const daxa_f32 BB_AVBD_BETA = 100000.0f;
 static const daxa_f32 BB_AVBD_GAMMA = 0.99f;
 static const daxa_f32 BB_AVBD_PENALTY_MIN = 1.0f;
