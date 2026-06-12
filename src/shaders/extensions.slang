@@ -271,17 +271,24 @@ extension Manifold {
     tangent_vectors[1] = cross(tangent_vectors[0], normal);
   }
 
-static const daxa_f32 POSITION_TOLERANCE = 0.01f;
+static const daxa_f32 POSITION_TOLERANCE = 0.1f;
 
-  bool is_same_contact(Contact* old_contact, FeaturePair contact_fp)
+  bool is_same_contact(Contact* old_contact, FeaturePair contact_fp, daxa_f32vec3 new_position)
 {
     bool features_match = (old_contact->fp.in_incident == contact_fp.in_incident) &&
                           (old_contact->fp.out_incident == contact_fp.out_incident);
-    // bool positions_close = length(c1.position - c2.position) < POSITION_TOLERANCE;
+    // POSITION GATE (was commented out): the fp compares only the INCIDENT ids, and two
+    // different contacts of the same clip can share them - a feature MIS-PAIR consumes
+    // the wrong old contact (yanking identity across the manifold) and strands the true
+    // successor, which re-enters fresh (measured at rest: fa=[f1-f2 n4 o4] churn that
+    // survived swapped-order matching AND min-distance proximity - only a wrong
+    // CONSUMPTION explains a leftover with no unconsumed neighbor). A true pair sits
+    // sub-mm apart at rest; 0.1 even tolerates a 2 m/s slide (33mm/frame). Mis-pairs
+    // fall through to the min-distance pass, which pairs by position correctly.
+    daxa_f32vec3 dpos = old_contact->position - new_position;
+    bool positions_close = dot(dpos, dpos) < POSITION_TOLERANCE * POSITION_TOLERANCE;
 
-    return features_match 
-    // && positions_close
-    ;
+    return features_match && positions_close;
 }
 
   bool is_valid_contact(FeaturePair a) {
@@ -350,7 +357,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
       for(daxa_u32 j = 0u; j < old_manifold->contact_count; j++) {
         if ((used_old & (1u << j)) != 0u) { continue; }
         Contact* old_contact = &old_manifold->contacts[j];
-        if(is_same_contact(old_contact, contacts[i].fp)) {
+        if(is_same_contact(old_contact, contacts[i].fp, contacts[i].position)) {
             contacts[i].normal_impulse = old_contact->normal_impulse;
             contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0];
             contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
@@ -394,22 +401,35 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
     // columns of converged contact forces. If an unmatched NEW contact lies near an
     // unconsumed OLD one, it inherits the old contact's physics AND identity, so the
     // solver sees one continuous contact regardless of feature-id churn.
+    //
+    // GLOBAL min-distance-first assignment (not greedy by contact index): SLIVER clips
+    // (tilted edge-on-face pockets) emit 4-5 near-collinear contacts spaced closer than
+    // the radius, where index-order greedy lets the wrong new contact consume an old one
+    // and strands the true successor (measured: rest churn fa=[f1-f2 n4 o4], the blue
+    // never-converging points at the pile bottom). Min-first is stable whenever frame
+    // motion << contact spacing: every true pair sits at ~0mm and wins before any
+    // cross-pairing at >= one spacing can fire.
     {
-      for(daxa_u32 i = 0u; i < contact_count; i++) {
-        if ((matched_new & (1u << i)) != 0u) { continue; }
-        daxa_f32 best_d2 = voxel_m ? 0.36f // (0.6)^2: one FULL scene voxel - winner hops
-                                           // move a contact a whole voxel (0.5)
-                                   : 0.1225f; // (0.35)^2: SAT clip corners sit ~0.8-1.0
-                                              // apart on unit cubes, so the nearest
-                                              // unconsumed old point is the predecessor
+      daxa_f32 radius2 = voxel_m ? 0.36f // (0.6)^2: one FULL scene voxel - winner hops
+                                         // move a contact a whole voxel (0.5)
+                                 : 0.1225f; // (0.35)^2: SAT clip corners sit ~0.8-1.0
+                                            // apart on unit cubes
+      for (daxa_u32 round = 0u; round < daxa_u32(max(contact_count, 0)); ++round) {
+        daxa_f32 best_d2 = radius2;
+        daxa_i32 best_i = -1;
         daxa_i32 best_j = -1;
-        for(daxa_u32 j = 0u; j < old_manifold->contact_count; j++) {
-          if ((used_old & (1u << j)) != 0u) { continue; }
-          daxa_f32vec3 dpos = contacts[i].position - old_manifold->contacts[j].position;
-          daxa_f32 d2 = dot(dpos, dpos);
-          if (d2 < best_d2) { best_d2 = d2; best_j = daxa_i32(j); }
+        for(daxa_u32 i = 0u; i < contact_count; i++) {
+          if ((matched_new & (1u << i)) != 0u) { continue; }
+          for(daxa_u32 j = 0u; j < old_manifold->contact_count; j++) {
+            if ((used_old & (1u << j)) != 0u) { continue; }
+            daxa_f32vec3 dpos = contacts[i].position - old_manifold->contacts[j].position;
+            daxa_f32 d2 = dot(dpos, dpos);
+            if (d2 < best_d2) { best_d2 = d2; best_i = daxa_i32(i); best_j = daxa_i32(j); }
+          }
         }
-        if (best_j >= 0) {
+        if (best_i < 0) { break; }
+        {
+          daxa_u32 i = daxa_u32(best_i);
           Contact* old_contact = &old_manifold->contacts[daxa_u32(best_j)];
           contacts[i].normal_impulse = old_contact->normal_impulse;
           // swapped roles: old basis t0 = -t0_new, t1 = +t1_new (compute_basis algebra)
@@ -427,6 +447,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
           }
           contacts[i].fp = old_contact->fp; // adopt the IDENTITY: matching stays stable
           contacts[i].warm_start = min(255, old_contact->warm_start + 1u);
+          matched_new |= 1u << i;
           used_old |= 1u << daxa_u32(best_j);
         }
       }
