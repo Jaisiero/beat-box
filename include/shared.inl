@@ -724,8 +724,11 @@ void bb_dbg_velocity_probe(SimConfig* sc, daxa_u32 stage, daxa_u32 body, daxa_f3
 {
   daxa_f32 v2 = dot(v, v);
   daxa_u32 prev;
-  // mm/s so resting JITTER is visible (integer m/s truncated everything below 1 m/s)
-  InterlockedMax(sc->dbg_maxv, daxa_u32(min(sqrt(v2) * 1000.0f, 1.0e9f)), prev);
+  // mm/s so resting JITTER is visible (integer m/s truncated everything below 1 m/s).
+  // The fastest body's INDEX rides in the low 10 bits (InterlockedMax orders by the
+  // velocity in the high bits) - identifies kicked/escaped bodies from the [PERF] line.
+  daxa_u32 v_mm = daxa_u32(min(sqrt(v2) * 1000.0f, 4194303.0f)); // 22 bits
+  InterlockedMax(sc->dbg_maxv, (v_mm << 10) | (body & 0x3FFu), prev);
   if (v2 > BB_DBG_EXPLODE_VEL2)
   {
     InterlockedCompareExchange(sc->dbg_ex_stage, 0u, stage, prev);

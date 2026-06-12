@@ -110,6 +110,15 @@ bool rb_is_awake_dynamic(RigidBody* r)
   let morton_code = MortonCodeGenerator.morton3D(normalized_position);
   let unique_key = ((morton_code >> 9u) << 10u) | (r->id & 0x3FFu);
 
+  // STRUCTURAL chain reset (pause-resume kick root): the manifold chain head must be
+  // MAX_U32 at every step start. Normally the end-of-frame copy guarantees it, but the
+  // PAUSE FLUSH copies the live buffer - whose heads are valid for the OTHER parity's
+  // node pool - so the first resumed step PREPENDED fresh nodes onto stale tails:
+  // chain walks ran into the old pool = garbage lambda/anchor inheritance = the
+  // single-body kick. Clearing here (first per-body pass of the step, before any
+  // linking) makes the invariant hold by construction, whatever wrote the buffer.
+  r->manifold_node_index = MAX_U32;
+
 #if defined(BB_DEBUG)
   r->clear_flag(RigidBodyFlag::COLLIDING);
   r->face_collided = 0u;

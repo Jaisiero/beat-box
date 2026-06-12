@@ -302,7 +302,7 @@ void RendererManager::render()
                     << " satdeg=" << sc.gc_satbody_degree << " satunc=" << sc.gc_satbody_uncolored
                     << " p=[" << sc.gc_satbody_pmin << "," << sc.gc_satbody_pmax << "]"
                     << " nan=" << sc.gc_sat_nanflags << " y=" << sc.gc_sat_pos_y
-                    << " maxv=" << sc.dbg_maxv
+                    << " maxv=" << (sc.dbg_maxv >> 10u) << "(b" << (sc.dbg_maxv & 0x3FFu) << ")"
                     << " fresh=" << sc.dbg_fresh
                     << " ftag=[" << ((sc.dbg_fresh_tag >> 22u) & 0x1FFu) << "," << ((sc.dbg_fresh_tag >> 12u) & 0x3FFu)
                     << " k" << ((sc.dbg_fresh_tag >> 4u) & 0xFFu) << " n" << (sc.dbg_fresh_tag & 0xFu)
