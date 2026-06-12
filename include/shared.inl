@@ -633,6 +633,11 @@ struct SimConfig
                                    // the first diverging frame localizes residual
                                    // nondeterminism. Constant once the pile fully sleeps.
   daxa_u32 dbg_rothash;            // same, over asuint(rotation.xyzw)
+  daxa_u32 dbg_pocket_a;           // POCKET AUTOPSY (the deep-pocket oscillators = the last
+                                   // accumulator-blur foci): fastest awake body seen by the
+                                   // veto pass this frame: vmm(22) << 10 | row(10)
+  daxa_u32 dbg_pocket_b;           // same winner (vmm-prefixed InterlockedMax):
+                                   // vmm(14) << 18 | deepest pen mm(10) << 8 | min(|l|/100,255)
                                    // --- per-frame reset boundary (see reset_fresh array) ---
   daxa_u32 dbg_dm_ids;             // PERSISTENT: first deep-MISS pair ever ((idA<<16)|idB)
   daxa_u32 dbg_dm_walk_a;          // PERSISTENT: that event's chain-walk forensics

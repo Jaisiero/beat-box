@@ -315,6 +315,8 @@ void RendererManager::render()
                     << " A:" << dm_walk_str(sc.dbg_dm_walk_a) << " B:" << dm_walk_str(sc.dbg_dm_walk_b) << "]"
                     << " np=" << sc.dbg_np_processed << "/" << sc.broad_phase_collision_count
                     << std::hex << " ph=" << sc.dbg_poshash << " rh=" << sc.dbg_rothash << std::dec
+                    << " pk=[v" << (sc.dbg_pocket_a >> 10u) << " b" << (sc.dbg_pocket_a & 0x3FFu)
+                    << " pen" << ((sc.dbg_pocket_b >> 8u) & 0x3FFu) << " l" << ((sc.dbg_pocket_b & 0xFFu) * 100u) << "]"
                     << " pen=" << sc.dbg_pen
                     << " idsum=" << (daxa_i64)sc.dbg_id_sum - (daxa_i64)((daxa_u64)sc.rigid_body_count * (sc.rigid_body_count - 1) / 2)
                     << " EX[s=" << sc.dbg_ex_stage << " b=" << sc.dbg_ex_body << " f=" << sc.dbg_ex_frame

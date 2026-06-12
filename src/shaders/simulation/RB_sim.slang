@@ -776,6 +776,32 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   // deeper landings with a bigger veto was measured unproductive - the occasional
   // 55-65mm pocket leaves one still body unflagged, which is acceptable.)
   daxa_i32 cc = manifolds[m].contact_count;
+  // POCKET AUTOPSY probe: the deep-pocket oscillators (1-2 bodies that monopolize the
+  // convergence tail and the accumulator blur) need their anatomy on the [PERF] line:
+  // who, how fast, how deep, how loaded. The fastest awake body of the frame wins both
+  // latches (vmm in the high bits orders the InterlockedMax consistently).
+  {
+    daxa_f32 va2 = a_dyn && (ra->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE ? dot(ra->velocity, ra->velocity) : 0.0f;
+    daxa_f32 vb2 = b_dyn && (rb->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE ? dot(rb->velocity, rb->velocity) : 0.0f;
+    daxa_f32 v2m = max(va2, vb2);
+    if (v2m > 0.0025f) // 0.05 m/s: only meaningfully moving bodies
+    {
+      daxa_u32 row = va2 >= vb2 ? a : b;
+      daxa_u32 vmm = daxa_u32(min(sqrt(v2m) * 1000.0f, 4194303.0f));
+      daxa_f32 deepest = 0.0f;
+      daxa_f32 lmax = 0.0f;
+      for (daxa_i32 ci = 0; ci < cc; ++ci)
+      {
+        deepest = min(deepest, manifolds[m].contacts[ci].penetration);
+        lmax = max(lmax, abs(manifolds[m].contacts[ci].normal_impulse));
+      }
+      daxa_u32 prev_pk;
+      InterlockedMax(sim_config->dbg_pocket_a, (vmm << 10) | (row & 0x3FFu), prev_pk);
+      daxa_u32 penmm = daxa_u32(min(-deepest * 1000.0f, 1023.0f));
+      daxa_u32 lq = daxa_u32(min(lmax / 100.0f, 255.0f));
+      InterlockedMax(sim_config->dbg_pocket_b, (min(vmm, 16383u) << 18) | (penmm << 8) | lq, prev_pk);
+    }
+  }
   bool deep = false;
   // STALLED-EXTRACTION RELEASE: the deep veto exists to keep pairs awake while the
   // post-stab is still extracting them positionally (velocity cannot see that motion).
