@@ -350,7 +350,7 @@ void RendererManager::render()
             return s;
           };
           auto const &sc = rigid_body_manager->get_sim_config_reference();
-          std::cout << "[PERF] manifolds=" << sc.g_c_info.collision_count
+          std::cout << "[PERF] step=" << sc.frame_count << " manifolds=" << sc.g_c_info.collision_count
                     << " sleeping=" << sc.sleeping_count
                     << " avbdc=" << sc.avbd_color_count << " avbdv=" << sc.avbd_violations
                     << " astick=" << sc.avbd_stick_count
@@ -373,6 +373,7 @@ void RendererManager::render()
                     << " " << ((sc.dbg_dm_ids >> 16u) & 0xFFFFu) << "," << (sc.dbg_dm_ids & 0xFFFFu)
                     << " A:" << dm_walk_str(sc.dbg_dm_walk_a) << " B:" << dm_walk_str(sc.dbg_dm_walk_b) << "]"
                     << " np=" << sc.dbg_np_processed << "/" << sc.broad_phase_collision_count
+                    << std::hex << " ph=" << sc.dbg_poshash << " rh=" << sc.dbg_rothash << std::dec
                     << " pen=" << sc.dbg_pen
                     << " miny=" << (sc.dbg_min_y == 0xFFFFFFFFu ? 0.0 : (double)sc.dbg_min_y / 1000.0 - 100.0)
                     << " deep100=" << sc.dbg_deep100 << " deep200=" << sc.dbg_deep200
