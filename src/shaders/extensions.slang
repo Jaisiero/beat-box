@@ -420,6 +420,24 @@ static const daxa_f32 POSITION_TOLERANCE = 0.01f;
         }
       }
     }
+
+    // EXTRACTION TREND gauge (repurposes the never-used Manifold.error field): per-frame
+    // change of the manifold's deepest penetration, in tenth-millimeters (positive =
+    // extracting). The sleep depth veto releases when extraction has STALLED: a fixed
+    // depth threshold cannot work alone because the achievable equilibrium varies
+    // 49-70mm per landing - a pair resting 4mm past the threshold was measured held
+    // awake FOREVER (430/432 plateau, maxv=0, pen 53-55 for 250+ samples).
+    {
+      daxa_f32 deep_new = 0.0f;
+      for (daxa_u32 i = 0u; i < daxa_u32(max(contact_count, 0)); i++) {
+        deep_new = min(deep_new, contacts[i].penetration);
+      }
+      daxa_f32 deep_old = 0.0f;
+      for (daxa_u32 j = 0u; j < daxa_u32(max(old_manifold->contact_count, 0)); j++) {
+        deep_old = min(deep_old, old_manifold->contacts[j].penetration);
+      }
+      error = daxa_i32(clamp((deep_new - deep_old) * 10000.0f, -32000.0f, 32000.0f));
+    }
   }
 };
 

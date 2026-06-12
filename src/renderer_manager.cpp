@@ -299,6 +299,9 @@ void RendererManager::render()
                     << " ftag=[" << ((sc.dbg_fresh_tag >> 22u) & 0x1FFu) << "," << ((sc.dbg_fresh_tag >> 12u) & 0x3FFu)
                     << " k" << ((sc.dbg_fresh_tag >> 4u) & 0xFFu) << " n" << (sc.dbg_fresh_tag & 0xFu)
                     << (sc.dbg_fresh_tag >> 31u ? " MISS" : "") << "]"
+                    << " fa=[f" << ((sc.dbg_pad1 >> 28u) & 0xFu) << " n" << ((sc.dbg_pad1 >> 24u) & 0xFu)
+                    << " o" << (((sc.dbg_pad1 >> 23u) & 1u) ? std::to_string((sc.dbg_pad1 >> 19u) & 0xFu) : std::string("-"))
+                    << " " << ((sc.dbg_pad1 >> 10u) & 0x1FFu) << "," << (sc.dbg_pad1 & 0x3FFu) << "]"
                     << " pen=" << sc.dbg_pen
                     << " idsum=" << (daxa_i64)sc.dbg_id_sum - (daxa_i64)((daxa_u64)sc.rigid_body_count * (sc.rigid_body_count - 1) / 2)
                     << " EX[s=" << sc.dbg_ex_stage << " b=" << sc.dbg_ex_body << " f=" << sc.dbg_ex_frame

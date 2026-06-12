@@ -1507,12 +1507,24 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
         manifold.contacts[ci].penetration = max(manifold.contacts[ci].penetration, -0.25f);
       }
     }
+    // NOTE: a post-clip CONTACT-SET REDUCTION (voxel-style <=4 stable corners, quantized
+    // scores) was tried here in THREE variants (2026-06-12, patch at
+    // scratch/sat_clip_reduction.patch): sliver->2-extremes is a rotational hinge (deep
+    // edge-on pockets rock forever at the extraction cap); always-4-diagonals spuriously
+    // shrinks legit 4-sets when one vertex wins two diagonals; and the cc>4-only gate
+    // still wake-storm cycles. One lucky run hit full sleep at 98 (best ever), the other
+    // four runs stalled or regressed - the raw clip output + the fp/proximity matching
+    // passes remain the most stable known configuration. The recurring law held again:
+    // with persisted-lambda, do NOT reshape contact identity to chase convergence.
   }
   if (!have) { continue; }
   manifold.obb1_index = rba_index;
   manifold.obb2_index = rbb_index;
   manifold.anchor_a = r->position;
   manifold.anchor_b = r2->position;
+  // extraction-trend sentinel: "unknown" until update_from_old measures a frame delta;
+  // the sleep depth veto treats unknown as still-moving (conservative)
+  manifold.error = 0x7FFFFFFF;
 #if defined(BB_DEBUG)
   manifold.frame_count = sim_config.frame_count;
 #endif // BB_DEBUG
@@ -1540,12 +1552,13 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
 
     daxa_b32 warm_starting = sim_config->has_flag(SimFlag::WARM_STARTING);
     bool matched_old = false;
+    daxa_i32 old_cc_dbg = -1; // churn-anatomy probe: previous contact count of the matched manifold
     if(warm_starting && rba_prev_exists && rbb_prev_exists) {
       daxa_u32 old_index = 0;
       RigidBody* prev_rba = &previous_rigid_bodies[rba_prev_index];
       daxa_u32 previous_manifold_node_count = min(previous_sim_config.manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
       daxa_u32 previous_collision_count = min(previous_sim_config.g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
-      
+
 #if defined(BB_SIM_DEBUG)
       if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index))
       {
@@ -1553,6 +1566,7 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index)) {
 #endif
         matched_old = true;
+        old_cc_dbg = old_collisions[old_index].contact_count;
         manifold.update_from_old(&old_collisions[old_index]);
       }
     }
@@ -1582,6 +1596,16 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
                        ((daxa_u32(manifold.key) & 0xFFu) << 4u) | min(fresh, 0xFu) |
                        (matched_old ? 0u : 0x80000000u);
         InterlockedMax(sim_config->dbg_fresh_tag, tag);
+        // churn ANATOMY latch (highest-fresh manifold wins): new contact count vs the
+        // previous frame's. fresh == new_cc - old_cc -> the contact SET membership flaps
+        // (clip emits a different set; extras can never match). fresh > that surplus ->
+        // identity/distance failures on contacts that DO have an old counterpart.
+        daxa_u32 anat = (min(fresh, 0xFu) << 28u) |
+                        (min(daxa_u32(max(manifold.contact_count, 0)), 0xFu) << 24u) |
+                        ((old_cc_dbg >= 0 ? 1u : 0u) << 23u) |
+                        (min(daxa_u32(max(old_cc_dbg, 0)), 0xFu) << 19u) |
+                        ((min(rba_index, 0x1FFu) << 10u) | min(rbb_index, 0x3FFu)) & 0x7FFFFu;
+        InterlockedMax(sim_config->dbg_pad1, anat);
       }
     }
 

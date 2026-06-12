@@ -581,6 +581,24 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
     return;
   }
 
+  // SUPPORT-LOSS WAKE (user-found "floating sleeper"): a sleeping body's supporters can
+  // slide out from under it during an avalanche WITHOUT touching it - the neighborhood
+  // veto only propagates through EXISTING manifolds, so the frozen body never re-evaluates
+  // its support and floats mid-air forever. An EMPTY manifold chain this frame means
+  // contactless (the chain head is reset to MAX_U32 every frame in the end-of-frame copy
+  // and re-linked by the narrow phase, which runs before this pass). Bleed the timer hard
+  // instead of zeroing: settling piles open 1-frame mm-gaps under sleepers when neighbors
+  // extract, and waking on a single gap frame is a wake-storm pump - a REAL floater stays
+  // contactless and wakes after ~3 consecutive frames (timer < threshold -> apply() wakes,
+  // gravity resumes), which is still visually instant.
+  if (r->manifold_node_index == MAX_U32 &&
+      (r->flags & RigidBodyFlag::SLEEPING) != RigidBodyFlag::NONE)
+  {
+    daxa_u32 t = r->sleep_timer & BB_SLEEP_TIMER_MASK;
+    r->sleep_timer = t >= 10u ? t - 10u : 0u;
+    return;
+  }
+
   daxa_f32 lin2 = dot(r->velocity, r->velocity);
   daxa_f32 ang2 = dot(r->omega, r->omega);
   daxa_u32 timer = r->sleep_timer & BB_SLEEP_TIMER_MASK; // also clears last step's veto bit
@@ -642,9 +660,20 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   // 55-65mm pocket leaves one still body unflagged, which is acceptable.)
   daxa_i32 cc = manifolds[m].contact_count;
   bool deep = false;
-  for (daxa_i32 ci = 0; ci < cc; ++ci)
+  // STALLED-EXTRACTION RELEASE: the deep veto exists to keep pairs awake while the
+  // post-stab is still extracting them positionally (velocity cannot see that motion).
+  // Once the depth trend (Manifold.error, tenth-mm/frame, written by update_from_old)
+  // flatlines under 1mm/frame, the pair sits at the solver's achievable equilibrium for
+  // THIS landing - holding it awake is a permanent trap (measured: 430/432 plateau at
+  // pen 53-55, maxv=0, for 250+ samples against the fixed 50mm threshold). Unknown
+  // trend (sentinel, fresh manifold) stays conservative: veto applies.
+  bool stalled = manifolds[m].error != 0x7FFFFFFF && abs(manifolds[m].error) < 10;
+  if (!stalled)
   {
-    if (manifolds[m].contacts[ci].penetration < -0.05f) { deep = true; break; }
+    for (daxa_i32 ci = 0; ci < cc; ++ci)
+    {
+      if (manifolds[m].contacts[ci].penetration < -0.05f) { deep = true; break; }
+    }
   }
   daxa_u32 prev;
   if ((a_loud || deep) && b_dyn)
