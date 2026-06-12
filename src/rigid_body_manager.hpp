@@ -162,6 +162,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_NPD;
   std::shared_ptr<daxa::ComputePipeline> pipeline_NP;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_CHS; // canonical chain sort (determinism)
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_ID;
   std::shared_ptr<daxa::ComputePipeline> pipeline_IC;

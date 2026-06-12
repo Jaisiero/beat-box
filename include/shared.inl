@@ -627,6 +627,12 @@ struct SimConfig
                                    // 1 = an NP thread processed the pair this frame,
                                    // 2 = SAT produced a manifold, 4 = warm-start matched.
                                    // Anomaly frames read 0 (broad miss!) or 1 (SAT false)
+  daxa_u32 dbg_poshash;            // DETERMINISM gauge: XOR of asuint(position.xyz) over all
+                                   // dynamic bodies (XOR = exactly order-independent). Two
+                                   // same-seed runs must produce identical values at rest;
+                                   // the first diverging frame localizes residual
+                                   // nondeterminism. Constant once the pile fully sleeps.
+  daxa_u32 dbg_rothash;            // same, over asuint(rotation.xyzw)
                                    // --- per-frame reset boundary (see reset_fresh array) ---
   daxa_u32 dbg_dm_ids;             // PERSISTENT: first deep-MISS pair ever ((idA<<16)|idB)
   daxa_u32 dbg_dm_walk_a;          // PERSISTENT: that event's chain-walk forensics

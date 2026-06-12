@@ -520,6 +520,8 @@ const auto narrow_phase_dispatcher_pipeline_name = "Narrow Phase Dispatcher";
 // narrow phase
 const auto entry_narrow_phase_sim = "entry_narrow_phase";
 const auto narrow_phase_sim_pipeline_name = "narrow phase Simulation";
+const auto entry_chain_sort_sim = "entry_chain_sort";
+const auto chain_sort_pipeline_name = "Canonical chain sort";
 
 // collision solver dispatcher
 const auto entry_collision_solver_dispatcher = "entry_collision_solver_dispatcher";
@@ -930,6 +932,21 @@ struct NarrowPhaseInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(NarrowPhasePushConstants),
       .name = narrow_phase_sim_pipeline_name,
+  };
+};
+
+struct ChainSortInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_chain_sort_sim
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(NarrowPhasePushConstants),
+      .name = chain_sort_pipeline_name,
   };
 };
 

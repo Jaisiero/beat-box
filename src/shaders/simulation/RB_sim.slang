@@ -515,6 +515,102 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   narrow_phase(bp_collision, rigid_body_map, rigid_bodies, sim_config, previous_sim_config, rigid_body_link_manifolds, collision_map, collisions, previous_rigid_body_map, previous_rigid_bodies, previous_rigid_body_link_manifolds, collision_map_prev, old_collisions, body_links, index);
 }
 
+// CANONICAL CHAIN SORT (determinism): each dynamic body's manifold chain is rebuilt every
+// frame by atomic head-insertion from racing narrow-phase threads, so its ORDER is a
+// run-to-run lottery. The AVBD primal accumulates its 6x6 lhs/rhs by walking this chain,
+// and float addition is not associative - a different order is a different rounding is a
+// diverging trajectory. Reordering the chain by a persistent canonical key (pair ids +
+// manifold key) makes every accumulation order a pure function of the contact graph.
+// Statics are skipped (hundreds of nodes, never solved as the gathering body; find_old
+// walks the dynamic side). Chains longer than the register cap keep their tail unsorted
+// (a dynamic cube carries <= ~16 nodes; the cap is headroom).
+[shader("compute")]
+    [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
+    entry_chain_sort(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  var sim_config = (SimConfig*)(NP.task_head.sim_config);
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+  RigidBody* rigid_bodies = (RigidBody*)(NP.task_head.rigid_bodies);
+  RigidBody* r = &rigid_bodies[i];
+  if ((r->flags & RigidBodyFlag::DYNAMIC) == RigidBodyFlag::NONE)
+  {
+    return;
+  }
+  var nodes = (ManifoldNode*)(NP.task_head.rigid_body_link_manifolds);
+  var cmap = (CollisionEntry*)(NP.task_head.collision_map);
+  var colls = (Manifold*)(NP.task_head.collisions);
+  daxa_u32 node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+  daxa_u32 coll_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+
+  const daxa_u32 CAP = 24u;
+  daxa_u32 node_idx[24];
+  daxa_u64 keys[24];
+  daxa_u32 n = 0u;
+  daxa_u32 current = r->manifold_node_index;
+  daxa_u32 steps = 0u;
+  daxa_u32 tail = MAX_U32; // first node beyond the cap: its sub-chain stays as-is
+  while (current != MAX_U32 && current < node_count && steps < node_count)
+  {
+    if (n >= CAP)
+    {
+      tail = current;
+      break;
+    }
+    daxa_u32 id = nodes[current].manifold_id;
+    daxa_u64 key = 0xFFFFFFFFFFFFFFFFUL; // unresolvable entries sort last, stably
+    if (id < coll_count)
+    {
+      daxa_u32 mi = cmap[id].index;
+      if (mi < coll_count)
+      {
+        // canonical key: persistent pair ids (order-normalized) + manifold key
+        daxa_u32 ida = rigid_bodies[colls[mi].obb1_index].id;
+        daxa_u32 idb = rigid_bodies[colls[mi].obb2_index].id;
+        daxa_u32 mn = min(ida, idb);
+        daxa_u32 mx = max(ida, idb);
+        key = (daxa_u64(mn) << 44) | (daxa_u64(mx) << 24) | daxa_u64(daxa_u32(colls[mi].key) & 0xFFFFFFu);
+      }
+    }
+    node_idx[n] = current;
+    keys[n] = key;
+    ++n;
+    daxa_i32 nx = nodes[current].next;
+    current = nx < 0 ? MAX_U32 : daxa_u32(nx);
+    ++steps;
+  }
+  if (n <= 1u)
+  {
+    return;
+  }
+  // in-register insertion sort, ascending by canonical key
+  for (daxa_u32 a = 1u; a < n; ++a)
+  {
+    daxa_u64 k = keys[a];
+    daxa_u32 v = node_idx[a];
+    daxa_i32 b = daxa_i32(a) - 1;
+    while (b >= 0 && keys[b] > k)
+    {
+      keys[b + 1] = keys[b];
+      node_idx[b + 1] = node_idx[b];
+      --b;
+    }
+    keys[b + 1] = k;
+    node_idx[b + 1] = v;
+  }
+  // relink the chain in sorted order (chains are per-body disjoint: each node was
+  // allocated by one body_link_manifold call, so parallel rewrites never collide)
+  r->manifold_node_index = node_idx[0];
+  for (daxa_u32 a = 0u; a + 1u < n; ++a)
+  {
+    nodes[node_idx[a]].next = daxa_i32(node_idx[a + 1u]);
+  }
+  nodes[node_idx[n - 1u]].next = tail == MAX_U32 ? -1 : daxa_i32(tail);
+}
+
 [shader("compute")]
     [numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void
     entry_rigid_body_sim(daxa_u32vec3 compute_i : SV_DispatchThreadID) {
@@ -1682,6 +1778,17 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   if (r->has_flag(RigidBodyFlag::DYNAMIC))
   {
     bb_dbg_velocity_probe(sim_config, 3u, index, r->velocity, r->position.y);
+    // DETERMINISM gauges: XOR of the raw pose bits of every dynamic body. XOR is exactly
+    // commutative/associative, so the hash is independent of thread order - two same-seed
+    // runs must print identical values (constant once the pile fully sleeps); the first
+    // diverging sample localizes any residual nondeterminism.
+    daxa_u32 ph = asuint(r->position.x) ^ (asuint(r->position.y) * 0x9e3779b9u) ^
+                  (asuint(r->position.z) * 0x85ebca6bu) ^ (r->id * 0xc2b2ae35u);
+    daxa_u32 rh = asuint(r->rotation.v.x) ^ (asuint(r->rotation.v.y) * 0x9e3779b9u) ^
+                  (asuint(r->rotation.v.z) * 0x85ebca6bu) ^ (asuint(r->rotation.w) * 0x27d4eb2fu) ^
+                  (r->id * 0xc2b2ae35u);
+    InterlockedXor(sim_config->dbg_poshash, ph, _prev);
+    InterlockedXor(sim_config->dbg_rothash, rh, _prev);
   }
 
   copy_rigid_body_fields(r_copy, r);
