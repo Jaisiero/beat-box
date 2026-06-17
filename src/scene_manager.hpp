@@ -822,6 +822,30 @@ public:
     }
   }
 
+  // scene_8: SINGLE-CUBE free-fall test. One dynamic unit cube dropped from y=6 onto the floor
+  // (top at y=0), no neighbours, no walls. With only one dynamic body the pocket_trace.csv columns
+  // become a clean per-step fall log: maxv_mm = the cube's speed, and global_pen_mm goes nonzero
+  // the frame the cube touches the floor (solver-agnostic) = the exact time-to-fall to compare
+  // AVBD vs TGS. y=6 keeps the peak speed (~10.4 m/s) under the 12 m/s anti-punch-through clamp,
+  // so it is pure unclamped free fall. (Temporary measurement scene.)
+  void scene_8() {
+    materials = {
+      { .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),  .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },
+      { .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),  .emission = daxa_f32vec3(30.0f, 30.0f, 30.0f) },
+      { .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),  .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },
+    };
+    // floor (top at y=0)
+    rigid_bodies = {
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f}
+    };
+    // emissive light panel above
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 22.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-5.0f, -0.2f, -5.0f), .maximum = daxa_f32vec3(5.0f, 0.2f, 5.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 1u; // emissive
+    // THE single dynamic cube: dropped straight down from y=6 (no rotation, no initial velocity)
+    rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 6.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 2u; // green
+  }
+
   bool load_scene()
   {
     if (!initialized)
@@ -839,6 +863,7 @@ public:
     // scene_5(); // V3 showcase: frame threads onto the post + mixed concave pile
     // scene_6(); // deterministic stability probe (rests + stacks; fresh/pen must read 0/single-digit)
     scene_7(); // box pool: 432 cubes rain into the pit (all must settle and sleep)
+    // scene_8(); // single-cube free-fall A/B (AVBD vs TGS time-to-floor); kept for re-testing
 
     // random materials for bodies with material_index 0 (unset). Start at 2: index 1 is
     // the emissive light-panel material, and randomly emissive bodies read as glaring
@@ -926,6 +951,47 @@ public:
 
     std::cout << "SUCCESS: Scene loaded successfully with " << rigid_body_count << " rigid bodies!" << std::endl;
     return initialized;
+  }
+
+  // Restart the simulation from the initial scene state. The host `rigid_bodies` vector is never
+  // written by the sim (the GPU holds the live state), so it still holds the initial placement;
+  // re-uploading it + resetting the SimConfig (counts/manifolds -> 0) restarts cleanly. Same body
+  // ids, no RNG reseed -> deterministic restart of the SAME scene.
+  bool reset()
+  {
+    if (!initialized)
+    {
+      return false;
+    }
+    // belt-and-suspenders: clear the per-body dynamic scratch the solver writes on the GPU side
+    for (auto &rb : rigid_bodies)
+    {
+      rb.island_index = MAX_U32;
+      rb.manifold_node_index = MAX_U32;
+      rb.active_index = MAX_U32;
+      rb.velocity = daxa_f32vec3(0, 0, 0);
+      rb.omega = daxa_f32vec3(0, 0, 0);
+      rb.sleep_timer = 0u;
+    }
+    // zero the incremental upload counters first, or the 2nd reset would append (864->1296 > max) and fail
+    accel_struct_mngr->reset_for_reload();
+    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb))
+    {
+      std::cerr << "ERROR: reset() failed to re-upload rigid bodies!" << std::endl;
+      return false;
+    }
+    accel_struct_mngr->build_AS();
+    // reset both double-buffer parities of the SimConfig (collision/manifold/island counts -> 0)
+    rigid_body_manager->update_sim();
+    rigid_body_manager->update_active_rigid_body_list();
+    status_manager->next_frame();
+    rigid_body_manager->update_sim();
+    rigid_body_manager->update_active_rigid_body_list();
+    status_manager->next_frame();
+    accel_struct_mngr->update_TLAS();
+    status_manager->stop_simulating(); // reset also pauses (like Space): restart fresh, paused
+    std::cout << "RESET: simulation restarted from the initial scene state (paused)." << std::endl;
+    return true;
   }
 
   daxa_u32 get_rigid_body_count()

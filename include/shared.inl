@@ -212,6 +212,7 @@ enum SimSolverType : daxa_u32
   PGS = 0,
   PGS_SOFT = 1,
   AVBD = 2, // Augmented Vertex Block Descent: per-body 6x6 block descent + augmented Lagrangian
+  TGS_SOFT = 3, // Box2D v3 / solver2d: sub-stepped soft constraints (warm start + relax + separation tracking)
   INVALID_SOLVER = 0xFFFFFFFF,
 };
 
@@ -631,6 +632,16 @@ struct SimConfig
   daxa_u32 dbg_dm_ids;             // PERSISTENT: first deep-MISS pair ever ((idA<<16)|idB)
   daxa_u32 dbg_dm_walk_a;          // PERSISTENT: that event's chain-walk forensics
   daxa_u32 dbg_dm_walk_b;
+  // DEEP-POCKET TRACE (entry_avbd_pocket_trace): per-frame latch of the deepest awake
+  // contact AFTER the full solve, dumped per-frame to a CSV. De-confounds the oscillator's
+  // lambda (captured at end-of-solve, not the fastest-body flight phase) to find the pump.
+  daxa_u32 dbg_pk_pen;             // deepest awake contact depth this frame, integer mm (reset each frame)
+  daxa_u32 dbg_pk_body;           // its pair ((b1<<16)|(b2&0xFFFF))
+  daxa_f32 dbg_pk_lambda;         // its normal_impulse (lambda, <=0) after the last dual iteration
+  daxa_f32 dbg_pk_k;              // its mass_coefficient (penalty stiffness k)
+  daxa_f32 dbg_pk_vn;             // its normal relative velocity post-FIN+impact (m/s; >0 separating)
+  daxa_u32 dbg_pk_stick;          // (contact_count<<1) | stick
+  daxa_u32 dbg_pk_omega;          // per-frame max |omega| over contacting awake bodies, integer mrad/s
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
@@ -743,6 +754,7 @@ static const daxa_u32 CONTACT_ISLAND_DISPATCH_COUNT_OFFSET = 4;
 static const daxa_u32 RADIX_SORT_RIGID_BODY_DISPATCH_COUNT_OFFSET = 5;
 static const daxa_u32 NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET = 6;
 static const daxa_u32 GRAPH_COLOR_DISPATCH_COUNT_OFFSET = 7; // graph-coloring passes over manifolds (ceil(collision_count/X))
+static const daxa_u32 GRAPH_COLOR_SOLVE_DISPATCH_OFFSET = 8; // per-color solve dispatch array starts here (color c at offset 8+c)
 
 struct DispatchBuffer
 {
@@ -754,6 +766,10 @@ struct DispatchBuffer
   daxa_u32vec3 radix_sort_rigid_body_dispatch;
   daxa_u32vec3 narrow_phase_dispatch;
   daxa_u32vec3 graph_color_dispatch; // over manifolds (collision_count) for the coloring assign/validate passes
+  daxa_u32vec3 graph_color_solve_dispatch[32]; // [BB_MAX_COLORS, defined below] per-color solve dispatch: USED colors get
+                                                          // ceil(coll/X), unused colors get 0 workgroups
+                                                          // (a dense pile uses ~6-12 of 32 colors, so the
+                                                          // rest cost nothing instead of full-count early-out)
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
@@ -804,10 +820,31 @@ static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
 // momentum); velocities are reconstructed BEFORE one extra stabilization sweep that corrects C0
 // positionally. lambda <= 0 (force convention), persisted fully across steps; the penalty grows
 // LINEARLY (k += BETA*|C|) while the contact is active and decays by GAMMA at warm-start.
-static const daxa_f32 BB_AVBD_BETA = 100000.0f;
+// Terminal linear-speed clamp (anti-punch-through): the rain hits at ~28 m/s, tunneling ~470mm into
+// the static floor in one 1/60s step and carrying KE ~ v^2 that bounces through the pile. Capping
+// speed to this value drops the impact energy (12 m/s = ~18% of 28 m/s's energy) and the per-step
+// displacement to <=200mm (under the 0.25m extraction cap), so cubes don't bury deep. Resting and
+// settling bodies (<1 m/s) and the canonical scenes are well under the cap, so they are untouched.
+static const daxa_f32 BB_MAX_LINEAR_SPEED = 12.0f;
+static const daxa_f32 BB_AVBD_BETA = 100000.0f; // (iter16+2e5 convergence experiment 2026-06-16
+                                                // FALSIFIED: deep contact is UNLOADED lambda~0, so
+                                                // stiffer k did NOT extract it; pen stuck ~208mm,
+                                                // jitter up. Reverted. Fix = LOAD deep contacts.)
 static const daxa_f32 BB_AVBD_GAMMA = 0.99f;
 static const daxa_f32 BB_AVBD_PENALTY_MIN = 1.0f;
 static const daxa_f32 BB_AVBD_PENALTY_MAX = 1000000000.0f;
+// DEEP-EXTRACTION (post-stab only): a static buried contact's lambda decays to ~0 under the
+// alpha=1 main sweeps (no delta -> no re-ramp), so its k decays to ~19 and it is too weak to
+// dominate the 6x6 block solve -> it is overruled by shallower contacts and never extracts
+// (trace 2026-06-16: deepest contact pen 208mm, lambda~0, k~19). In the VELOCITY-FREE post-stab
+// (alpha=0, runs after velocity reconstruction so it cannot inject the boil that alpha=0.99 did),
+// floor k for deep contacts so they dominate and push out. Trace is the objective judge:
+// global_pen should drop, maxv must NOT spike (a spike = too strong -> avalanche, lower the floor).
+static const daxa_f32 BB_AVBD_DEEP_EXTRACT_THRESH = 0.08f; // contacts deeper than 80mm
+static const daxa_f32 BB_AVBD_DEEP_EXTRACT_K = 2000.0f;    // k floor for them in post-stab
+// TGS_SOFT (Box2D v3 / solver2d): N sub-steps per frame, each integrates positions and updates
+// contact separations -> stable stacking + fast convergence. Catto's default is 4 sub-steps.
+static const daxa_u32 BB_TGS_SUBSTEPS = 4u;
 static const daxa_f32 BB_AVBD_MARGIN = 0.0005f;     // collision margin (avoids flickering contacts)
 static const daxa_f32 BB_AVBD_STICK_THRESH = 0.01f; // max anchor drift to keep static-friction anchors
 static const daxa_f32 BB_AVBD_STICK_SLOP = 0.001f;  // anchor drift deadband: below this no positional
@@ -1104,6 +1141,7 @@ struct GraphColorSolvePushConstants
 {
   DAXA_TH_BLOB(GraphColorSolveTaskHead, task_head)
   daxa_u32 color; // which color this dispatch solves
+  daxa_i32 tgs_phase; // 0 = normal (PGS-family) instance; 1 = TGS_SOFT sub-step-loop instance
 };
 
 // BUILD BOUNDING BOXES LBVH
@@ -1280,6 +1318,7 @@ DAXA_DECL_TASK_HEAD_END
 struct RigidBodySimPushConstants
 {
   DAXA_TH_BLOB(RigidBodySimTaskHead, task_head)
+  daxa_i32 tgs_phase; // 0 = normal advect (PGS family, once at full dt); 1 = TGS sub-step gravity
 };
 
 
@@ -1490,6 +1529,7 @@ DAXA_DECL_TASK_HEAD_END
 struct RigidBodyIntegratePositionsPushConstants
 {
   DAXA_TH_BLOB(IntegratePositionsTaskHead, task_head)
+  daxa_i32 tgs_phase; // 0 = normal integrate (once at full dt); 1 = TGS sub-step integrate
 };
 
 DAXA_DECL_TASK_HEAD_BEGIN(CollisionSolverRelaxationTaskHead)

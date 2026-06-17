@@ -41,6 +41,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_CSR = task_manager->create_compute(CollisionSolverRelaxationInfo{}.info);
     // graph coloring
     pipeline_GCD = task_manager->create_compute(GraphColorDispatcherInfo{}.info);
+    pipeline_GCSD = task_manager->create_compute(GraphColorSolveDispatcherInfo{}.info);
     pipeline_GCR = task_manager->create_compute(GraphColorResetInfo{}.info);
     pipeline_GCOR = task_manager->create_compute(GraphColorOwnerResetInfo{}.info);
     pipeline_GCP1 = task_manager->create_compute(GraphColorAssignP1Info{}.info);
@@ -64,6 +65,9 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_AVBD_WS = task_manager->create_compute(AvbdWarmstartInfo{}.info);
     pipeline_AVBD_PRIM = task_manager->create_compute(AvbdPrimalInfo{}.info);
     pipeline_AVBD_DUAL = task_manager->create_compute(AvbdDualInfo{}.info);
+    pipeline_AVBD_IMPJ = task_manager->create_compute(AvbdImpactJInfo{}.info);
+    pipeline_AVBD_IMPA = task_manager->create_compute(AvbdImpactApplyInfo{}.info);
+    pipeline_AVBD_PKTR = task_manager->create_compute(AvbdPocketTraceInfo{}.info);
     pipeline_AVBD_DRST = task_manager->create_compute(AvbdDepthResetInfo{}.info);
     pipeline_AVBD_DRLX = task_manager->create_compute(AvbdDepthRelaxInfo{}.info);
     create_points_pipeline = task_manager->create_compute(CreateContactPoints{}.info);
@@ -657,6 +661,21 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_advect);
 
+  // TGS sub-step velocity integrate (gravity * h): same pipeline, tgs_phase=1 (runs per sub-step, TGS only)
+  auto user_callback_tgs_advect = [this](daxa::TaskInterface ti, auto &)
+  {
+    ti.recorder.set_pipeline(*pipeline_advect);
+    ti.recorder.push_constant(RigidBodySimPushConstants{.task_head = ti.attachment_shader_blob, .tgs_phase = 1});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(RigidBodySimTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+  };
+  using TTaskAdvectTGS = TaskTemplate<RigidBodySimTaskHead::Task, decltype(user_callback_tgs_advect)>;
+  TTaskAdvectTGS task_tgs_advect(std::array{
+                              daxa::attachment_view(RigidBodySimTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                              daxa::attachment_view(RigidBodySimTaskHead::AT.sim_config, task_sim_config),
+                              daxa::attachment_view(RigidBodySimTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                          },
+                          user_callback_tgs_advect);
+
   auto user_callback_IC = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_IC);
@@ -953,6 +972,21 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                    },
                    user_callback_IP);
 
+  // TGS sub-step position integrate (x += v*h): same pipeline, tgs_phase=1 (runs per sub-step, TGS only)
+  auto user_callback_tgs_ip = [this](daxa::TaskInterface ti, auto &)
+  {
+    ti.recorder.set_pipeline(*pipeline_IP);
+    ti.recorder.push_constant(RigidBodyIntegratePositionsPushConstants{.task_head = ti.attachment_shader_blob, .tgs_phase = 1});
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(IntegratePositionsTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * ACTIVE_RIGID_BODY_DISPATCH_COUNT_OFFSET});
+  };
+  using TTask_IP_TGS = TaskTemplate<IntegratePositionsTaskHead::Task, decltype(user_callback_tgs_ip)>;
+  TTask_IP_TGS task_tgs_ip(std::array{
+                       daxa::attachment_view(IntegratePositionsTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                       daxa::attachment_view(IntegratePositionsTaskHead::AT.sim_config, task_sim_config),
+                       daxa::attachment_view(IntegratePositionsTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                   },
+                   user_callback_tgs_ip);
+
   auto user_callback_CSR = [this](daxa::TaskInterface ti, auto &)
   {
     if (solver_type == SimSolverType::PGS_SOFT)
@@ -1059,8 +1093,12 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_avbd_body_color,
   };
 
-  // the whole sim runs on the async compute queue; the render graph waits the sim timeline
-  RB_TG = task_manager->create_task_graph(name, std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
+  // the whole sim runs on the async compute queue; the render graph waits the sim timeline.
+  // One graph per solver so each carries only its own passes (the AVBD vs PGS/TGS cross-overhead fix).
+  std::string nm_pgs = std::string(name) + "_pgs", nm_avbd = std::string(name) + "_avbd", nm_tgs = std::string(name) + "_tgs";
+  RB_TG_pgs  = task_manager->create_task_graph(nm_pgs.c_str(),  std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
+  RB_TG_avbd = task_manager->create_task_graph(nm_avbd.c_str(), std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
+  RB_TG_tgs  = task_manager->create_task_graph(nm_tgs.c_str(),  std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
 
   // ---- graph coloring tasks (Phase 2: color + validate, coexisting with the island solver) ----
   // Contacts are an EDGE coloring: colors needed ~= max body degree (Vizing), and one round commits at
@@ -1080,6 +1118,21 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                          daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.sim_config, task_sim_config),
                      },
                      user_callback_GCD);
+
+  // per-color solve dispatcher: after the validator, write per-color solve dispatch args
+  // (used colors -> ceil(coll/X) workgroups, empty colors -> 0). Reuses the dispatcher head.
+  auto user_callback_GCSD = [this](daxa::TaskInterface ti, auto &)
+  {
+    ti.recorder.set_pipeline(*pipeline_GCSD);
+    ti.recorder.push_constant(RigidBodyDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+  using TTask_GCSD = TaskTemplate<RigidBodyDispatcherTaskHead::Task, decltype(user_callback_GCSD)>;
+  TTask_GCSD task_GCSD(std::array{
+                           daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                           daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.sim_config, task_sim_config),
+                       },
+                       user_callback_GCSD);
 
   // the 5 coloring passes share GraphColorTaskHead bindings and dispatch over graph_color_dispatch
   auto gc_views = std::array{
@@ -1237,6 +1290,20 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_AVBD_DUAL = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_DUAL)>;
   TTask_AVBD_DUAL task_AVBD_DUAL(avbd_views, user_callback_AVBD_DUAL);
 
+  // inelastic impact treatment (e=0), post-FIN: J computes per-contact rebound-removal
+  // impulses (per manifold, reads only), APPLY gathers each body's own share (per body)
+  auto user_callback_AVBD_IMPJ = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_IMPJ, 0u, 1.0f, COLLISION_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_IMPJ = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_IMPJ)>;
+  TTask_AVBD_IMPJ task_AVBD_IMPJ(avbd_views, user_callback_AVBD_IMPJ);
+  auto user_callback_AVBD_IMPA = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_IMPA, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_IMPA = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_IMPA)>;
+  TTask_AVBD_IMPA task_AVBD_IMPA(avbd_views, user_callback_AVBD_IMPA);
+
+  // deep-pocket oscillator trace (diagnostic): per manifold, latches the deepest awake contact
+  auto user_callback_AVBD_PKTR = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PKTR, 0u, 1.0f, COLLISION_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_PKTR = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_PKTR)>;
+  TTask_AVBD_PKTR task_AVBD_PKTR(avbd_views, user_callback_AVBD_PKTR);
+
   // ---- per-color solver tasks (Phase 3): one dispatch per color, each filters manifold_color==color ----
   static const daxa_u32 MAX_COLORS_SOLVE = BB_MAX_COLORS_SOLVE; // shared.inl: per-color solver dispatch count; empty colors are cheap no-ops
   auto gc_solve_views = std::array{
@@ -1246,12 +1313,14 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       daxa::attachment_view(GraphColorSolveTaskHead::AT.rigid_bodies, task_rigid_bodies),
       daxa::attachment_view(GraphColorSolveTaskHead::AT.manifold_color, task_manifold_color),
   };
-  auto make_gcs = [this](std::shared_ptr<daxa::ComputePipeline> pl, daxa_u32 c) {
-    return [this, pl, c](daxa::TaskInterface ti, auto &) {
+  auto make_gcs = [this](std::shared_ptr<daxa::ComputePipeline> pl, daxa_u32 c, daxa_i32 tgs_phase = 0) {
+    return [this, pl, c, tgs_phase](daxa::TaskInterface ti, auto &) {
       ti.recorder.set_pipeline(*pl);
-      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = c});
+      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = c, .tgs_phase = tgs_phase});
+      // per-color dispatch: this color's own workgroup count (0 if the color is unused) instead of
+      // dispatching the full collision count for all 32 colors and early-outing 31/32 of the threads
       ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(GraphColorSolveTaskHead::AT.dispatch_buffer).id,
-                                     .offset = sizeof(daxa_u32vec3) * COLLISION_DISPATCH_COUNT_OFFSET});
+                                     .offset = sizeof(daxa_u32vec3) * (GRAPH_COLOR_SOLVE_DISPATCH_OFFSET + c)});
     };
   };
   using TTask_GCS = TaskTemplate<GraphColorSolveTaskHead::Task, decltype(make_gcs(pipeline_GCS_CS, 0u))>;
@@ -1266,13 +1335,26 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     task_GCS_CSR_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CSR, c));
   }
 
+  // TGS_SOFT sub-step instances (same pipelines, tgs_phase=1 so the shader runs the TGS branch).
+  // Reuses the per-color graph-coloring dispatch (incl. the empty-color skip) -> TGS stays parallel.
+  std::vector<TTask_GCS> task_TGS_CPS_vec, task_TGS_CS_vec, task_TGS_CSR_vec;
+  task_TGS_CPS_vec.reserve(MAX_COLORS_SOLVE);
+  task_TGS_CS_vec.reserve(MAX_COLORS_SOLVE);
+  task_TGS_CSR_vec.reserve(MAX_COLORS_SOLVE);
+  for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+  {
+    task_TGS_CPS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CPS, c, 1));
+    task_TGS_CS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CS, c, 1));
+    task_TGS_CSR_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CSR, c, 1));
+  }
+
   // overflow bucket: serial single-thread solve of manifolds the per-color dispatches skip
   // (uncolored / color>=MAX_COLORS_SOLVE). Early-outs on graph_color_overflow==0, so it is
   // free except on degenerate frames.
-  auto make_gcs_ov = [this](std::shared_ptr<daxa::ComputePipeline> pl) {
-    return [this, pl](daxa::TaskInterface ti, auto &) {
+  auto make_gcs_ov = [this](std::shared_ptr<daxa::ComputePipeline> pl, daxa_i32 tgs_phase = 0) {
+    return [this, pl, tgs_phase](daxa::TaskInterface ti, auto &) {
       ti.recorder.set_pipeline(*pl);
-      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = 0u});
+      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = 0u, .tgs_phase = tgs_phase});
       ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
     };
   };
@@ -1280,47 +1362,55 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_GCS_OV task_GCS_CPS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CPS_OV));
   TTask_GCS_OV task_GCS_CS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CS_OV));
   TTask_GCS_OV task_GCS_CSR_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CSR_OV));
+  TTask_GCS_OV task_TGS_CPS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CPS_OV, 1));
+  TTask_GCS_OV task_TGS_CS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CS_OV, 1));
+  TTask_GCS_OV task_TGS_CSR_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CSR_OV, 1));
 
-  RB_TG.add_task(task_RC);
-  RB_TG.add_task(task_CRB);
-  RB_TG.add_task(task_RBD);
-  RB_TG.add_task(task_GMC);
+  // Per-solver task graph: shared setup (broad/narrow/islands/sleeping) + ONLY the active solver's
+  // passes. simulate() runs the one matching solver_type, so PGS/TGS no longer pay AVBD's ~847
+  // dispatches/frame (the cross-solver overhead that made them slow since AVBD landed).
+  auto record_solve = [&](TaskGraph &G, SimSolverType solver)
+  {
+  G.add_task(task_RC);
+  G.add_task(task_CRB);
+  G.add_task(task_RBD);
+  G.add_task(task_GMC);
   for(auto i = 0u; i < ITERATIONS/2; ++i) {
-    RB_TG.add_task(task_RBSRH);
-    RB_TG.add_task(task_RBSRS);
-    RB_TG.add_task(task_URS);
-    RB_TG.add_task(task_RBSRH_swap);
-    RB_TG.add_task(task_RBSRS_swap);
-    RB_TG.add_task(task_URS);
+    G.add_task(task_RBSRH);
+    G.add_task(task_RBSRS);
+    G.add_task(task_URS);
+    G.add_task(task_RBSRH_swap);
+    G.add_task(task_RBSRS_swap);
+    G.add_task(task_URS);
   }
-  RB_TG.add_task(task_RBLBVHGH);
-  RB_TG.add_task(task_BBBLBVHGH);
-  RB_TG.add_task(task_CBBLBVHGH);
-  RB_TG.add_task(task_RBR);
-  RB_TG.add_task(task_RBL);
-  RB_TG.add_task(task_BP);
-  RB_TG.add_task(task_NPD);
-  RB_TG.add_task(task_NP);
-  RB_TG.add_task(task_advect);
-  RB_TG.add_task(task_IC);
-  RB_TG.add_task(task_CS_dispatcher);
-  RB_TG.add_task(task_ID);
-  RB_TG.add_task(task_IB);
-  RB_TG.add_task(task_IPS);
-  RB_TG.add_task(task_IBL);
+  G.add_task(task_RBLBVHGH);
+  G.add_task(task_BBBLBVHGH);
+  G.add_task(task_CBBLBVHGH);
+  G.add_task(task_RBR);
+  G.add_task(task_RBL);
+  G.add_task(task_BP);
+  G.add_task(task_NPD);
+  G.add_task(task_NP);
+  G.add_task(task_advect);
+  G.add_task(task_IC);
+  G.add_task(task_CS_dispatcher);
+  G.add_task(task_ID);
+  G.add_task(task_IB);
+  G.add_task(task_IPS);
+  G.add_task(task_IBL);
   // neighborhood sleeping: decide sleep/wake BEFORE the solve so sleeping bodies skip it this step
-  RB_TG.add_task(task_SLR);
-  RB_TG.add_task(task_SLV);
-  RB_TG.add_task(task_SLA);
+  G.add_task(task_SLR);
+  G.add_task(task_SLV);
+  G.add_task(task_SLA);
   // FIXME: that's a really expensive sort
-  // RB_TG.add_task(task_SBLI);
-  RB_TG.add_task(task_MIB);
-  RB_TG.add_task(task_CGI);
-  RB_TG.add_task(task_CID);
-  RB_TG.add_task(task_MIPS);
-  RB_TG.add_task(task_IML);
+  // G.add_task(task_SBLI);
+  G.add_task(task_MIB);
+  G.add_task(task_CGI);
+  G.add_task(task_CID);
+  G.add_task(task_MIPS);
+  G.add_task(task_IML);
   // FIXME: that's a really expensive sort too
-  // RB_TG.add_task(task_SMLI);
+  // G.add_task(task_SMLI);
   // graph coloring. MUST run after task_IML: the coloring, the validator AND the per-color solver
   // all index `task_collisions`, which task_IML (re)writes in island-sorted order THIS frame.
   // Coloring earlier (e.g. right after the narrow phase) reads the previous content of the buffer
@@ -1329,75 +1419,91 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   // land in one color and solve concurrently -> racy Jacobi-style overcorrection -> a resting
   // body gets ejected at thousands of m/s within one CS sweep (and the validator stays at 0
   // violations because it validated the SAME stale data the colorer saw).
-  RB_TG.add_task(task_GCD);
-  RB_TG.add_task(task_GCR);
+  // contact coloring: PGS family + TGS use it (AVBD has its own body coloring)
+  if (solver != SimSolverType::AVBD)
+  {
+  G.add_task(task_GCD);
+  G.add_task(task_GCR);
   for (auto r = 0u; r < GRAPH_COLOR_MAX_ROUNDS; ++r)
   {
-    RB_TG.add_task(task_GCOR);
-    RB_TG.add_task(task_GCP1);
-    RB_TG.add_task(task_GCP2);
+    G.add_task(task_GCOR);
+    G.add_task(task_GCP1);
+    G.add_task(task_GCP2);
   }
-  RB_TG.add_task(task_GCOR); // reset owner-as-seen for the validator
-  RB_TG.add_task(task_GCV);
-  RB_TG.add_task(task_GCV2); // TEMP diag: satbody degree/partners
+  G.add_task(task_GCOR); // reset owner-as-seen for the validator
+  G.add_task(task_GCV);
+  G.add_task(task_GCV2); // TEMP diag: satbody degree/partners
+  G.add_task(task_GCSD); // per-color solve dispatch args (skip empty colors) — graph_color_count now final
   // AVBD body coloring (independent of the contact coloring above; entries are cheap and the
   // primal solve will only run when solver_type == AVBD)
-  RB_TG.add_task(task_AVBD_CR);
+  } // end contact coloring
+  // AVBD: body coloring + prepare + shock + primal/dual + FIN + impact + post-stab + trace (AVBD only)
+  if (solver == SimSolverType::AVBD)
+  {
+  G.add_task(task_AVBD_CR);
   for (daxa_u32 rd = 0u; rd < BB_AVBD_COLOR_ROUNDS; ++rd)
   {
-    RB_TG.add_task(task_AVBD_CRND_vec[rd]);
+    G.add_task(task_AVBD_CRND_vec[rd]);
   }
-  RB_TG.add_task(task_AVBD_CV);
-  RB_TG.add_task(task_AVBD_PRE); // AVBD: save step-start pose + jump to the inertial target
-  RB_TG.add_task(task_AVBD_WS);  // AVBD: lambda/k warm-start scaling
+  G.add_task(task_AVBD_CV);
+  G.add_task(task_AVBD_PRE); // AVBD: save step-start pose + jump to the inertial target
+  G.add_task(task_AVBD_WS);  // AVBD: lambda/k warm-start scaling
   // shock propagation: support-depth BFS (statics/sleepers = 0; each pass relaxes
   // depth = min(depth, touching partner + 1)). Consumed by the ORDERED post-stab
   // cascade below.
-  RB_TG.add_task(task_AVBD_DRST);
+  G.add_task(task_AVBD_DRST);
   for (daxa_u32 dr = 0u; dr < BB_AVBD_SHOCK_LAYERS; ++dr)
   {
-    RB_TG.add_task(task_AVBD_DRLX);
+    G.add_task(task_AVBD_DRLX);
   }
   for (daxa_u32 it = 0u; it < BB_AVBD_ITERATIONS; ++it)
   {
     for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
     {
-      RB_TG.add_task(task_AVBD_PRIM_vec[c]);
+      G.add_task(task_AVBD_PRIM_vec[c]);
     }
-    RB_TG.add_task(task_AVBD_DUAL);
+    G.add_task(task_AVBD_DUAL);
   }
+  } // end AVBD primal/dual
+  if (solver == SimSolverType::PGS || solver == SimSolverType::PGS_SOFT)
+  {
   if (static_cast<daxa_u32>(sim_flags & SimFlag::USE_GRAPH_COLORING) != 0u)
   {
     // per-color solve (parallel: one dispatch per color, balanced, no atomics)
     // + serial overflow bucket after each sweep (uncolored / color>=MAX_COLORS_SOLVE manifolds)
     for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
-      RB_TG.add_task(task_GCS_CPS_vec[c]);
-    RB_TG.add_task(task_GCS_CPS_OV);
+      G.add_task(task_GCS_CPS_vec[c]);
+    G.add_task(task_GCS_CPS_OV);
     for (auto i = 0u; i < iteration_count; ++i)
     {
       for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
-        RB_TG.add_task(task_GCS_CS_vec[c]);
-      RB_TG.add_task(task_GCS_CS_OV);
+        G.add_task(task_GCS_CS_vec[c]);
+      G.add_task(task_GCS_CS_OV);
     }
-    RB_TG.add_task(task_IP);
+    G.add_task(task_IP);
     for (auto i = 0u; i < iteration_count; ++i)
     {
       for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
-        RB_TG.add_task(task_GCS_CSR_vec[c]);
-      RB_TG.add_task(task_GCS_CSR_OV);
+        G.add_task(task_GCS_CSR_vec[c]);
+      G.add_task(task_GCS_CSR_OV);
     }
   }
   else
   {
     // per-island solve (serial within each contact island)
-    RB_TG.add_task(task_CPS);
+    G.add_task(task_CPS);
     for (auto i = 0u; i < iteration_count; ++i)
-      RB_TG.add_task(task_CS);
-    RB_TG.add_task(task_IP);
+      G.add_task(task_CS);
+    G.add_task(task_IP);
     for (auto i = 0u; i < iteration_count; ++i)
-      RB_TG.add_task(task_CSR);
+      G.add_task(task_CSR);
   }
-  RB_TG.add_task(task_AVBD_FIN); // AVBD: reconstruct velocities from the pose delta
+  } // end PGS solve
+  if (solver == SimSolverType::AVBD)
+  {
+  G.add_task(task_AVBD_FIN); // AVBD: reconstruct velocities from the pose delta
+  G.add_task(task_AVBD_IMPJ);  // inelastic impact (e=0): rebound-removal impulses
+  G.add_task(task_AVBD_IMPA);  // inelastic impact (e=0): per-body application
   // AVBD post-stabilization (reference postStabilize): primal passes with alpha = 0
   // (full C0) AFTER velocities are reconstructed -> corrects pre-existing penetration
   // positionally without injecting momentum. Multiple sweeps converge deep piles, and
@@ -1413,18 +1519,47 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
     {
-      RB_TG.add_task(task_AVBD_PRIM_PS_vec[d * BB_AVBD_MAX_BODY_COLORS + c]);
+      G.add_task(task_AVBD_PRIM_PS_vec[d * BB_AVBD_MAX_BODY_COLORS + c]);
     }
   }
   for (daxa_u32 ps = 1u; ps < BB_AVBD_POST_STAB_SWEEPS; ++ps)
   {
     for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
     {
-      RB_TG.add_task(task_AVBD_PRIM_PS_plain_vec[c]);
+      G.add_task(task_AVBD_PRIM_PS_plain_vec[c]);
     }
   }
-  RB_TG.add_task(task_CP);
-  RB_TG.add_task(task_update);
+  } // end AVBD FIN/impact/post-stab
+  if (solver == SimSolverType::TGS_SOFT)
+  {
+  // TGS_SOFT (Box2D v3 / solver2d): sub-stepped soft solver, integrated with graph coloring.
+  // All tasks early-return unless solver_type==TGS_SOFT, so this block is free for the other solvers.
+  // Prepare once (soft coeffs at sub-step h + local anchors), then BB_TGS_SUBSTEPS sub-steps of:
+  // integrate velocity (gravity*h) -> per-color solve (bias) -> integrate positions (x+=v*h) ->
+  // per-color relax (no bias). The separation is re-derived from the pose each sub-step (TGS temporal).
+  for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+    G.add_task(task_TGS_CPS_vec[c]);
+  G.add_task(task_TGS_CPS_OV);
+  for (daxa_u32 s = 0u; s < BB_TGS_SUBSTEPS; ++s)
+  {
+    G.add_task(task_tgs_advect);
+    for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+      G.add_task(task_TGS_CS_vec[c]);
+    G.add_task(task_TGS_CS_OV);
+    G.add_task(task_tgs_ip);
+    for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+      G.add_task(task_TGS_CSR_vec[c]);
+    G.add_task(task_TGS_CSR_OV);
+  }
+  } // end TGS sub-step loop
+  if (solver == SimSolverType::AVBD)
+    G.add_task(task_AVBD_PKTR); // diagnostic (AVBD only)
+  G.add_task(task_CP);
+  G.add_task(task_update);
+  }; // end record_solve lambda
+  record_solve(RB_TG_pgs,  SimSolverType::PGS_SOFT);
+  record_solve(RB_TG_avbd, SimSolverType::AVBD);
+  record_solve(RB_TG_tgs,  SimSolverType::TGS_SOFT);
 
   // Bind backing resources to all task buffers to prevent unbound resource compilation crashes in Daxa 3.6
   task_sim_config_host.set_buffer(sim_config_host_buffer[0]);
@@ -1469,8 +1604,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   accel_struct_mngr->task_dispatch_buffer.set_buffer(tmp_morton_codes);
   accel_struct_mngr->task_aabb_buffer.set_buffer(tmp_morton_codes);
 
-  RB_TG.submit();
-  RB_TG.complete();
+  RB_TG_pgs.submit();  RB_TG_pgs.complete();
+  RB_TG_avbd.submit(); RB_TG_avbd.complete();
+  RB_TG_tgs.submit();  RB_TG_tgs.complete();
+
 
   record_read_back_sim_config_tasks(readback_SC_TG);
   readback_SC_TG.submit();
@@ -1616,7 +1753,11 @@ bool RigidBodyManager::simulate()
 
   update_buffers();
 
-  RB_TG.execute();
+  // execute only the active solver's graph (each carries only its own passes -> no cross-overhead)
+  TaskGraph &RB_TG_active = (solver_type == SimSolverType::AVBD)     ? RB_TG_avbd
+                                : (solver_type == SimSolverType::TGS_SOFT) ? RB_TG_tgs
+                                                                           : RB_TG_pgs;
+  RB_TG_active.execute();
 
   return initialized;
 }

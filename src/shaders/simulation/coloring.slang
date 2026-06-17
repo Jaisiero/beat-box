@@ -34,6 +34,23 @@ static const daxa_u32 GC_UNCOLORED = MAX_U32;
   dispatch_buffer->graph_color_dispatch = daxa_u32vec3(cnt, 1, 1);
 }
 
+// Runs AFTER the validator (graph_color_count is final). One thread per color: USED colors get
+// ceil(collision_count/X) workgroups, unused colors (c >= graph_color_count) get 0 -> the per-color
+// solve dispatch (make_gcs, indirect at GRAPH_COLOR_SOLVE_DISPATCH_OFFSET + c) skips empty colors
+// entirely instead of dispatching the full collision count for all 32 and early-outing.
+[shader("compute")]
+[numthreads(BB_MAX_COLORS, 1, 1)] void entry_graph_color_solve_dispatcher(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  daxa_u32 c = compute_i.x;
+  if (c >= BB_MAX_COLORS) return;
+  SimConfig* sim_config = (SimConfig*)(GCD.task_head.sim_config);
+  DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCD.task_head.dispatch_buffer);
+  let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  let cnt = (coll + RIGID_BODY_SIM_COMPUTE_X - 1u) / RIGID_BODY_SIM_COMPUTE_X;
+  let used = min(sim_config->graph_color_count, BB_MAX_COLORS);
+  dispatch_buffer->graph_color_solve_dispatch[c] = (c < used) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
+}
+
 // A body is static (does not move) when it lacks the DYNAMIC flag (the floor is RigidBodyFlag::NONE).
 // Detect by flag, NOT inv_mass (the floor's inv_mass is 1.0 by a latent scene bug).
 bool gc_is_static(RigidBody* r)
@@ -74,6 +91,13 @@ bool gc_is_static(RigidBody* r)
     sim_config->gc_sat_pos_y = 0.0f;
     sim_config->dbg_maxv = 0u;   // per-frame stats reset; the dbg_ex_* latch is intentionally NOT reset
     sim_config->dbg_id_sum = 0u;
+    sim_config->dbg_pk_pen = 0u; // deep-pocket trace latch: reset so it tracks THIS frame's deepest
+    sim_config->dbg_pk_body = 0u;
+    sim_config->dbg_pk_lambda = 0.0f;
+    sim_config->dbg_pk_k = 0.0f;
+    sim_config->dbg_pk_vn = 0.0f;
+    sim_config->dbg_pk_stick = 0u;
+    sim_config->dbg_pk_omega = 0u;
   }
 }
 

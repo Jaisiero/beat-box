@@ -1,5 +1,8 @@
+#define _CRT_SECURE_NO_WARNINGS // std::getenv (BB_RUN_SECONDS) on MSVC
 #include "renderer_manager.hpp"
 #include <iostream>
+#include <fstream> // deep-pocket trace CSV (diagnostic)
+#include <cstdlib> // std::getenv / std::atof (BB_RUN_SECONDS auto-exit)
 
 BB_NAMESPACE_BEGIN
 
@@ -225,10 +228,28 @@ void RendererManager::render()
   auto sim_clock_prev = std::chrono::steady_clock::now();
   double sim_accum_s = 0.0;
   constexpr double SIM_DT_S = static_cast<double>(TIME_STEP);
+  // optional auto-exit (env BB_RUN_SECONDS=N): close the app cleanly after N wall-clock seconds, so a
+  // captured [PERF] log self-terminates and A/B solver measurement runs are reproducible. 0 = no limit.
+  double run_limit_s = 0.0;
+  if (const char *e = std::getenv("BB_RUN_SECONDS")) run_limit_s = std::atof(e);
+  auto const run_start = std::chrono::steady_clock::now();
   while (!window.should_close())
   {
+    if (run_limit_s > 0.0 &&
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count() > run_limit_s)
+    {
+      std::cout << "[PERF] BB_RUN_SECONDS=" << run_limit_s << " elapsed -> exiting." << std::endl;
+      break;
+    }
     // Update the GUI
     gui_manager->update();
+
+    // reset request (key R): restart the sim from the initial scene at this frame boundary (prior
+    // GPU work is already synchronized here), and clear the catch-up accumulator so it doesn't burst.
+    if (status_manager->consume_reset()) {
+      scene_manager->reset();
+      sim_accum_s = 0.0;
+    }
 
     if(rigid_body_manager->is_dirty()) {
       rigid_body_manager->clean_dirty();
@@ -274,6 +295,22 @@ void RendererManager::render()
     // render the unchanged state and avoid the full-pipeline synchronize + readback)
     if(sim_stepped || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
+      // DEEP-POCKET TRACE: one CSV row per stepped frame with the deepest awake contact's
+      // {pen,lambda,k,vn,pair,stick} latched by entry_avbd_pocket_trace. Full-rate (every
+      // frame) so a 1-frame-period oscillation isn't aliased. Truncates at startup.
+      if (sim_stepped) {
+        static std::ofstream _pk("C:/Projects/beat-box/scratch/pocket_trace.csv", std::ios::trunc);
+        static bool _pk_hdr = false;
+        auto const &pk = rigid_body_manager->get_sim_config_reference();
+        if (!_pk_hdr) { _pk << "frame,pk_pen_mm,pk_lambda,pk_k,pk_vn,b1,b2,cc,stick,global_pen_mm,maxv_mm,omega_mrad,manifolds,sleeping\n"; _pk_hdr = true; }
+        _pk << (daxa_u64)pk.frame_count
+            << "," << pk.dbg_pk_pen << "," << pk.dbg_pk_lambda << "," << pk.dbg_pk_k << "," << pk.dbg_pk_vn
+            << "," << (pk.dbg_pk_body >> 16) << "," << (pk.dbg_pk_body & 0xFFFFu)
+            << "," << (pk.dbg_pk_stick >> 1) << "," << (pk.dbg_pk_stick & 1u)
+            << "," << pk.dbg_pen << "," << pk.dbg_maxv << "," << pk.dbg_pk_omega
+            << "," << pk.g_c_info.collision_count << "," << pk.sleeping_count << "\n";
+        _pk.flush();
+      }
       { static daxa_u64 _cf = 0; static auto _t0 = std::chrono::high_resolution_clock::now();
         // sample every 31 frames (odd) so the readback alternates between the two double-buffered
         // SimConfigs — each holds an independent dbg_ex latch; an even cadence would only ever show one.

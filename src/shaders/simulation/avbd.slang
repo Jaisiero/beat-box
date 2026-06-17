@@ -103,6 +103,15 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
     r->omega *= 50.0f / om_len;
   }
 
+  // terminal linear-speed clamp (anti-punch-through): cap impact energy so fast rain doesn't tunnel
+  // deep into the floor. Applied here so the inertial target + warm-start jump below use the clamped
+  // velocity. Resting/settling bodies are far under the cap, so they are untouched.
+  daxa_f32 v_len = length(r->velocity);
+  if (v_len > BB_MAX_LINEAR_SPEED)
+  {
+    r->velocity *= BB_MAX_LINEAR_SPEED / v_len;
+  }
+
   daxa_f32 grav = ((r->flags & RigidBodyFlag::GRAVITY) != RigidBodyFlag::NONE) ? sim_config->gravity : 0.0f;
 
   // inertial target (Eq 2): full gravity
@@ -587,6 +596,13 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
           daxa_f32 C = avbd_contact_C(m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, rr1, rr2);
           daxa_f32 lam = m->contacts[j].normal_impulse; // <= 0 (force convention)
           daxa_f32 k = m->contacts[j].mass_coefficient;
+          // DEEP-EXTRACTION: in the velocity-free post-stab (stab_alpha=0, C=full C0), a deeply
+          // buried contact whose lambda/k decayed to ~0 cannot dominate the block solve -> floor
+          // its k so it pushes out (no boil: positional, post-velocity). See shared.inl.
+          if (AVBD_PC.stab_alpha < 0.5f && C < -BB_AVBD_DEEP_EXTRACT_THRESH)
+          {
+            k = max(k, BB_AVBD_DEEP_EXTRACT_K);
+          }
           // clamped force magnitude (reference Sec 3.2): contacts only push -> f in (-inf, 0]
           daxa_f32 f = min(k * C + lam, 0.0f);
           // my jacobian (J1 = [-n, -(r1 x n)], J2 = [+n, +(r2 x n)])
@@ -604,20 +620,31 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
             [unroll]
             for (daxa_u32 b = 0u; b < 6u; ++b) { H[a][b] += k * J[a] * J[b]; }
           }
-          // friction rows: box-bounded tangent forces, bounds refreshed from the LATEST
-          // normal lambda (reference updates fmin/fmax in every computeConstraint call);
-          // arms come from the sticking anchors (== the clip point while slipping)
+          // friction rows: CONE-bounded tangent forces (reference avbd-demo3d manifold.cpp):
+          // clamp the JOINT 2D magnitude of (ft0,ft1) to mu*|lambda_n|, not each tangent to a
+          // box. Box clamping lets the friction force wander the square's corners as the two
+          // tangent directions saturate independently -> the contact torque jitters -> the
+          // user's "nervous rotational jitter". The cone keeps the friction force on a disc
+          // of radius mu*|F_n| -> rotationally stable, matching the official solver.
           daxa_f32 bound = mu * abs(lam);
+          daxa_f32vec3 td0 = m->tangent_vectors[0];
+          daxa_f32vec3 td1 = m->tangent_vectors[1];
+          daxa_f32vec3 ar1_0, ar2_0, ar1_1, ar2_1;
+          daxa_f32 C0t0, C0t1;
+          daxa_f32 Ct0 = avbd_dir_C(td0, m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, ar1_0, ar2_0, C0t0);
+          daxa_f32 Ct1 = avbd_dir_C(td1, m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, ar1_1, ar2_1, C0t1);
+          daxa_f32 ft0 = m->contacts[j].tangent_mass[0] * Ct0 + m->contacts[j].tangent_impulse[0];
+          daxa_f32 ft1 = m->contacts[j].tangent_mass[1] * Ct1 + m->contacts[j].tangent_impulse[1];
+          daxa_f32 fmag = sqrt(ft0 * ft0 + ft1 * ft1);
+          if (fmag > bound && fmag > 1.0e-9f) { daxa_f32 sc = bound / fmag; ft0 *= sc; ft1 *= sc; }
           [unroll]
           for (daxa_u32 t = 0u; t < 2u; ++t)
           {
-            daxa_f32vec3 td = m->tangent_vectors[t];
-            daxa_f32vec3 ar1, ar2;
-            daxa_f32 C0t;
-            daxa_f32 Ct = avbd_dir_C(td, m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, ar1, ar2, C0t);
-            daxa_f32 lam_t = m->contacts[j].tangent_impulse[t];
+            daxa_f32vec3 td = t == 0u ? td0 : td1;
+            daxa_f32vec3 ar1 = t == 0u ? ar1_0 : ar1_1;
+            daxa_f32vec3 ar2 = t == 0u ? ar2_0 : ar2_1;
+            daxa_f32 ft = t == 0u ? ft0 : ft1;
             daxa_f32 kt = m->contacts[j].tangent_mass[t];
-            daxa_f32 ft = clamp(kt * Ct + lam_t, -bound, bound);
             daxa_f32vec3 Jlt = i_is_1 ? -td : td;
             daxa_f32vec3 Jat = i_is_1 ? -cross(ar1, td) : cross(ar2, td);
             g[0] += ft * Jlt.x; g[1] += ft * Jlt.y; g[2] += ft * Jlt.z;
@@ -775,35 +802,260 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
     {
       m->contacts[j].mass_coefficient = min(k + BB_AVBD_BETA * abs(C), BB_AVBD_PENALTY_MAX);
     }
-    // friction rows: bounds from the ENTRY normal lambda (the reference recomputes
-    // fmin/fmax in computeConstraint BEFORE this dual pass touches the rows)
+    // friction rows: CONE projection (reference manifold.cpp updateDual). Compute both
+    // tangent force estimates, then clamp their JOINT 2D magnitude to mu*|lambda_n| (a
+    // disc), instead of clamping each tangent to a box independently. Within the cone =
+    // static friction (penalty ramps); on the cone = kinetic (force projected to the rim).
     daxa_f32 bound = mu * abs(lam);
-    bool stick_ok = true;
-    daxa_f32 drift2 = 0.0f;
-    [unroll]
-    for (daxa_u32 t = 0u; t < 2u; ++t)
+    daxa_f32vec3 td0 = m->tangent_vectors[0];
+    daxa_f32vec3 td1 = m->tangent_vectors[1];
+    daxa_f32vec3 ar1_0, ar2_0, ar1_1, ar2_1;
+    daxa_f32 C0t0, C0t1;
+    daxa_f32 Ct0 = avbd_dir_C(td0, m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, ar1_0, ar2_0, C0t0);
+    daxa_f32 Ct1 = avbd_dir_C(td1, m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, ar1_1, ar2_1, C0t1);
+    daxa_f32 ft0 = m->contacts[j].tangent_mass[0] * Ct0 + m->contacts[j].tangent_impulse[0];
+    daxa_f32 ft1 = m->contacts[j].tangent_mass[1] * Ct1 + m->contacts[j].tangent_impulse[1];
+    daxa_f32 fmag = sqrt(ft0 * ft0 + ft1 * ft1);
+    bool within_cone = fmag <= bound;
+    if (!within_cone && fmag > 1.0e-9f) { daxa_f32 sc = bound / fmag; ft0 *= sc; ft1 *= sc; }
+    m->contacts[j].tangent_impulse[0] = ft0;
+    m->contacts[j].tangent_impulse[1] = ft1;
+    if (within_cone) // static regime: grow both tangent penalties (reference Eq 16)
     {
-      daxa_f32vec3 td = m->tangent_vectors[t];
-      daxa_f32vec3 ar1, ar2;
-      daxa_f32 C0t;
-      daxa_f32 Ct = avbd_dir_C(td, m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, ar1, ar2, C0t);
-      daxa_f32 lam_t = m->contacts[j].tangent_impulse[t];
-      daxa_f32 kt = m->contacts[j].tangent_mass[t];
-      daxa_f32 new_lam_t = clamp(kt * Ct + lam_t, -bound, bound);
-      m->contacts[j].tangent_impulse[t] = new_lam_t;
-      if (new_lam_t > -bound && new_lam_t < bound)
-      {
-        m->contacts[j].tangent_mass[t] = min(kt + BB_AVBD_BETA * abs(Ct), BB_AVBD_PENALTY_MAX);
-      }
-      else
-      {
-        stick_ok = false; // friction saturated -> kinetic regime
-      }
-      drift2 += C0t * C0t;
+      m->contacts[j].tangent_mass[0] = min(m->contacts[j].tangent_mass[0] + BB_AVBD_BETA * abs(Ct0), BB_AVBD_PENALTY_MAX);
+      m->contacts[j].tangent_mass[1] = min(m->contacts[j].tangent_mass[1] + BB_AVBD_BETA * abs(Ct1), BB_AVBD_PENALTY_MAX);
     }
-    // stick determination (reference computeConstraint, re-evaluated every dual iteration;
-    // the last one decides whether the next step reuses the anchors)
-    m->contacts[j].stick = (stick_ok && drift2 < BB_AVBD_STICK_THRESH * BB_AVBD_STICK_THRESH) ? 1u : 0u;
+    daxa_f32 drift2 = C0t0 * C0t0 + C0t1 * C0t1;
+    // stick determination (reference: within the cone AND drift below the slop)
+    m->contacts[j].stick = (within_cone && drift2 < BB_AVBD_STICK_THRESH * BB_AVBD_STICK_THRESH) ? 1u : 0u;
+  }
+}
+
+// ----- inelastic impact treatment (e = 0), post-FIN velocity passes -----
+//
+// The penalty ramp couples contact stiffness with impact ELASTICITY: a rain cube punching
+// deep stores beta-scaled spring energy within the step and fires it back as separation
+// velocity (user-judged trade-off: beta=1e4 settles 10x calmer but interpenetrates too
+// visibly; beta=1e5 is stiff but bouncy). This pass keeps the stiff ramp and removes the
+// bounce AT THE SOURCE: any contact whose bodies arrived APPROACHING faster than
+// ~2*g*dt and ended the step SEPARATING gets the separation velocity removed (perfectly
+// inelastic impact). Resting contacts never pass the approach gate, so stacks, sliders
+// and sleeping are untouched.
+//
+// Two races-free passes: IMP_J (per manifold, READS only) computes the per-contact
+// impulse scalar into Contact.normal_mass (a PGS-only scratch field, dead under AVBD);
+// IMP_APPLY (per awake dynamic body) walks the body's own chain and applies its own
+// dv/dw share - both bodies compute the same j from the same inputs, no atomics needed.
+
+bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1, out daxa_u32 b2)
+{
+  b1 = m->obb1_index;
+  b2 = m->obb2_index;
+  return !(b1 >= sim_config->rigid_body_count || b2 >= sim_config->rigid_body_count || b1 == b2);
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_impact_j(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 m_idx = compute_i.x;
+  daxa_u32 coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m_idx >= coll)
+  {
+    return;
+  }
+  Manifold* m = &((Manifold*)(AVBD_PC.task_head.collisions))[m_idx];
+  daxa_u32 b1, b2;
+  if (!avbd_impact_pair_gates(sim_config, m, b1, b2))
+  {
+    return;
+  }
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  RigidBody* r1 = &rigid_bodies[b1];
+  RigidBody* r2 = &rigid_bodies[b2];
+  bool dyn1 = avbd_is_dynamic(r1) && (r1->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE;
+  bool dyn2 = avbd_is_dynamic(r2) && (r2->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE;
+  daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
+  if (!dyn1 && !dyn2)
+  {
+    for (daxa_u32 j = 0u; j < cc; ++j) { m->contacts[j].normal_mass = 0.0f; }
+    return;
+  }
+
+  daxa_f32vec3 n = m->normal; // points from body1 toward body2 (SAT convention)
+  daxa_f32mat3x3 inv_i1 = r1->get_transformed_inertia();
+  daxa_f32mat3x3 inv_i2 = r2->get_transformed_inertia();
+  daxa_f32 inv_m1 = dyn1 ? r1->inv_mass : 0.0f; // sleeping/static side acts as an anchor
+  daxa_f32 inv_m2 = dyn2 ? r2->inv_mass : 0.0f;
+
+  for (daxa_u32 j = 0u; j < cc; ++j)
+  {
+    m->contacts[j].normal_mass = 0.0f; // scratch must be defined for IMP_APPLY either way
+    daxa_f32vec3 p = m->contacts[j].position;
+    daxa_f32vec3 ra = p - r1->position;
+    daxa_f32vec3 rb = p - r2->position;
+
+    // entry (pre-step) approach velocity: prev_velocity holds the step-entry linear
+    // velocity (saved by FIN); omegas approximate entry values (no prev_omega stored)
+    daxa_f32vec3 vrel_pre = (r2->prev_velocity + cross(r2->omega, rb)) - (r1->prev_velocity + cross(r1->omega, ra));
+    daxa_f32 vn_pre = dot(n, vrel_pre);
+    if (vn_pre > -2.0f * 9.8f * sim_config->dt) // not a real approach: resting/sliding contact
+    {
+      continue;
+    }
+    // post-step (reconstructed) relative normal velocity
+    daxa_f32vec3 vrel = (r2->velocity + cross(r2->omega, rb)) - (r1->velocity + cross(r1->omega, ra));
+    daxa_f32 vn = dot(n, vrel);
+    if (vn <= 1.0e-4f) // not rebounding
+    {
+      continue;
+    }
+    // effective mass along n and the impulse that zeroes the rebound (e = 0)
+    daxa_f32vec3 t1 = dyn1 ? cross(mul(inv_i1, cross(ra, n)), ra) : daxa_f32vec3(0.0f);
+    daxa_f32vec3 t2 = dyn2 ? cross(mul(inv_i2, cross(rb, n)), rb) : daxa_f32vec3(0.0f);
+    daxa_f32 K = inv_m1 + inv_m2 + dot(n, t1 + t2);
+    if (K <= 1.0e-9f)
+    {
+      continue;
+    }
+    m->contacts[j].normal_mass = -vn / K; // attractive: removes exactly the rebound
+  }
+}
+
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_impact_apply(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  RigidBody* r = &rigid_bodies[i];
+  if (!avbd_is_dynamic(r) || (r->flags & RigidBodyFlag::SLEEPING) != RigidBodyFlag::NONE)
+  {
+    return;
+  }
+  ManifoldNode* nodes = (ManifoldNode*)(AVBD_PC.task_head.manifold_nodes);
+  CollisionEntry* cmap = (CollisionEntry*)(AVBD_PC.task_head.collision_map);
+  Manifold* colls = (Manifold*)(AVBD_PC.task_head.collisions);
+  daxa_u32 node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+  daxa_u32 coll_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+
+  daxa_f32mat3x3 inv_i = r->get_transformed_inertia();
+  daxa_f32 inv_m = r->inv_mass;
+  daxa_f32vec3 dv = daxa_f32vec3(0.0f);
+  daxa_f32vec3 dw = daxa_f32vec3(0.0f);
+
+  daxa_u32 current = r->manifold_node_index;
+  daxa_u32 steps = 0u;
+  while (current != MAX_U32 && current < node_count && steps < node_count)
+  {
+    daxa_u32 packed = avbd_node_to_packed(current, node_count, coll_count, nodes, cmap);
+    if (packed != MAX_U32)
+    {
+      Manifold* m = &colls[packed];
+      daxa_u32 b1, b2;
+      if (avbd_impact_pair_gates(sim_config, m, b1, b2) && (b1 == i || b2 == i))
+      {
+        daxa_f32 side = (b2 == i) ? 1.0f : -1.0f; // impulse +p*n on body2, -p*n on body1
+        daxa_f32vec3 n = m->normal;
+        daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
+        for (daxa_u32 j = 0u; j < cc; ++j)
+        {
+          daxa_f32 p_imp = m->contacts[j].normal_mass;
+          if (p_imp == 0.0f)
+          {
+            continue;
+          }
+          daxa_f32vec3 arm = m->contacts[j].position - r->position;
+          dv += n * (side * p_imp * inv_m);
+          dw += mul(inv_i, cross(arm, n)) * (side * p_imp);
+        }
+      }
+    }
+    daxa_i32 nx = nodes[current].next;
+    current = nx < 0 ? MAX_U32 : daxa_u32(nx);
+    ++steps;
+  }
+  r->velocity += dv;
+  r->omega += dw;
+}
+
+// ----- deep-pocket oscillator trace (diagnostic, per-frame CSV via SimConfig latch) -----
+//
+// Runs ONCE after the whole solve (post-FIN + impact + post-stab). For the deepest awake
+// contact this frame it latches {pen, lambda, k, vn, pair, stick} into SimConfig, dumped
+// per-frame to a CSV on the CPU. The lambda is the FINAL value (after all dual iterations),
+// so it is NOT phase-confounded like the [PERF] pk= probe that sampled the fastest body
+// mid-flight. vn is recomputed from the reconstructed velocities (>0 = separating). Goal:
+// see whether the tail oscillator's deep contact is loaded (lambda<<0) or unloaded
+// (lambda~0) and whether vn reverses sign every frame (the bounce pump).
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_pocket_trace(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 m_idx = compute_i.x;
+  daxa_u32 coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  if (m_idx >= coll)
+  {
+    return;
+  }
+  Manifold* m = &((Manifold*)(AVBD_PC.task_head.collisions))[m_idx];
+  daxa_u32 b1 = m->obb1_index;
+  daxa_u32 b2 = m->obb2_index;
+  if (b1 >= sim_config->rigid_body_count || b2 >= sim_config->rigid_body_count || b1 == b2)
+  {
+    return;
+  }
+  RigidBody* rigid_bodies = (RigidBody*)(AVBD_PC.task_head.rigid_bodies);
+  RigidBody* r1 = &rigid_bodies[b1];
+  RigidBody* r2 = &rigid_bodies[b2];
+  bool dyn1 = avbd_is_dynamic(r1) && (r1->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE;
+  bool dyn2 = avbd_is_dynamic(r2) && (r2->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE;
+  if (!dyn1 && !dyn2)
+  {
+    return; // only awake pairs; the oscillator is awake by definition
+  }
+  daxa_f32vec3 n = m->normal;
+  // peak angular rate over contacting awake bodies (the user's symptom is ROTATIONAL jitter):
+  // captured globally, not just at the deepest contact, since the rocking body may be shallow
+  daxa_u32 w1 = dyn1 ? daxa_u32(length(r1->omega) * 1000.0f) : 0u;
+  daxa_u32 w2 = dyn2 ? daxa_u32(length(r2->omega) * 1000.0f) : 0u;
+  daxa_u32 prev_w;
+  InterlockedMax(sim_config->dbg_pk_omega, max(w1, w2), prev_w);
+  daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
+  for (daxa_u32 j = 0u; j < cc; ++j)
+  {
+    daxa_f32 pen = m->contacts[j].penetration; // <0 when penetrating (SAT convention)
+    daxa_u32 pen_mm = daxa_u32(clamp(-pen * 1000.0f, 0.0f, 1.0e9f));
+    daxa_u32 prev;
+    InterlockedMax(sim_config->dbg_pk_pen, pen_mm, prev);
+    if (pen_mm > prev) // this contact is (currently) the deepest; latch its full state
+    {
+      daxa_f32vec3 p = m->contacts[j].position;
+      daxa_f32vec3 ra = p - r1->position;
+      daxa_f32vec3 rb = p - r2->position;
+      daxa_f32vec3 vrel = (r2->velocity + cross(r2->omega, rb)) - (r1->velocity + cross(r1->omega, ra));
+      sim_config->dbg_pk_vn = dot(n, vrel);
+      sim_config->dbg_pk_lambda = m->contacts[j].normal_impulse;
+      sim_config->dbg_pk_k = m->contacts[j].mass_coefficient;
+      sim_config->dbg_pk_body = (b1 << 16) | (b2 & 0xFFFFu);
+      sim_config->dbg_pk_stick = (cc << 1) | (m->contacts[j].stick & 1u);
+    }
   }
 }
 

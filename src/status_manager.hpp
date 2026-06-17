@@ -18,6 +18,8 @@ static std::string sim_solver_type_to_string(SimSolverType type)
     return "PGS_SOFT";
   case SimSolverType::AVBD:
     return "AVBD";
+  case SimSolverType::TGS_SOFT:
+    return "TGS_SOFT";
   default:
     return "UNKNOWN";
   }
@@ -129,6 +131,12 @@ struct StatusManager
   {
     return simulating;
   }
+
+  // reset request (key R): set from the input callback, consumed at the top of the render loop
+  // (a safe frame boundary, not mid-GPU-work) where the scene manager is reachable.
+  void request_reset() { reset_requested = true; }
+  bool consume_reset() { bool r = reset_requested; reset_requested = false; return r; }
+  void stop_simulating() { simulating = false; } // force-pause (used by reset)
 
   void switch_simulating()
   {
@@ -399,8 +407,9 @@ private:
   bool warm_starting = true;
   // flag for graph-color contact debug tint
   bool graph_color_debug = false;
-  // flag for island sleeping
-  bool sleeping_enabled = true;
+  // flag for island sleeping (default OFF: no trampas — see rigid_body_manager.hpp; press O for A/B)
+  bool sleeping_enabled = false;
+  bool reset_requested = false; // key R: restart the sim from the initial scene state
   // flag for accumulation
   bool accumulation = false;
   // flag for showing islands

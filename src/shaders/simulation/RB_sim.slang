@@ -544,6 +544,16 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       {
         return;
       }
+      // TGS sub-step gating: tgs_phase==1 instances run ONLY for TGS (per sub-step in the loop);
+      // tgs_phase==0 instances (the once-per-frame advect) skip TGS so gravity isn't double-applied.
+      if (RB_sim.tgs_phase == 1)
+      {
+        if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
+      }
+      else if (sim_config->solver_type == SimSolverType::TGS_SOFT)
+      {
+        return;
+      }
 
       if (sim_config->has_flag(SimFlag::ADVECTION))
       {
@@ -1313,15 +1323,27 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
       {
         return;
       }
+      // TGS sub-step gating (mirror of advect): tgs_phase==1 = the per-sub-step integrate for TGS;
+      // tgs_phase==0 = the once-per-frame integrate for the PGS family (skips TGS).
+      if (RB_integrate.tgs_phase == 1)
+      {
+        if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
+      }
+      else if (sim_config->solver_type == SimSolverType::TGS_SOFT)
+      {
+        return;
+      }
 
       // DIAG probe stage 2 (after the CS sweep, before positions move): huge |v| first seen here
       // means warm-start/CS injected it this frame.
       bb_dbg_velocity_probe(sim_config, 2u, index, r->velocity, r->position.y);
 
-      // Integrate positions
+      // Integrate positions (TGS uses the sub-step h = dt/N; others the full dt)
       if (sim_config->has_flag(SimFlag::ADVECTION))
       {
-        r->integrate_positions(sim_config->dt);
+        daxa_f32 h = (sim_config->solver_type == SimSolverType::TGS_SOFT)
+                     ? sim_config->dt / daxa_f32(BB_TGS_SUBSTEPS) : sim_config->dt;
+        r->integrate_positions(h);
       }
     }
 
@@ -1437,6 +1459,18 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
                              manifold->contacts[ci].position - manifold->anchor_a,
                              manifold->contacts[ci].penetration, manifold->normal.y);
   }
+  // TGS_SOFT sub-step gating: tgs_phase==1 prepares the TGS contacts (soft coeffs with sub-step h
+  // + local anchors); tgs_phase==0 (the normal PGS-family pre instance) skips TGS.
+  if (GCS.tgs_phase == 1)
+  {
+    if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
+    daxa::f32 h = sim_config->dt / daxa_f32(BB_TGS_SUBSTEPS);
+    daxa::f32 inv_h = h > 0.0f ? 1.0f / h : 0.0f;
+    daxa::f32 tgs_hertz = min(MIN_CONTACT_HERTZ, inv_h * 0.3333333333333333f);
+    TGS_SOFT.pre_step(manifold, r1, r2, accum_impulse, friction, h, tgs_hertz);
+    return;
+  }
+  if (sim_config->solver_type == SimSolverType::TGS_SOFT) return; // TGS runs its own sub-step loop
   if (sim_config->solver_type == SimSolverType::PGS_SOFT)
     PGS_SOFT.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
 }
@@ -1459,6 +1493,14 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  if (GCS.tgs_phase == 1)
+  {
+    if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
+    daxa::f32 inv_h = daxa_f32(BB_TGS_SUBSTEPS) * inv_dt; // 1 / (dt/N)
+    TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, inv_h);
+    return;
+  }
+  if (sim_config->solver_type == SimSolverType::TGS_SOFT) return;
   if (sim_config->solver_type == SimSolverType::PGS_SOFT)
     PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, inv_dt);
 }
@@ -1485,6 +1527,14 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   for (daxa_i32 ci = 0; ci < manifold->contact_count; ++ci)
     bb_dbg_impulse_probe(sim_config, 5u, manifold->obb1_index, manifold->obb2_index,
                          manifold->contacts[ci].normal_impulse, manifold->contacts[ci].penetration, manifold->normal.y);
+  if (GCS.tgs_phase == 1)
+  {
+    if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
+    daxa::f32 inv_h = daxa_f32(BB_TGS_SUBSTEPS) * inv_dt;
+    TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_h); // relax: no bias
+    return;
+  }
+  if (sim_config->solver_type == SimSolverType::TGS_SOFT) return;
   if (sim_config->solver_type == SimSolverType::PGS_SOFT)
     PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
 }

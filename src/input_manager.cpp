@@ -138,6 +138,19 @@ void InputManager::on_key(i32 key, i32 action)
       status_mngr->set_solver(SimSolverType::AVBD);
     }
     break;
+  case GLFW_KEY_4:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->set_solver(SimSolverType::TGS_SOFT);
+    }
+    break;
+  case GLFW_KEY_R:
+    if (action == GLFW_PRESS)
+    {
+      status_mngr->request_reset(); // restart the sim from the initial scene (consumed in the render loop)
+      status_mngr->reset_accumulation_count();
+    }
+    break;
   case GLFW_KEY_7:
     if (action == GLFW_PRESS)
     {
