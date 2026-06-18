@@ -90,6 +90,9 @@ bool gc_is_static(RigidBody* r)
     sim_config->gc_sat_nanflags = 0u;
     sim_config->gc_sat_pos_y = 0.0f;
     sim_config->dbg_maxv = 0u;   // per-frame stats reset; the dbg_ex_* latch is intentionally NOT reset
+    sim_config->dbg_min_y = MAX_U32;   // lowest dynamic-body y (written later in integrate, after this reset)
+    // dbg_pen/dbg_deep100/dbg_deep200 are reset in entry_narrow_phase_dispatcher (BEFORE the narrow
+    // phase writes them); resetting them here (AFTER NP) would wipe them to 0 every frame.
     sim_config->dbg_id_sum = 0u;
     sim_config->dbg_pk_pen = 0u; // deep-pocket trace latch: reset so it tracks THIS frame's deepest
     sim_config->dbg_pk_body = 0u;

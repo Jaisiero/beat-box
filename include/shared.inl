@@ -642,6 +642,9 @@ struct SimConfig
   daxa_f32 dbg_pk_vn;             // its normal relative velocity post-FIN+impact (m/s; >0 separating)
   daxa_u32 dbg_pk_stick;          // (contact_count<<1) | stick
   daxa_u32 dbg_pk_omega;          // per-frame max |omega| over contacting awake bodies, integer mrad/s
+  daxa_u32 dbg_min_y;             // per-frame LOWEST dynamic-body y, encoded (y+100)*1000 (reset MAX_U32); floor top=0, cube rests at y=0.5
+  daxa_u32 dbg_deep100;           // per-frame count of contacts penetrating > 100 mm
+  daxa_u32 dbg_deep200;           // per-frame count of contacts penetrating > 200 mm
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
@@ -731,6 +734,9 @@ void bb_dbg_velocity_probe(SimConfig* sc, daxa_u32 stage, daxa_u32 body, daxa_f3
   daxa_u32 prev;
   // mm/s so resting JITTER is visible (integer m/s truncated everything below 1 m/s)
   InterlockedMax(sc->dbg_maxv, daxa_u32(min(sqrt(v2) * 1000.0f, 1.0e9f)), prev);
+  // lowest dynamic-body y (encoded (y+100)*1000 so InterlockedMin works on a positive uint):
+  // tells us if the pile bottom sinks toward/under the floor (rest y=0.5, floor top y=0).
+  InterlockedMin(sc->dbg_min_y, daxa_u32(clamp((y + 100.0f) * 1000.0f, 0.0f, 4.2e9f)), prev);
   if (v2 > BB_DBG_EXPLODE_VEL2)
   {
     InterlockedCompareExchange(sc->dbg_ex_stage, 0u, stage, prev);

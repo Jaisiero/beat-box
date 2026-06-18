@@ -1695,6 +1695,11 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
         {
           daxa_u32 prev_pen;
           InterlockedMax(sim_config->dbg_pen, daxa_u32(min(-cpen * 1000.0f, 1.0e9f)), prev_pen);
+          // count HOW MANY contacts are deep (vs dbg_pen = single saturated max): tells a whole
+          // collapsed layer apart from one wedged outlier among the 432 cubes.
+          daxa_u32 prev_d;
+          if (-cpen > 0.1f) InterlockedAdd(sim_config->dbg_deep100, 1u, prev_d);
+          if (-cpen > 0.2f) InterlockedAdd(sim_config->dbg_deep200, 1u, prev_d);
         }
       }
       if (fresh > 0u)

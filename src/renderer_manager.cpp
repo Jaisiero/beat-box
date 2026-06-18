@@ -352,6 +352,8 @@ void RendererManager::render()
                     << " A:" << dm_walk_str(sc.dbg_dm_walk_a) << " B:" << dm_walk_str(sc.dbg_dm_walk_b) << "]"
                     << " np=" << sc.dbg_np_processed << "/" << sc.broad_phase_collision_count
                     << " pen=" << sc.dbg_pen
+                    << " miny=" << (sc.dbg_min_y == 0xFFFFFFFFu ? 0.0 : (double)sc.dbg_min_y / 1000.0 - 100.0)
+                    << " deep100=" << sc.dbg_deep100 << " deep200=" << sc.dbg_deep200
                     << " idsum=" << (daxa_i64)sc.dbg_id_sum - (daxa_i64)((daxa_u64)sc.rigid_body_count * (sc.rigid_body_count - 1) / 2)
                     << " EX[s=" << sc.dbg_ex_stage << " b=" << sc.dbg_ex_body << " f=" << sc.dbg_ex_frame
                     << " v=" << sc.dbg_ex_vel << " y=" << sc.dbg_ex_y << " vy=" << sc.dbg_ex_vy << "]"

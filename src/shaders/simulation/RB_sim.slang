@@ -448,6 +448,12 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   SimConfig* sim_config =
       (SimConfig*)(NPD.task_head.sim_config);
 
+  // per-frame reset of narrow-phase-written diagnostics, here (single-thread, BEFORE the NP that
+  // writes them) instead of in coloring (which runs AFTER NP and would wipe them every frame).
+  sim_config->dbg_pen = 0u;
+  sim_config->dbg_deep100 = 0u;
+  sim_config->dbg_deep200 = 0u;
+
   DispatchBuffer* dispatch_buffer =
       (DispatchBuffer*)(NPD.task_head.dispatch_buffer);
 
