@@ -736,7 +736,26 @@ void bb_dbg_velocity_probe(SimConfig* sc, daxa_u32 stage, daxa_u32 body, daxa_f3
   InterlockedMax(sc->dbg_maxv, daxa_u32(min(sqrt(v2) * 1000.0f, 1.0e9f)), prev);
   // lowest dynamic-body y (encoded (y+100)*1000 so InterlockedMin works on a positive uint):
   // tells us if the pile bottom sinks toward/under the floor (rest y=0.5, floor top y=0).
-  InterlockedMin(sc->dbg_min_y, daxa_u32(clamp((y + 100.0f) * 1000.0f, 0.0f, 4.2e9f)), prev);
+  daxa_u32 enc = daxa_u32(clamp((y + 100.0f) * 1000.0f, 0.0f, 4.2e9f));
+  InterlockedMin(sc->dbg_min_y, enc, prev);
+  // DIAG stage 9: the EXACT condition that makes miny read -100 is enc==0 (an INTEGER test, immune
+  // to fast-math / no-NaN folding that kills isnan()). enc==0 means y<=-100 (real escape) OR y is
+  // NaN/Inf (uint(NaN)=0). Record asuint(y)'s exponent byte to tell them apart: 255 => NaN/Inf,
+  // else a finite escape. dbg_ex_vel = exponent byte; dbg_ex_vy = mantissa (nonzero => NaN, 0 => Inf).
+  if (enc == 0u)
+  {
+    daxa_u32 prevn;
+    InterlockedCompareExchange(sc->dbg_ex_stage, 0u, 9u, prevn);
+    if (prevn == 0u)
+    {
+      daxa_u32 ybits = asuint(y);
+      sc->dbg_ex_body = body;
+      sc->dbg_ex_frame = daxa_u32(sc->frame_count);
+      sc->dbg_ex_vel = daxa_f32((ybits >> 23u) & 0xFFu);
+      sc->dbg_ex_y = y;
+      sc->dbg_ex_vy = daxa_f32(ybits & 0x007FFFFFu);
+    }
+  }
   if (v2 > BB_DBG_EXPLODE_VEL2)
   {
     InterlockedCompareExchange(sc->dbg_ex_stage, 0u, stage, prev);

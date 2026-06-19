@@ -79,6 +79,12 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   if (i == 0u)
   {
     sim_config->avbd_stick_count = 0u; // re-accumulated by the warm-start dispatch
+    // AVBD runs a SEPARATE task graph that skips entry_graph_color_reset (where the PGS/TGS path
+    // resets these per-frame diagnostics). Without this, dbg_min_y stays at its init value 0 and
+    // miny decodes to a PHANTOM -100 every AVBD frame (not a real floor ejection); dbg_maxv would
+    // become a monotonic run-max instead of per-frame. Reset them here, symmetric to coloring.slang.
+    sim_config->dbg_maxv = 0u;
+    sim_config->dbg_min_y = MAX_U32;
   }
   if (i >= sim_config->rigid_body_count)
   {
