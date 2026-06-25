@@ -92,6 +92,14 @@ bool rb_is_awake_dynamic(RigidBody* r)
   
   var r = &rigid_bodies[index];
 
+  // Reset the manifold-chain head at the START of every step (first per-body pass). narrow_phase
+  // rebuilds the chain; clearing it here makes the head fresh-by-construction so a step resumed
+  // after a pause can't prepend new nodes onto a stale chain tail left in whatever buffer parity
+  // the resume lands on (the residual resume kick the coherent pause flush alone doesn't remove).
+  // Idempotent in normal stepping (the end-of-step update pass already leaves it MAX_U32). The
+  // warm-start reads the PREVIOUS body's head, so clearing the current head does not affect it.
+  r->manifold_node_index = MAX_U32;
+
   // Normalize the world position into the unit cube [0,1] expected by morton3D.
   // Without this, raw world coordinates (floor at y=-50, cubes spread over tens of
   // units) saturate to degenerate values -> duplicate Morton codes -> a malformed

@@ -155,7 +155,12 @@ struct StatusManager
       // refreshes every buffer per step, so the flush is obsolete on resume.
       update_sim_buffer = false;
       double_buffering_counter = 0;
-      rigid_body_manager->skip_warm_starting_once();
+      // NOTE: the old skip_warm_starting_once() band-aid was removed here. It dodged the
+      // garbage-inheritance read on resume by skipping warm-start one step, but an all-fresh
+      // frame drops all contact lambda on a settled pile -> momentary support loss -> the pile
+      // sinks and the next step depenetrates explosively. The pause flush now keeps the three
+      // contact warm-start buffers coherent (see record_update_AS_buffers_tasks), so warm-start
+      // reads correct lambda/anchors on resume and must run normally.
     }
     else
     {
