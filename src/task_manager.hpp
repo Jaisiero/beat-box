@@ -86,6 +86,16 @@ FORCE_INLINE std::filesystem::path debug_path{
 };
 #endif
 
+// Persistent SPIR-V cache. Slang->SPIR-V compilation of the ~138 compute entry points + the
+// ray-tracing pipeline (~8k LOC of shader + shared.inl included everywhere) is the dominant
+// cold-start cost (~100s, single-threaded). Daxa keys the cache on source+options, so a launch
+// that doesn't touch any .slang reuses the cached SPIR-V and starts in seconds. Editing any
+// shader (or shared.inl, which every shader includes) invalidates the affected entries -> they
+// recompile. Lives under build/ (gitignored).
+FORCE_INLINE std::filesystem::path spirv_cache_path{
+    "spirv_cache",
+};
+
 struct TaskGraph
 {
   daxa::TaskGraph task_graph;
@@ -195,6 +205,7 @@ struct TaskManager
 #if defined(_DEBUG)
         .write_out_spirv = debug_path,
 #endif
+        .spirv_cache_folder = spirv_cache_path,
         .default_language = daxa::ShaderLanguage::SLANG,
 #if defined(_DEBUG)
         .default_enable_debug_info = true,
