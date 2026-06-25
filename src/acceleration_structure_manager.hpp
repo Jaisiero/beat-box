@@ -48,6 +48,18 @@ struct AccelerationStructureManager
   void build_AS();
   bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives);
   void update_TLAS();
+  // Zero the incremental upload counters so the next build_accel_structs() re-fills from offset 0
+  // (used by scene reset/reload). Without this the counts accumulate and the 2nd reload exceeds the
+  // max rigid-body count. Does NOT destroy buffers/AS.
+  void reset_for_reload()
+  {
+    current_rigid_body_count = 0;
+    previous_rigid_body_count = 0;
+    current_primitive_count = 0;
+    primitive_scratch_offset = 0;
+    previous_primitive_count = 0;
+    proc_blas_buffer_offset = 0;
+  }
   bool update_TLAS_resources(daxa::BufferId dispatch_buffer);
   void update_AS_buffers();
 

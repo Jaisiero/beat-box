@@ -277,3 +277,136 @@ struct PGS_SOFT {
     }
   }
 };
+
+// TGS_SOFT (Box2D v3 / solver2d): the soft-constraint solve of PGS_SOFT, but driven by sub-stepping.
+// The defining difference is that the contact SEPARATION is re-derived from the body poses every
+// sub-step (the "temporal" / TGS part) instead of read from a static narrow-phase penetration. To
+// do that each contact stores its point in each body's LOCAL frame at prepare time (anchor_a/b) plus
+// the base separation; the live separation each sub-step is base_sep + dot(n, worldB - worldA). The
+// soft coefficients are computed with the SUB-step h. Reuses Contact's existing impulse/coeff fields.
+struct TGS_SOFT {
+  // local-frame contact anchor on each body (recomputed at prepare from the current pose)
+  static daxa_f32vec3 anchor_local(RigidBody* body, daxa_f32vec3 world_point) {
+    return body->rotate_vector_inverse(world_point - body->position);
+  }
+
+  static void pre_step(Manifold* manifold, RigidBody* body_a, RigidBody* body_b,
+                       daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_f32 h, daxa_f32 hertz) {
+    for (daxa_u32 i = 0u; i < manifold->contact_count; i++) {
+      // store the contact point in each body's LOCAL frame (so the separation tracks the pose) and
+      // its current world arm for the mass terms (Box2D uses the prepare arms across the sub-steps)
+      daxa_f32vec3 cp = manifold->contacts[i].position;
+      manifold->contacts[i].anchor_a = anchor_local(body_a, cp);
+      manifold->contacts[i].anchor_b = anchor_local(body_b, cp);
+      daxa_f32vec3 r1 = cp - body_a->position;
+      daxa_f32vec3 r2 = cp - body_b->position;
+
+      daxa_f32vec3 rn1 = cross(r1, manifold->normal);
+      daxa_f32vec3 rn2 = cross(r2, manifold->normal);
+      daxa_f32 k_normal = body_a->inv_mass + body_b->inv_mass;
+      k_normal += dot(rn1, mul(body_a->get_transformed_inertia(), rn1));
+      k_normal += dot(rn2, mul(body_b->get_transformed_inertia(), rn2));
+      manifold->contacts[i].normal_mass = k_normal == 0.0 ? 0.0f : 1.0f / k_normal;
+
+      for (daxa_u32 j = 0u; j < 2; j++) {
+        daxa_f32vec3 rt1 = cross(r1, manifold->tangent_vectors[j]);
+        daxa_f32vec3 rt2 = cross(r2, manifold->tangent_vectors[j]);
+        daxa_f32 k_tangent = body_a->inv_mass + body_b->inv_mass;
+        k_tangent += dot(rt1, mul(body_a->get_transformed_inertia(), rt1));
+        k_tangent += dot(rt2, mul(body_b->get_transformed_inertia(), rt2));
+        manifold->contacts[i].tangent_mass[j] = k_tangent == 0.0 ? 0.0 : 1.0f / k_tangent;
+      }
+
+      // soft contact coefficients (solver2d TGS Soft) computed with the SUB-step h
+      daxa_f32 contact_hertz = (body_a->inv_mass == 0.0f || body_b->inv_mass == 0.0f) ? 2.0f * hertz : hertz;
+      const daxa_f32 zeta = 10.0f;
+      const daxa_f32 omega = 2.0f * _PI * contact_hertz;
+      const daxa_f32 a1 = 2.0f * zeta + h * omega;
+      const daxa_f32 a2 = h * omega * a1;
+      const daxa_f32 a3 = 1.0f / (1.0f + a2);
+      manifold->contacts[i].bias_factor = omega / a1;
+      manifold->contacts[i].mass_coefficient = a2 * a3;
+      manifold->contacts[i].impulse_coefficient = a3;
+
+      // warm start: apply the accumulated impulse from last frame
+      if (accumulate_impulses) {
+        daxa_f32vec3 P = manifold->normal * manifold->contacts[i].normal_impulse;
+        if (enable_friction) {
+          for (daxa_u32 j = 0u; j < 2; j++) {
+            P += manifold->tangent_vectors[j] * manifold->contacts[i].tangent_impulse[j];
+          }
+        }
+        body_a->velocity -= P * body_a->inv_mass;
+        body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
+        body_b->velocity += P * body_b->inv_mass;
+        body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
+      }
+    }
+  }
+
+  static void solve(Manifold* manifold, RigidBody* body_a, RigidBody* body_b,
+                    daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_b32 use_bias, daxa_f32 inv_h) {
+    daxa_f32 friction = sqrt(body_a->friction * body_b->friction);
+    daxa_f32vec3 n = manifold->normal;
+    for (daxa_u32 c = 0u; c < manifold->contact_count; ++c) {
+      // LIVE arms + separation from the current pose (the TGS "temporal" tracking)
+      daxa_f32vec3 r1 = body_a->rotate_vector(manifold->contacts[c].anchor_a);
+      daxa_f32vec3 r2 = body_b->rotate_vector(manifold->contacts[c].anchor_b);
+      daxa_f32vec3 world_a = body_a->position + r1;
+      daxa_f32vec3 world_b = body_b->position + r2;
+      // base separation = the narrow-phase penetration (unchanged by the solver); >0 gap, <0 overlap
+      daxa_f32 separation = manifold->contacts[c].penetration + dot(n, world_b - world_a);
+
+      // friction first (Coulomb box on the accumulated tangent impulse, bounded by mu*normal)
+      if (enable_friction) {
+        for (daxa_u32 j = 0u; j < 2u; ++j) {
+          daxa_f32vec3 tdir = manifold->tangent_vectors[j];
+          daxa_f32vec3 dv = body_b->velocity + cross(body_b->omega, r2) - body_a->velocity - cross(body_a->omega, r1);
+          daxa_f32 vt = dot(dv, tdir);
+          daxa_f32 timp = manifold->contacts[c].tangent_mass[j] * -vt;
+          daxa_f32 max_f = friction * manifold->contacts[c].normal_impulse;
+          if (accumulate_impulses) {
+            daxa_f32 old = manifold->contacts[c].tangent_impulse[j];
+            manifold->contacts[c].tangent_impulse[j] = clamp(old + timp, -max_f, max_f);
+            timp = manifold->contacts[c].tangent_impulse[j] - old;
+          } else {
+            timp = clamp(timp, -max_f, max_f);
+          }
+          daxa_f32vec3 P = tdir * timp;
+          body_a->velocity -= P * body_a->inv_mass;
+          body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
+          body_b->velocity += P * body_b->inv_mass;
+          body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
+        }
+      }
+
+      // normal: soft constraint with the LIVE separation
+      daxa_f32vec3 dvn = body_b->velocity + cross(body_b->omega, r2) - body_a->velocity - cross(body_a->omega, r1);
+      daxa_f32 vn = dot(dvn, n);
+      daxa_f32 bias = 0.0f;
+      daxa_f32 mass_scale = 1.0f;
+      daxa_f32 impulse_scale = 0.0f;
+      if (separation > 0.0f) {
+        bias = separation * inv_h; // speculative: stop bodies before they close the gap
+      } else if (use_bias) {
+        bias = max(manifold->contacts[c].bias_factor * separation, -4.0f);
+        mass_scale = manifold->contacts[c].mass_coefficient;
+        impulse_scale = manifold->contacts[c].impulse_coefficient;
+      }
+      daxa_f32 impulse = -manifold->contacts[c].normal_mass * mass_scale * (vn + bias)
+                         - impulse_scale * manifold->contacts[c].normal_impulse;
+      if (accumulate_impulses) {
+        daxa_f32 old = manifold->contacts[c].normal_impulse;
+        manifold->contacts[c].normal_impulse = max(old + impulse, 0.0f);
+        impulse = manifold->contacts[c].normal_impulse - old;
+      } else {
+        impulse = max(impulse, 0.0f);
+      }
+      daxa_f32vec3 Pn = n * impulse;
+      body_a->velocity -= Pn * body_a->inv_mass;
+      body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, Pn));
+      body_b->velocity += Pn * body_b->inv_mass;
+      body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, Pn));
+    }
+  }
+};

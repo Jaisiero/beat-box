@@ -1,3 +1,6 @@
+#define _CRT_SECURE_NO_WARNINGS // std::getenv (headless measurement hooks below)
+#include <cstdlib>
+#include <cstdio>
 
 #include "defines.hpp"
 #include "window_manager.hpp"
@@ -21,6 +24,7 @@ using namespace beatbox;
 
 int main()
 {
+  setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered so captured [PERF]/[AUTOSTART] flush in real time
   try {
     // Input manager
     InputManager input_manager;
@@ -76,6 +80,17 @@ int main()
     }
 
     std::cout << "SUCCESS: Application initialized successfully! Entering main graphics and simulation loop." << std::endl;
+
+    // Headless measurement hooks: BB_SOLVER=0/1/2 -> PGS/PGS_SOFT/AVBD, BB_AUTOSTART set -> start the sim
+    // (lets the app run + emit [PERF] without keyboard input, for self-measurement of sim= ms).
+    if (const char* solver_env = std::getenv("BB_SOLVER")) {
+      status_manager->set_solver(static_cast<SimSolverType>(std::atoi(solver_env)));
+      std::cout << "[AUTOSTART] solver=" << std::atoi(solver_env) << std::endl;
+    }
+    if (std::getenv("BB_AUTOSTART")) {
+      status_manager->switch_simulating();
+      std::cout << "[AUTOSTART] simulating ON" << std::endl;
+    }
 
     // Main loop
     renderer->render();

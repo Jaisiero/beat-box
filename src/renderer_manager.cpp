@@ -1,5 +1,8 @@
+#define _CRT_SECURE_NO_WARNINGS // std::getenv (BB_RUN_SECONDS) on MSVC
 #include "renderer_manager.hpp"
 #include <iostream>
+#include <fstream> // deep-pocket trace CSV (diagnostic)
+#include <cstdlib> // std::getenv / std::atof (BB_RUN_SECONDS auto-exit)
 
 BB_NAMESPACE_BEGIN
 
@@ -224,11 +227,47 @@ void RendererManager::render()
   // render dips under 60 fps. The accumulator is clamped so stalls don't queue a burst.
   auto sim_clock_prev = std::chrono::steady_clock::now();
   double sim_accum_s = 0.0;
+  int gui_hitch_cooldown = 0;                               // suppress the sim catch-up BURST for a
+  bool prev_gui_enabled = status_manager->is_gui_enabled(); // couple of frames after a GUI (TAB) toggle
   constexpr double SIM_DT_S = static_cast<double>(TIME_STEP);
+  // optional auto-exit (env BB_RUN_SECONDS=N): close the app cleanly after N wall-clock seconds, so a
+  // captured [PERF] log self-terminates and A/B solver measurement runs are reproducible. 0 = no limit.
+  double run_limit_s = 0.0;
+  if (const char *e = std::getenv("BB_RUN_SECONDS")) run_limit_s = std::atof(e);
+  auto const run_start = std::chrono::steady_clock::now();
   while (!window.should_close())
   {
+    if (run_limit_s > 0.0 &&
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count() > run_limit_s)
+    {
+      std::cout << "[PERF] BB_RUN_SECONDS=" << run_limit_s << " elapsed -> exiting." << std::endl;
+      break;
+    }
     // Update the GUI
     gui_manager->update();
+
+    // A GUI toggle (TAB) rebuilds the ImGui overlay (+ the contact-point debug pass), hitching this
+    // frame and the next; suppress the sim's REAL catch-up for those frames so the (AVBD-jittering)
+    // pile doesn't advance several steps at once and visibly jerk. Same intent as the reset clamp.
+    {
+      bool const cur_gui = status_manager->is_gui_enabled();
+      if (cur_gui != prev_gui_enabled) { gui_hitch_cooldown = 2; }
+      prev_gui_enabled = cur_gui;
+    }
+
+    // reset request (key R): restart the sim from the initial scene at this frame boundary (prior
+    // GPU work is already synchronized here), and clear the catch-up accumulator so it doesn't burst.
+    if (status_manager->consume_reset()) {
+      scene_manager->reset();
+      sim_accum_s = 0.0;
+    }
+
+    // scene switch request (F1-F8): rebuild from the chosen scene at this same frame boundary,
+    // paused, and clear the catch-up accumulator so it doesn't burst on the first resumed step.
+    if (int const requested_scene = status_manager->consume_scene(); requested_scene >= 0) {
+      scene_manager->switch_scene(requested_scene);
+      sim_accum_s = 0.0;
+    }
 
     if(rigid_body_manager->is_dirty()) {
       rigid_body_manager->clean_dirty();
@@ -247,7 +286,11 @@ void RendererManager::render()
       sim_clock_prev = sim_clock_now;
       if (status_manager->is_simulating())
       {
-        sim_accum_s = std::min(sim_accum_s + elapsed_s, (MAX_CATCHUP_STEPS + 1.0) * SIM_DT_S);
+        // during a GUI-toggle hitch, cap the accumulator to ONE step (no burst -> no jerk); the few
+        // ms of lost real-time sync over the toggle is imperceptible and resyncs once cooldown ends.
+        double const accum_cap = gui_hitch_cooldown > 0 ? SIM_DT_S : (MAX_CATCHUP_STEPS + 1.0) * SIM_DT_S;
+        if (gui_hitch_cooldown > 0) { --gui_hitch_cooldown; }
+        sim_accum_s = std::min(sim_accum_s + elapsed_s, accum_cap);
         while (sim_accum_s >= SIM_DT_S && sim_steps_this_frame < MAX_CATCHUP_STEPS)
         {
           sim_accum_s -= SIM_DT_S;
@@ -274,6 +317,22 @@ void RendererManager::render()
     // render the unchanged state and avoid the full-pipeline synchronize + readback)
     if(sim_stepped || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
+      // DEEP-POCKET TRACE: one CSV row per stepped frame with the deepest awake contact's
+      // {pen,lambda,k,vn,pair,stick} latched by entry_avbd_pocket_trace. Full-rate (every
+      // frame) so a 1-frame-period oscillation isn't aliased. Truncates at startup.
+      if (sim_stepped) {
+        static std::ofstream _pk("C:/Projects/beat-box/scratch/pocket_trace.csv", std::ios::trunc);
+        static bool _pk_hdr = false;
+        auto const &pk = rigid_body_manager->get_sim_config_reference();
+        if (!_pk_hdr) { _pk << "frame,pk_pen_mm,pk_lambda,pk_k,pk_vn,b1,b2,cc,stick,global_pen_mm,maxv_mm,omega_mrad,manifolds,sleeping\n"; _pk_hdr = true; }
+        _pk << (daxa_u64)pk.frame_count
+            << "," << pk.dbg_pk_pen << "," << pk.dbg_pk_lambda << "," << pk.dbg_pk_k << "," << pk.dbg_pk_vn
+            << "," << (pk.dbg_pk_body >> 16) << "," << (pk.dbg_pk_body & 0xFFFFu)
+            << "," << (pk.dbg_pk_stick >> 1) << "," << (pk.dbg_pk_stick & 1u)
+            << "," << pk.dbg_pen << "," << pk.dbg_maxv << "," << pk.dbg_pk_omega
+            << "," << pk.g_c_info.collision_count << "," << pk.sleeping_count << "\n";
+        _pk.flush();
+      }
       { static daxa_u64 _cf = 0; static auto _t0 = std::chrono::high_resolution_clock::now();
         // sample every 31 frames (odd) so the readback alternates between the two double-buffered
         // SimConfigs — each holds an independent dbg_ex latch; an even cadence would only ever show one.
@@ -315,6 +374,8 @@ void RendererManager::render()
                     << " A:" << dm_walk_str(sc.dbg_dm_walk_a) << " B:" << dm_walk_str(sc.dbg_dm_walk_b) << "]"
                     << " np=" << sc.dbg_np_processed << "/" << sc.broad_phase_collision_count
                     << " pen=" << sc.dbg_pen
+                    << " miny=" << (sc.dbg_min_y == 0xFFFFFFFFu ? 0.0 : (double)sc.dbg_min_y / 1000.0 - 100.0)
+                    << " deep100=" << sc.dbg_deep100 << " deep200=" << sc.dbg_deep200
                     << " idsum=" << (daxa_i64)sc.dbg_id_sum - (daxa_i64)((daxa_u64)sc.rigid_body_count * (sc.rigid_body_count - 1) / 2)
                     << " EX[s=" << sc.dbg_ex_stage << " b=" << sc.dbg_ex_body << " f=" << sc.dbg_ex_frame
                     << " v=" << sc.dbg_ex_vel << " y=" << sc.dbg_ex_y << " vy=" << sc.dbg_ex_vy << "]"

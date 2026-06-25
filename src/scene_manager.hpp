@@ -822,6 +822,30 @@ public:
     }
   }
 
+  // scene_8: SINGLE-CUBE free-fall test. One dynamic unit cube dropped from y=6 onto the floor
+  // (top at y=0), no neighbours, no walls. With only one dynamic body the pocket_trace.csv columns
+  // become a clean per-step fall log: maxv_mm = the cube's speed, and global_pen_mm goes nonzero
+  // the frame the cube touches the floor (solver-agnostic) = the exact time-to-fall to compare
+  // AVBD vs TGS. y=6 keeps the peak speed (~10.4 m/s) under the 12 m/s anti-punch-through clamp,
+  // so it is pure unclamped free fall. (Temporary measurement scene.)
+  void scene_8() {
+    materials = {
+      { .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),  .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },
+      { .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),  .emission = daxa_f32vec3(30.0f, 30.0f, 30.0f) },
+      { .albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f),  .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },
+    };
+    // floor (top at y=0)
+    rigid_bodies = {
+      {.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f}
+    };
+    // emissive light panel above
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 22.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-5.0f, -0.2f, -5.0f), .maximum = daxa_f32vec3(5.0f, 0.2f, 5.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(0)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 1u; // emissive
+    // THE single dynamic cube: dropped straight down from y=6 (no rotation, no initial velocity)
+    rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC|RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 6.0f, 14.0f), .rotation = Quaternion(0.0f, 0.0f, 0.0f, 1.0f), .minimum = daxa_f32vec3(-0.5f, -0.5f, -0.5f), .maximum = daxa_f32vec3(0.5f, 0.5f, 0.5f), .mass = 5.0f, .inv_mass = 0.2f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0),  .inv_inertia = daxa_mat3_from_glm_mat3(glm::mat3(1)), .restitution = 0.0f, .friction = 0.6f});
+    rigid_bodies.back().material_index = 2u; // green
+  }
+
   bool load_scene()
   {
     if (!initialized)
@@ -832,13 +856,21 @@ public:
     std::random_device rd; // obtain a random number from hardware
     gen = std::mt19937(rd()); // seed the generator
 
-    // scene_1();
-    // scene_2();
-    // scene_3();
-    // scene_4();
-    // scene_5(); // V3 showcase: frame threads onto the post + mixed concave pile
-    // scene_6(); // deterministic stability probe (rests + stacks; fresh/pen must read 0/single-digit)
-    scene_7(); // box pool: 432 cubes rain into the pit (all must settle and sleep)
+    // Scene dispatch by current_scene (set at startup default + switched at runtime via F1-F8).
+    // scene_1 .. scene_8 are compile-time builders; switch_scene() resets the host state so a
+    // different builder can repopulate the shared vectors.
+    switch (current_scene)
+    {
+      case 1: scene_1(); break;
+      case 2: scene_2(); break;
+      case 3: scene_3(); break;
+      case 4: scene_4(); break;
+      case 5: scene_5(); break; // V3 showcase: frame threads onto the post + mixed concave pile
+      case 6: scene_6(); break; // deterministic stability probe (rests + stacks; fresh/pen 0/single-digit)
+      case 7: scene_7(); break; // box pool: 432 cubes rain into the pit (all must settle and sleep)
+      case 8: scene_8(); break; // single-cube free-fall A/B (AVBD vs TGS time-to-floor)
+      default: scene_6(); break;
+    }
 
     // random materials for bodies with material_index 0 (unset). Start at 2: index 1 is
     // the emissive light-panel material, and randomly emissive bodies read as glaring
@@ -928,6 +960,93 @@ public:
     return initialized;
   }
 
+  // Restart the simulation from the initial scene state. The host `rigid_bodies` vector is never
+  // written by the sim (the GPU holds the live state), so it still holds the initial placement;
+  // re-uploading it + resetting the SimConfig (counts/manifolds -> 0) restarts cleanly. Same body
+  // ids, no RNG reseed -> deterministic restart of the SAME scene.
+  bool reset()
+  {
+    if (!initialized)
+    {
+      return false;
+    }
+    // belt-and-suspenders: clear the per-body dynamic scratch the solver writes on the GPU side
+    for (auto &rb : rigid_bodies)
+    {
+      rb.island_index = MAX_U32;
+      rb.manifold_node_index = MAX_U32;
+      rb.active_index = MAX_U32;
+      rb.velocity = daxa_f32vec3(0, 0, 0);
+      rb.omega = daxa_f32vec3(0, 0, 0);
+      rb.sleep_timer = 0u;
+    }
+    // zero the incremental upload counters first, or the 2nd reset would append (864->1296 > max) and fail
+    accel_struct_mngr->reset_for_reload();
+    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb))
+    {
+      std::cerr << "ERROR: reset() failed to re-upload rigid bodies!" << std::endl;
+      return false;
+    }
+    accel_struct_mngr->build_AS();
+    // reset both double-buffer parities of the SimConfig (collision/manifold/island counts -> 0)
+    rigid_body_manager->update_sim();
+    rigid_body_manager->update_active_rigid_body_list();
+    status_manager->next_frame();
+    rigid_body_manager->update_sim();
+    rigid_body_manager->update_active_rigid_body_list();
+    status_manager->next_frame();
+    accel_struct_mngr->update_TLAS();
+    status_manager->stop_simulating(); // reset also pauses (like Space): restart fresh, paused
+    std::cout << "RESET: simulation restarted from the initial scene state (paused)." << std::endl;
+    return true;
+  }
+
+  // Switch to a different scene at runtime (F1-F8): tear down the host-side scene state, rebuild
+  // from scene_N(), and pause (like reset). The scene_N() builders push_back into the shared
+  // vectors and assume them empty + load_scene() accumulates ids/counts/lights, so everything that
+  // accumulates must be cleared here before re-running load_scene(). n is 1..8.
+  bool switch_scene(int n)
+  {
+    if (!initialized)
+    {
+      return false;
+    }
+    if (n < 1 || n > 8)
+    {
+      std::cerr << "SCENE: ignoring out-of-range scene " << n << std::endl;
+      return false;
+    }
+    if (n == current_scene)
+    {
+      return reset(); // same scene -> just restart it (cheaper, keeps ids)
+    }
+    // tear down everything load_scene()/the scene builders accumulate (materials are reassigned
+    // wholesale by each scene_N, so they need no clear)
+    rigid_bodies.clear();
+    aabb.clear();
+    lights.clear();
+    rigid_body_map.clear();
+    voxel_shape_cpu.clear();
+    voxel_occ_cpu.clear();
+    voxel_surf_cpu.clear();
+    voxel_shape_prims.clear();
+    id_generator = 0;
+    rigid_body_count = 0;
+    rigid_body_active_count = 0;
+    // zero the incremental AS upload counters, or build_accel_structs would append onto the old
+    // scene's buffers (the same hazard reset() guards against with reset_for_reload)
+    accel_struct_mngr->reset_for_reload();
+    current_scene = n;
+    if (!load_scene())
+    {
+      std::cerr << "SCENE: failed to load scene " << n << std::endl;
+      return false;
+    }
+    status_manager->stop_simulating(); // load the new scene paused (like reset)
+    std::cout << "SCENE: switched to scene_" << n << " (paused)." << std::endl;
+    return true;
+  }
+
   daxa_u32 get_rigid_body_count()
   {
     return rigid_body_count;
@@ -969,6 +1088,10 @@ private:
   daxa_u32 id_generator = 0;
   daxa_u32 rigid_body_count = 0;
   daxa_u32 rigid_body_active_count = 0;
+  // active scene (1..8); load_scene() dispatches on it, switch_scene() (F1-F8) changes it. Default
+  // is scene_7 (the 432-cube rain pool) — the pre-switch hardcoded boot scene, which the harness
+  // and benchmarks assume. Change this initializer to pick a different launch scene.
+  int current_scene = 7;
   // TODO: Fill in scene data from file?
   std::vector<RigidBody> rigid_bodies;
   std::vector<Aabb> aabb;

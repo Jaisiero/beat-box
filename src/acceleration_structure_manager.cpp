@@ -287,6 +287,19 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
   clear_build_AS();
 
+  // Reload cleanup: build_accel_structs() is re-entered on every scene reset/switch, with the
+  // upload counters rewound by reset_for_reload() so new BLAS reuse the same proc_blas_buffer
+  // offsets. The per-body loop below push_back()s fresh BLAS handles, so the PREVIOUS scene's
+  // handles must be destroyed and the vector cleared first; otherwise proc_blas grows unbounded,
+  // the stale handles alias the reused buffer memory, task_blas binds a stale proc_blas.front()
+  // (the first scene's body-0 BLAS), and shutdown double-destroys them. No-op on the initial
+  // startup build (proc_blas empty). Safe here: callers run at a synchronized frame boundary.
+  for (auto blas : proc_blas)
+  {
+    device.destroy_blas(blas);
+  }
+  proc_blas.clear();
+
   /// Alignments:
   auto get_aligned = [&](u64 operand, u64 granularity) -> u64
   {
@@ -827,6 +840,13 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_islands),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_contact_islands),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_contact_islands),
+          // contact warm-start state (the three "previous" buffers narrow_phase reads on resume)
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_collisions),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_old_collisions),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_collision_entries),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_collision_entries_previous),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_body_link_manifolds),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, rigid_body_manager->task_previous_rigid_body_link_manifolds),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, gui_manager->task_vertex_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, gui_manager->task_previous_vertex_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, gui_manager->task_line_vertex_buffer),
@@ -884,6 +904,36 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
           });
         }
 
+        // Coherent pause flush of the contact warm-start state. A pause copies the body double
+        // buffer current->previous so the static frame renders right, but narrow_phase warm-starts
+        // the first resumed step by walking the PREVIOUS body's manifold-node chain into these
+        // three "previous" contact buffers. Without flushing them too, the resumed warm-start reads
+        // a stale node pool -> garbage lambda/anchors -> the penalty solver explodes. Copy the used
+        // prefix of each (collision_map[id] is bounded by collision_count; nodes by node_count).
+        auto collision_count = sim_config->g_c_info.collision_count > MAX_COLLISION_COUNT
+                                 ? MAX_COLLISION_COUNT : sim_config->g_c_info.collision_count;
+        if(collision_count > 0) {
+          ti.recorder.copy_buffer_to_buffer({
+              .src_buffer = ti.get(rigid_body_manager->task_collisions).id,
+              .dst_buffer = ti.get(rigid_body_manager->task_old_collisions).id,
+              .size = collision_count * sizeof(Manifold),
+          });
+          ti.recorder.copy_buffer_to_buffer({
+              .src_buffer = ti.get(rigid_body_manager->task_collision_entries).id,
+              .dst_buffer = ti.get(rigid_body_manager->task_collision_entries_previous).id,
+              .size = collision_count * sizeof(CollisionEntry),
+          });
+        }
+        auto manifold_node_count = sim_config->manifold_node_count > BB_MAX_MANIFOLD_NODE_COUNT
+                                     ? BB_MAX_MANIFOLD_NODE_COUNT : sim_config->manifold_node_count;
+        if(manifold_node_count > 0) {
+          ti.recorder.copy_buffer_to_buffer({
+              .src_buffer = ti.get(rigid_body_manager->task_rigid_body_link_manifolds).id,
+              .dst_buffer = ti.get(rigid_body_manager->task_previous_rigid_body_link_manifolds).id,
+              .size = manifold_node_count * sizeof(ManifoldNode),
+          });
+        }
+
         auto point_count = sim_config->g_c_info.collision_point_count > BB_MAX_DEBUG_CONTACT_POINT_COUNT
                              ? BB_MAX_DEBUG_CONTACT_POINT_COUNT
                              : sim_config->g_c_info.collision_point_count;
@@ -922,7 +972,7 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
     task0,
   };
 
-  std::array<daxa::TaskBuffer, 19> buffers = {
+  std::array<daxa::TaskBuffer, 25> buffers = {
     rigid_body_manager->task_sim_config_host,
     rigid_body_manager->task_rigid_bodies,
     rigid_body_manager->task_previous_rigid_bodies,
@@ -942,6 +992,13 @@ void AccelerationStructureManager::record_update_AS_buffers_tasks(TaskGraph &AS_
     gui_manager->task_line_vertex_buffer,
     gui_manager->task_previous_axes_vertex_buffer,
     gui_manager->task_axes_vertex_buffer,
+    // contact warm-start buffers for the coherent pause flush
+    rigid_body_manager->task_collisions,
+    rigid_body_manager->task_old_collisions,
+    rigid_body_manager->task_collision_entries,
+    rigid_body_manager->task_collision_entries_previous,
+    rigid_body_manager->task_rigid_body_link_manifolds,
+    rigid_body_manager->task_previous_rigid_body_link_manifolds,
   };
 
   AS_buffers_TG = task_manager->create_task_graph("Update Acceleration Structure Buffers", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);

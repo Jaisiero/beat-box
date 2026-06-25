@@ -143,7 +143,13 @@ private:
   | SimFlag::ACCUM_IMPULSE
   | SimFlag::WARM_STARTING
   | SimFlag::USE_GRAPH_COLORING
-  | SimFlag::SLEEPING_ENABLED
+  // SLEEPING_ENABLED OFF by default (user decision 2026-06-15: "dejemos de hacer trampas").
+  // Sleeping froze a 250mm-interpenetrated cube (the trampa) AND toggling it OFF mid-run
+  // exploded the pile (waking ~420 frozen interpenetrated bodies in ONE frame releases their
+  // accumulated penalty energy at once). With sleeping off from the start there is no frozen
+  // state to release: bodies stay active and the solver resolves penetration continuously.
+  // Fix the honest (no-trampa) rest first; re-enable sleeping (with a graceful wake) later.
+  // Press O to toggle on.
   ;
   // simulating flag update 
   bool sim_flag_dirty[DOUBLE_BUFFERING] = {};
@@ -182,6 +188,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_CSR;
   // graph coloring
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCD;  // dispatcher
+  std::shared_ptr<daxa::ComputePipeline> pipeline_GCSD; // per-color solve dispatcher (skips empty colors)
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCR;  // reset
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCOR; // owner reset
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCP1; // assign phase 1
@@ -202,6 +209,9 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_WS;   // AVBD lambda/k warm-start scaling
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_PRIM; // AVBD per-color primal 6x6 block solve
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DUAL; // AVBD dual lambda/penalty updates
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_IMPJ; // inelastic impact: per-contact impulse
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_IMPA; // inelastic impact: per-body apply
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_PKTR; // deep-pocket oscillator trace (diagnostic)
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DRST; // shock propagation: depth reset
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_DRLX; // shock propagation: depth BFS relax
   std::shared_ptr<daxa::ComputePipeline> pipeline_GCS_CPS_OV; // overflow pre-solver (serial)
@@ -210,8 +220,11 @@ private:
   std::shared_ptr<daxa::ComputePipeline> create_points_pipeline;
   std::shared_ptr<daxa::ComputePipeline> update_pipeline;
 
-  // TaskGraph for rigid body simulation
-  TaskGraph RB_TG;
+  // Per-solver sim task graphs: shared setup + only the active solver's passes, so PGS/TGS no longer
+  // pay AVBD's ~847 dispatches/frame (and vice versa). simulate() executes the one matching solver_type.
+  TaskGraph RB_TG_pgs;   // PGS / PGS_SOFT
+  TaskGraph RB_TG_avbd;  // AVBD
+  TaskGraph RB_TG_tgs;   // TGS_SOFT
 
   // TaskGraph for read-back of simulation configuration
   TaskGraph readback_SC_TG;

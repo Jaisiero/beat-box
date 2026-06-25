@@ -361,7 +361,11 @@ static constexpr u32 MAX_VERTEX_COUNT = MAX_RIGID_BODY_COUNT * 8;
 static constexpr u32 MAX_AXIS_COUNT = MAX_RIGID_BODY_COUNT * 6;
 static constexpr u32 MAX_LIGHT_COUNT = 1024;
 static constexpr u32 MAX_MATERIAL_COUNT = 1024;
-static constexpr u32 DEFAULT_ITERATION_COUNT = 5;
+static constexpr u32 DEFAULT_ITERATION_COUNT = 5; // PGS/PGS_soft solve+relax iterations. PROBE 2026-06-16
+                                                  // RESULT: 5->2 did NOT speed the sim (slowness is FIXED
+                                                  // per-step overhead, NOT solve iterations) and 2 was too
+                                                  // few to converge (tide). Reverted to 5. Speed fix =
+                                                  // skip the unused solver's ~800 always-dispatched passes.
 
 enum StageIndex : u32
 {
@@ -418,6 +422,8 @@ const auto avbd_shader_file_string = "avbd.slang";
 // graph coloring (parallel contact-solver coloring)
 const auto entry_graph_color_dispatcher = "entry_graph_color_dispatcher";
 const auto graph_color_dispatcher_pipeline_name = "Graph Color Dispatcher";
+const auto entry_graph_color_solve_dispatcher = "entry_graph_color_solve_dispatcher";
+const auto graph_color_solve_dispatcher_pipeline_name = "Graph Color Solve Dispatcher";
 const auto entry_graph_color_reset = "entry_graph_color_reset";
 const auto graph_color_reset_pipeline_name = "Graph Color Reset";
 const auto entry_graph_color_owner_reset = "entry_graph_color_owner_reset";
@@ -454,6 +460,12 @@ const auto entry_avbd_primal = "entry_avbd_primal";
 const auto avbd_primal_pipeline_name = "AVBD Primal";
 const auto entry_avbd_dual = "entry_avbd_dual";
 const auto avbd_dual_pipeline_name = "AVBD Dual";
+const auto entry_avbd_impact_j = "entry_avbd_impact_j";
+const auto avbd_impact_j_pipeline_name = "AVBD Impact J";
+const auto entry_avbd_impact_apply = "entry_avbd_impact_apply";
+const auto avbd_impact_apply_pipeline_name = "AVBD Impact Apply";
+const auto entry_avbd_pocket_trace = "entry_avbd_pocket_trace";
+const auto avbd_pocket_trace_pipeline_name = "AVBD Pocket Trace";
 const auto entry_avbd_depth_reset = "entry_avbd_depth_reset";
 const auto avbd_depth_reset_pipeline_name = "AVBD Depth Reset";
 const auto entry_avbd_depth_relax = "entry_avbd_depth_relax";
@@ -991,6 +1003,17 @@ struct GraphColorDispatcherInfo {
       .name = graph_color_dispatcher_pipeline_name,
   };
 };
+struct GraphColorSolveDispatcherInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_graph_color_solve_dispatcher, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyDispatcherPushConstants),
+      .name = graph_color_solve_dispatcher_pipeline_name,
+  };
+};
 struct GraphColorResetInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{coloring_shader_file_string},
@@ -1178,6 +1201,39 @@ struct AvbdDualInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(AvbdPushConstants),
       .name = avbd_dual_pipeline_name,
+  };
+};
+struct AvbdImpactJInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_impact_j, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_impact_j_pipeline_name,
+  };
+};
+struct AvbdImpactApplyInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_impact_apply, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_impact_apply_pipeline_name,
+  };
+};
+struct AvbdPocketTraceInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_pocket_trace, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_pocket_trace_pipeline_name,
   };
 };
 struct AvbdDepthResetInfo {

@@ -18,6 +18,8 @@ static std::string sim_solver_type_to_string(SimSolverType type)
     return "PGS_SOFT";
   case SimSolverType::AVBD:
     return "AVBD";
+  case SimSolverType::TGS_SOFT:
+    return "TGS_SOFT";
   default:
     return "UNKNOWN";
   }
@@ -130,6 +132,17 @@ struct StatusManager
     return simulating;
   }
 
+  // reset request (key R): set from the input callback, consumed at the top of the render loop
+  // (a safe frame boundary, not mid-GPU-work) where the scene manager is reachable.
+  void request_reset() { reset_requested = true; }
+  bool consume_reset() { bool r = reset_requested; reset_requested = false; return r; }
+
+  // scene switch request (F1-F8): set from the input callback, consumed at the render-loop frame
+  // boundary where the scene manager is reachable. -1 = no request pending.
+  void request_scene(int n) { requested_scene = n; }
+  int consume_scene() { int s = requested_scene; requested_scene = -1; return s; }
+  void stop_simulating() { simulating = false; } // force-pause (used by reset)
+
   void switch_simulating()
   {
     simulating = !simulating;
@@ -142,7 +155,12 @@ struct StatusManager
       // refreshes every buffer per step, so the flush is obsolete on resume.
       update_sim_buffer = false;
       double_buffering_counter = 0;
-      rigid_body_manager->skip_warm_starting_once();
+      // NOTE: the old skip_warm_starting_once() band-aid was removed here. It dodged the
+      // garbage-inheritance read on resume by skipping warm-start one step, but an all-fresh
+      // frame drops all contact lambda on a settled pile -> momentary support loss -> the pile
+      // sinks and the next step depenetrates explosively. The pause flush now keeps the three
+      // contact warm-start buffers coherent (see record_update_AS_buffers_tasks), so warm-start
+      // reads correct lambda/anchors on resume and must run normally.
     }
     else
     {
@@ -399,8 +417,10 @@ private:
   bool warm_starting = true;
   // flag for graph-color contact debug tint
   bool graph_color_debug = false;
-  // flag for island sleeping
-  bool sleeping_enabled = true;
+  // flag for island sleeping (default OFF: no trampas — see rigid_body_manager.hpp; press O for A/B)
+  bool sleeping_enabled = false;
+  bool reset_requested = false; // key R: restart the sim from the initial scene state
+  int requested_scene = -1; // F1-F8: switch to scene_N at the next frame boundary (-1 = none)
   // flag for accumulation
   bool accumulation = false;
   // flag for showing islands

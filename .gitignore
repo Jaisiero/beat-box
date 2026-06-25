@@ -5,3 +5,4 @@ lib/*
 shaders_debug/*
 assets/*
 scratch/
+spirv_cache/
