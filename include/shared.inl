@@ -836,6 +836,39 @@ static const daxa_f32 BB_SLEEP_ANG_VEL2 = 0.0225f; // (0.15 rad/s)^2
 static const daxa_u32 BB_SLEEP_STEPS = 30;
 static const daxa_u32 BB_SLEEP_VETO_BIT = 0x80000000u; // sleep_timer bit 31: a contact partner is not quiet
 static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
+// ============================================================================================
+// AVBD SCENE_7 BAND-AID DEPENDENCY MAP (consolidated 2026-06-19)
+// --------------------------------------------------------------------------------------------
+// The constants below are NOT independent tunables and NOT removable cruft: each is the necessary
+// adaptation to scene_7 (432 cubes raining into a deep confined pit — a deliberate torture test).
+// A "clean reference AVBD" (unified alpha=0.99, no post-stab, no band-aids) handles PLACED scenes
+// but BOILS scene_7's deep burials — measured: avbd-demo3d audit, the alpha=0.99 bleed injects
+// ~0.15 m/s permanent velocity into deep contacts -> boil@273. Our BETA=1e5 (10x the official 1e4)
+// makes that bleed WORSE, not better. So do NOT strip toward the reference; the load-bearing set:
+//
+//   1. SPLIT-ALPHA POST-STAB (dispatch: main sweeps alpha=1 / post-stab alpha=0). Main sweeps hide
+//      C0 (delta-only) so deep pre-existing penetration never injects momentum; a separate post-
+//      stab sweep (AFTER velocity reconstruction) corrects C0 positionally. This split is exactly
+//      what unified alpha=0.99 collapses -> boil. ESSENTIAL.
+//   2. DEEP-EXTRACT k-floor (BB_AVBD_DEEP_EXTRACT_*). Under alpha=1 a static buried contact's
+//      lambda/k decay to ~0 (no delta -> no re-ramp) so it cannot dominate the 6x6 block and never
+//      extracts. The post-stab floors its k. Without it the bottom stays buried (~208mm). ESSENTIAL.
+//   3. SHOCK PROPAGATION (BB_AVBD_SHOCK_LAYERS). Orders the post-stab cascade by support depth so
+//      lower layers settle before upper ones sample them. UNORDERED = potential-energy pump -> boil.
+//   4. EXTRACTION CAP (collision_detection.slang, max(pen,-0.25)). Caps per-step depenetration;
+//      uncapped post-stab corrections teleport -> avalanche the crust. ESSENTIAL.
+//   5. TERMINAL SPEED CLAMP (BB_MAX_LINEAR_SPEED). Anti-punch-through; without it 28 m/s rain
+//      tunnels ~470mm + trips the impulse-explosion latch (EX[s=4]). NOTE: this caps the FALL look
+//      (floaty); raising it needs sub-frame substepping (falsified: cushion/cost) -- a known wall.
+//   6. INELASTIC IMPACT PASS (e=0, avbd.slang IMP_J/IMP_APPLY). Removes impact rebound post-FIN.
+//   7. SETTLE SPONGE (avbd.slang finalize, v<0.3 && 3+ manifolds -> *0.9). Drains residual pile
+//      micro-velocity. WIDENING IT BACKFIRES (re-excitation: lighter settle -> pen~0 flicker).
+//
+// KNOWN IRREDUCIBLE: the resting-pile "tremble" without sleeping is SAT-axis-flap + matcher churn +
+// convergence residual, all fed by micro-motion; sleeping freezes all three (industry standard).
+// The solver core (LDLT, contact-C, primal H/g, dual, cone friction) is verified correct.
+// See memory: beatbox-rest-tremor, beatbox-speculative-phase1-win, avbd-jitter-rootcause.
+// ============================================================================================
 // AVBD (Augmented Vertex Block Descent, Giles et al. SIGGRAPH 2025) — paper defaults:
 // warm-start scaling lambda <- ALPHA*GAMMA*lambda, penalty k <- max(K_MIN, GAMMA*k);
 // penalty growth k <- min(K_MAX, BETA*k) while a constraint stays violated.
