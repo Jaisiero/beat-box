@@ -227,6 +227,8 @@ void RendererManager::render()
   // render dips under 60 fps. The accumulator is clamped so stalls don't queue a burst.
   auto sim_clock_prev = std::chrono::steady_clock::now();
   double sim_accum_s = 0.0;
+  int gui_hitch_cooldown = 0;                               // suppress the sim catch-up BURST for a
+  bool prev_gui_enabled = status_manager->is_gui_enabled(); // couple of frames after a GUI (TAB) toggle
   constexpr double SIM_DT_S = static_cast<double>(TIME_STEP);
   // optional auto-exit (env BB_RUN_SECONDS=N): close the app cleanly after N wall-clock seconds, so a
   // captured [PERF] log self-terminates and A/B solver measurement runs are reproducible. 0 = no limit.
@@ -243,6 +245,15 @@ void RendererManager::render()
     }
     // Update the GUI
     gui_manager->update();
+
+    // A GUI toggle (TAB) rebuilds the ImGui overlay (+ the contact-point debug pass), hitching this
+    // frame and the next; suppress the sim's REAL catch-up for those frames so the (AVBD-jittering)
+    // pile doesn't advance several steps at once and visibly jerk. Same intent as the reset clamp.
+    {
+      bool const cur_gui = status_manager->is_gui_enabled();
+      if (cur_gui != prev_gui_enabled) { gui_hitch_cooldown = 2; }
+      prev_gui_enabled = cur_gui;
+    }
 
     // reset request (key R): restart the sim from the initial scene at this frame boundary (prior
     // GPU work is already synchronized here), and clear the catch-up accumulator so it doesn't burst.
@@ -268,7 +279,11 @@ void RendererManager::render()
       sim_clock_prev = sim_clock_now;
       if (status_manager->is_simulating())
       {
-        sim_accum_s = std::min(sim_accum_s + elapsed_s, (MAX_CATCHUP_STEPS + 1.0) * SIM_DT_S);
+        // during a GUI-toggle hitch, cap the accumulator to ONE step (no burst -> no jerk); the few
+        // ms of lost real-time sync over the toggle is imperceptible and resyncs once cooldown ends.
+        double const accum_cap = gui_hitch_cooldown > 0 ? SIM_DT_S : (MAX_CATCHUP_STEPS + 1.0) * SIM_DT_S;
+        if (gui_hitch_cooldown > 0) { --gui_hitch_cooldown; }
+        sim_accum_s = std::min(sim_accum_s + elapsed_s, accum_cap);
         while (sim_accum_s >= SIM_DT_S && sim_steps_this_frame < MAX_CATCHUP_STEPS)
         {
           sim_accum_s -= SIM_DT_S;
