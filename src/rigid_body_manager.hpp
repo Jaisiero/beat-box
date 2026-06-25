@@ -205,6 +205,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CR;   // AVBD body-color reset
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CRND; // AVBD body-color JP round
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CV;   // AVBD body-color validate
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CMT;  // AVBD body-color commit (race-free split)
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_PRE;  // AVBD prepare (inertial target)
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_FIN;  // AVBD finalize (velocity reconstruction)
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_WS;   // AVBD lambda/k warm-start scaling

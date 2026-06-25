@@ -450,6 +450,8 @@ const auto entry_avbd_color_round = "entry_avbd_color_round";
 const auto avbd_color_round_pipeline_name = "AVBD Color Round";
 const auto entry_avbd_color_validate = "entry_avbd_color_validate";
 const auto avbd_color_validate_pipeline_name = "AVBD Color Validate";
+const auto entry_avbd_color_commit = "entry_avbd_color_commit";
+const auto avbd_color_commit_pipeline_name = "AVBD Color Commit";
 const auto entry_avbd_prepare = "entry_avbd_prepare";
 const auto avbd_prepare_pipeline_name = "AVBD Prepare";
 const auto entry_avbd_finalize = "entry_avbd_finalize";
@@ -1152,6 +1154,17 @@ struct AvbdColorRoundInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(AvbdPushConstants),
       .name = avbd_color_round_pipeline_name,
+  };
+};
+struct AvbdColorCommitInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_color_commit, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_color_commit_pipeline_name,
   };
 };
 struct AvbdColorValidateInfo {

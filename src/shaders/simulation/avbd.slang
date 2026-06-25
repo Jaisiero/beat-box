@@ -181,6 +181,20 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   daxa_f32 sign = dq.w < 0.0f ? -1.0f : 1.0f;
   r->omega = dq.v * (2.0f * sign * inv_dt);
 
+  // DETERMINISM CHECKPOINT (debug): hash the post-main-solve pose here (impact + post-stab have
+  // not moved it yet), mirroring the end-of-step gauge in entry_rigid_body_update. Comparing cp vs
+  // poshash between two runs localizes whether the divergence enters the main solve or after it.
+  {
+    daxa_u32 cph = asuint(r->position.x) ^ (asuint(r->position.y) * 0x9e3779b9u) ^
+                   (asuint(r->position.z) * 0x85ebca6bu) ^ (r->id * 0xc2b2ae35u);
+    daxa_u32 crh = asuint(r->rotation.v.x) ^ (asuint(r->rotation.v.y) * 0x9e3779b9u) ^
+                   (asuint(r->rotation.v.z) * 0x85ebca6bu) ^ (asuint(r->rotation.w) * 0x27d4eb2fu) ^
+                   (r->id * 0xc2b2ae35u);
+    daxa_u32 _cprev;
+    InterlockedXor(sim_config->dbg_cp_poshash, cph, _cprev);
+    InterlockedXor(sim_config->dbg_cp_rothash, crh, _cprev);
+  }
+
   // SETTLE ASSIST: a body that is clearly part of a settled pile (3+ manifolds) and
   // already slow gets its residual micro-velocity sponged exponentially, so the crust
   // crosses the sleep threshold (0.12 m/s for 30 steps) in a fraction of a second
@@ -1083,6 +1097,7 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   }
   daxa_u32* body_color = (daxa_u32*)(AVBD_PC.task_head.body_color);
   body_color[i] = AVBD_UNCOLORED;
+  ((AvbdBodyState*)(AVBD_PC.task_head.avbd_state))[i].proposed_color = AVBD_UNCOLORED;
 }
 
 // One Jones-Plassmann round (push constant = round number): an uncolored body colors itself when
@@ -1165,7 +1180,34 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   {
     return;
   }
-  body_color[i] = c;
+  // PROPOSE, do not commit: write proposed_color, NOT body_color. entry_avbd_color_commit copies it
+  // to body_color after a barrier. Writing body_color here raced the neighbor reads above (a thread
+  // could see a neighbor's same-round commit or not depending on warp order -> nondeterministic
+  // coloring -> nondeterministic per-color solve order -> the main-solve divergence).
+  ((AvbdBodyState*)(AVBD_PC.task_head.avbd_state))[i].proposed_color = c;
+}
+
+// Commit phase of a JP round: copy each body's proposed color into body_color. Separated from the
+// round (a barrier between) so the round's neighbor-color reads never observe a same-round write.
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_color_commit(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+  daxa_u32* body_color = (daxa_u32*)(AVBD_PC.task_head.body_color);
+  if (body_color[i] != AVBD_UNCOLORED)
+  {
+    return; // already committed in an earlier round
+  }
+  daxa_u32 prop = ((AvbdBodyState*)(AVBD_PC.task_head.avbd_state))[i].proposed_color;
+  if (prop < BB_AVBD_MAX_BODY_COLORS)
+  {
+    body_color[i] = prop;
+  }
 }
 
 // validator: no two adjacent dynamic bodies share a color; uncolored dynamic bodies WITH

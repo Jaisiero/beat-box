@@ -634,6 +634,10 @@ struct SimConfig
                                    // the first diverging frame localizes residual
                                    // nondeterminism. Constant once the pile fully sleeps.
   daxa_u32 dbg_rothash;            // same, over asuint(rotation.xyzw)
+  daxa_u32 dbg_cp_poshash;         // DETERMINISM CHECKPOINT (debug): same XOR hash but written at
+  daxa_u32 dbg_cp_rothash;         // entry_avbd_finalize (after the main primal/dual sweeps, BEFORE
+                                   // impact+post-stab). cp diverges with poshash => main solve is the
+                                   // source; cp matches but poshash diverges => impact/post-stab is.
                                    // --- per-frame reset boundary (see reset_fresh array) ---
   daxa_u32 dbg_dm_ids;             // PERSISTENT: first deep-MISS pair ever ((idA<<16)|idB)
   daxa_u32 dbg_dm_walk_a;          // PERSISTENT: that event's chain-walk forensics
@@ -1033,6 +1037,9 @@ struct AvbdBodyState {
   daxa_u32 support_depth; // shock propagation: contact-graph BFS distance from static
                           // or sleeping support (0 = static/sleeping, 1 = resting on it,
                           // ...; MAX_U32 = unsupported/free-falling). Rebuilt every step.
+  daxa_u32 proposed_color; // JP body-coloring: the color a round PROPOSES (committed to body_color
+                           // by entry_avbd_color_commit). Keeping the proposal out of body_color
+                           // makes the per-round read of a neighbor's color race-free (determinism).
 };
 DAXA_DECL_BUFFER_PTR(AvbdBodyState)
 
