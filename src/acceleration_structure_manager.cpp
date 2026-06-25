@@ -287,6 +287,19 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
   clear_build_AS();
 
+  // Reload cleanup: build_accel_structs() is re-entered on every scene reset/switch, with the
+  // upload counters rewound by reset_for_reload() so new BLAS reuse the same proc_blas_buffer
+  // offsets. The per-body loop below push_back()s fresh BLAS handles, so the PREVIOUS scene's
+  // handles must be destroyed and the vector cleared first; otherwise proc_blas grows unbounded,
+  // the stale handles alias the reused buffer memory, task_blas binds a stale proc_blas.front()
+  // (the first scene's body-0 BLAS), and shutdown double-destroys them. No-op on the initial
+  // startup build (proc_blas empty). Safe here: callers run at a synchronized frame boundary.
+  for (auto blas : proc_blas)
+  {
+    device.destroy_blas(blas);
+  }
+  proc_blas.clear();
+
   /// Alignments:
   auto get_aligned = [&](u64 operand, u64 granularity) -> u64
   {

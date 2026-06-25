@@ -91,7 +91,9 @@ FORCE_INLINE std::filesystem::path debug_path{
 // cold-start cost (~100s, single-threaded). Daxa keys the cache on source+options, so a launch
 // that doesn't touch any .slang reuses the cached SPIR-V and starts in seconds. Editing any
 // shader (or shared.inl, which every shader includes) invalidates the affected entries -> they
-// recompile. Lives under build/ (gitignored).
+// recompile. Path is relative to the launch CWD (like root_paths above), so the cache lands next
+// to wherever the exe is run from (build/Release/Release for the harness, or the repo root for a
+// direct launch); "spirv_cache/" is gitignored so either location is safe to leave.
 FORCE_INLINE std::filesystem::path spirv_cache_path{
     "spirv_cache",
 };

@@ -1089,8 +1089,9 @@ private:
   daxa_u32 rigid_body_count = 0;
   daxa_u32 rigid_body_active_count = 0;
   // active scene (1..8); load_scene() dispatches on it, switch_scene() (F1-F8) changes it. Default
-  // matches the previously-hardcoded startup scene.
-  int current_scene = 6;
+  // is scene_7 (the 432-cube rain pool) — the pre-switch hardcoded boot scene, which the harness
+  // and benchmarks assume. Change this initializer to pick a different launch scene.
+  int current_scene = 7;
   // TODO: Fill in scene data from file?
   std::vector<RigidBody> rigid_bodies;
   std::vector<Aabb> aabb;
