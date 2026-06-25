@@ -136,6 +136,11 @@ struct StatusManager
   // (a safe frame boundary, not mid-GPU-work) where the scene manager is reachable.
   void request_reset() { reset_requested = true; }
   bool consume_reset() { bool r = reset_requested; reset_requested = false; return r; }
+
+  // scene switch request (F1-F8): set from the input callback, consumed at the render-loop frame
+  // boundary where the scene manager is reachable. -1 = no request pending.
+  void request_scene(int n) { requested_scene = n; }
+  int consume_scene() { int s = requested_scene; requested_scene = -1; return s; }
   void stop_simulating() { simulating = false; } // force-pause (used by reset)
 
   void switch_simulating()
@@ -410,6 +415,7 @@ private:
   // flag for island sleeping (default OFF: no trampas — see rigid_body_manager.hpp; press O for A/B)
   bool sleeping_enabled = false;
   bool reset_requested = false; // key R: restart the sim from the initial scene state
+  int requested_scene = -1; // F1-F8: switch to scene_N at the next frame boundary (-1 = none)
   // flag for accumulation
   bool accumulation = false;
   // flag for showing islands

@@ -151,6 +151,31 @@ void InputManager::on_key(i32 key, i32 action)
       status_mngr->reset_accumulation_count();
     }
     break;
+  // F1-F8: switch to scene_1 .. scene_8 at runtime (reset + pause; consumed in the render loop)
+  case GLFW_KEY_F1:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(1); status_mngr->reset_accumulation_count(); }
+    break;
+  case GLFW_KEY_F2:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(2); status_mngr->reset_accumulation_count(); }
+    break;
+  case GLFW_KEY_F3:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(3); status_mngr->reset_accumulation_count(); }
+    break;
+  case GLFW_KEY_F4:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(4); status_mngr->reset_accumulation_count(); }
+    break;
+  case GLFW_KEY_F5:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(5); status_mngr->reset_accumulation_count(); }
+    break;
+  case GLFW_KEY_F6:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(6); status_mngr->reset_accumulation_count(); }
+    break;
+  case GLFW_KEY_F7:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(7); status_mngr->reset_accumulation_count(); }
+    break;
+  case GLFW_KEY_F8:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(8); status_mngr->reset_accumulation_count(); }
+    break;
   case GLFW_KEY_7:
     if (action == GLFW_PRESS)
     {

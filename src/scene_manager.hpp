@@ -856,14 +856,21 @@ public:
     std::random_device rd; // obtain a random number from hardware
     gen = std::mt19937(rd()); // seed the generator
 
-    // scene_1();
-    // scene_2();
-    // scene_3();
-    // scene_4();
-    // scene_5(); // V3 showcase: frame threads onto the post + mixed concave pile
-    // scene_6(); // deterministic stability probe (rests + stacks; fresh/pen must read 0/single-digit)
-    scene_7(); // box pool: 432 cubes rain into the pit (all must settle and sleep)
-    // scene_8(); // single-cube free-fall A/B (AVBD vs TGS time-to-floor); kept for re-testing
+    // Scene dispatch by current_scene (set at startup default + switched at runtime via F1-F8).
+    // scene_1 .. scene_8 are compile-time builders; switch_scene() resets the host state so a
+    // different builder can repopulate the shared vectors.
+    switch (current_scene)
+    {
+      case 1: scene_1(); break;
+      case 2: scene_2(); break;
+      case 3: scene_3(); break;
+      case 4: scene_4(); break;
+      case 5: scene_5(); break; // V3 showcase: frame threads onto the post + mixed concave pile
+      case 6: scene_6(); break; // deterministic stability probe (rests + stacks; fresh/pen 0/single-digit)
+      case 7: scene_7(); break; // box pool: 432 cubes rain into the pit (all must settle and sleep)
+      case 8: scene_8(); break; // single-cube free-fall A/B (AVBD vs TGS time-to-floor)
+      default: scene_6(); break;
+    }
 
     // random materials for bodies with material_index 0 (unset). Start at 2: index 1 is
     // the emissive light-panel material, and randomly emissive bodies read as glaring
@@ -994,6 +1001,52 @@ public:
     return true;
   }
 
+  // Switch to a different scene at runtime (F1-F8): tear down the host-side scene state, rebuild
+  // from scene_N(), and pause (like reset). The scene_N() builders push_back into the shared
+  // vectors and assume them empty + load_scene() accumulates ids/counts/lights, so everything that
+  // accumulates must be cleared here before re-running load_scene(). n is 1..8.
+  bool switch_scene(int n)
+  {
+    if (!initialized)
+    {
+      return false;
+    }
+    if (n < 1 || n > 8)
+    {
+      std::cerr << "SCENE: ignoring out-of-range scene " << n << std::endl;
+      return false;
+    }
+    if (n == current_scene)
+    {
+      return reset(); // same scene -> just restart it (cheaper, keeps ids)
+    }
+    // tear down everything load_scene()/the scene builders accumulate (materials are reassigned
+    // wholesale by each scene_N, so they need no clear)
+    rigid_bodies.clear();
+    aabb.clear();
+    lights.clear();
+    rigid_body_map.clear();
+    voxel_shape_cpu.clear();
+    voxel_occ_cpu.clear();
+    voxel_surf_cpu.clear();
+    voxel_shape_prims.clear();
+    id_generator = 0;
+    rigid_body_count = 0;
+    rigid_body_active_count = 0;
+    // zero the incremental AS upload counters, or build_accel_structs would append onto the old
+    // scene's buffers (the same hazard reset() guards against with reset_for_reload)
+    accel_struct_mngr->reset_for_reload();
+    current_scene = n;
+    if (!load_scene())
+    {
+      std::cerr << "SCENE: failed to load scene " << n << std::endl;
+      return false;
+    }
+    status_manager->stop_simulating(); // load the new scene paused (like reset)
+    std::cout << "SCENE: switched to scene_" << n << " (paused)." << std::endl;
+    return true;
+  }
+
   daxa_u32 get_rigid_body_count()
   {
     return rigid_body_count;
@@ -1035,6 +1088,9 @@ private:
   daxa_u32 id_generator = 0;
   daxa_u32 rigid_body_count = 0;
   daxa_u32 rigid_body_active_count = 0;
+  // active scene (1..8); load_scene() dispatches on it, switch_scene() (F1-F8) changes it. Default
+  // matches the previously-hardcoded startup scene.
+  int current_scene = 6;
   // TODO: Fill in scene data from file?
   std::vector<RigidBody> rigid_bodies;
   std::vector<Aabb> aabb;

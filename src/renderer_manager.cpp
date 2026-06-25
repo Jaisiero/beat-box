@@ -262,6 +262,13 @@ void RendererManager::render()
       sim_accum_s = 0.0;
     }
 
+    // scene switch request (F1-F8): rebuild from the chosen scene at this same frame boundary,
+    // paused, and clear the catch-up accumulator so it doesn't burst on the first resumed step.
+    if (int const requested_scene = status_manager->consume_scene(); requested_scene >= 0) {
+      scene_manager->switch_scene(requested_scene);
+      sim_accum_s = 0.0;
+    }
+
     if(rigid_body_manager->is_dirty()) {
       rigid_body_manager->clean_dirty();
       rigid_body_manager->update_sim();
