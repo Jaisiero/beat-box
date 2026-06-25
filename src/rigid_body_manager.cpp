@@ -3,6 +3,13 @@
 
 BB_NAMESPACE_BEGIN
 
+// The collision/manifold buffers are sized by the HOST constant MAX_RIGID_BODY_COUNT (defines.hpp),
+// but the narrow-phase overflow guards use the DEVICE constant BB_MAX_RIGID_BODY_COUNT (shared.inl).
+// They are independent literals; if they diverge with the device value LARGER, the guard would admit
+// an index past the host-sized buffer -> out-of-bounds GPU write. Keep them locked together.
+static_assert(MAX_RIGID_BODY_COUNT == BB_MAX_RIGID_BODY_COUNT,
+              "MAX_RIGID_BODY_COUNT (defines.hpp) must equal BB_MAX_RIGID_BODY_COUNT (shared.inl)");
+
 RigidBodyManager::RigidBodyManager(daxa::Device &device,
                                    std::shared_ptr<TaskManager> task_manager,
                                    std::shared_ptr<AccelerationStructureManager> accel_struct_mngr) : device(device), task_manager(task_manager), accel_struct_mngr(accel_struct_mngr)
@@ -1718,6 +1725,13 @@ void RigidBodyManager::destroy()
   device.destroy_buffer(voxel_shapes);
   device.destroy_buffer(voxel_occupancy);
   device.destroy_buffer(voxel_surface);
+  // graph-coloring + AVBD buffers (added during the campaign; were missing from teardown)
+  device.destroy_buffer(body_color_mask);
+  device.destroy_buffer(manifold_color);
+  device.destroy_buffer(body_color_owner);
+  device.destroy_buffer(color_count);
+  device.destroy_buffer(avbd_state);
+  device.destroy_buffer(avbd_body_color);
 
   initialized = false;
 }
