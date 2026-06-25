@@ -1676,12 +1676,26 @@ const static daxa::f32 LINE_SIZE = 0.5f;
     daxa::f32vec3 gcol = daxa::f32vec3(1.0f, 1.0f, 1.0f); // uncolored/overflow => white
     if (by_graph)
     {
-      daxa_u32* manifold_color = (daxa_u32*)(CP.task_head.manifold_color);
-      daxa_u32 gc = manifold_color[compute_i.x];
-      if (gc < BB_MAX_COLORS)
+      // AVBD colors BODIES (body_color); the PGS/TGS family colors CONTACTS (manifold_color). The
+      // debug view used to always read manifold_color -> all-red for AVBD (whose manifold_color is
+      // never set). Pick the buffer matching the active solver so the tint is meaningful for both.
+      daxa_u32 gc; bool colored;
+      if (sim_config->solver_type == SimSolverType::AVBD)
+      {
+        daxa_u32* body_color = (daxa_u32*)(CP.task_head.body_color);
+        gc = body_color[m->obb1_index];          // tint by this contact's body-A color
+        colored = gc < BB_AVBD_MAX_BODY_COLORS;
+      }
+      else
+      {
+        daxa_u32* manifold_color = (daxa_u32*)(CP.task_head.manifold_color);
+        gc = manifold_color[compute_i.x];
+        colored = gc < BB_MAX_COLORS;
+      }
+      if (colored)
       {
         // golden-ratio hue scramble: adjacent graph colors land far apart on the hue wheel,
-        // so the ~8 colors actually used stay clearly distinguishable
+        // so the colors actually used stay clearly distinguishable
         daxa::f32 h = frac((daxa::f32)gc * 0.6180339887f) * 6.0f;
         gcol = clamp(daxa::f32vec3(abs(h - 3.0f) - 1.0f, 2.0f - abs(h - 2.0f), 2.0f - abs(h - 4.0f)), 0.0f, 1.0f);
       }
