@@ -95,6 +95,12 @@ int main()
       rigid_body_manager->set_sim_flags(SimFlag::DETERMINISTIC);
       std::cout << "[AUTOSTART] DETERMINISTIC mode ON (post-stab skipped -> cross-launch reproducible)" << std::endl;
     }
+    // Enable the determinism debug hashes (dbg_*) only when actually measuring determinism; otherwise
+    // they stay off so their per-body/per-manifold atomics + chain-walk don't cost in normal runs.
+    if (std::getenv("BB_DET_STEPS") || std::getenv("BB_DET_INPROC") || std::getenv("BB_DETERMINISTIC")) {
+      rigid_body_manager->set_sim_flags(SimFlag::DET_HASHES);
+      std::cout << "[AUTOSTART] determinism debug hashes ON" << std::endl;
+    }
 
     // Main loop
     renderer->render();
