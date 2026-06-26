@@ -28,6 +28,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
     pipeline_NPD = task_manager->create_compute(NarrowPhaseDispatcherInfo{}.info);
     pipeline_NP = task_manager->create_compute(NarrowPhaseInfo{}.info);
+    pipeline_CHS = task_manager->create_compute(ChainSortInfo{}.info);
     pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
     pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
     pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
@@ -67,6 +68,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_AVBD_CR = task_manager->create_compute(AvbdColorResetInfo{}.info);
     pipeline_AVBD_CRND = task_manager->create_compute(AvbdColorRoundInfo{}.info);
     pipeline_AVBD_CV = task_manager->create_compute(AvbdColorValidateInfo{}.info);
+    pipeline_AVBD_CMT = task_manager->create_compute(AvbdColorCommitInfo{}.info);
     pipeline_AVBD_PRE = task_manager->create_compute(AvbdPrepareInfo{}.info);
     pipeline_AVBD_FIN = task_manager->create_compute(AvbdFinalizeInfo{}.info);
     pipeline_AVBD_WS = task_manager->create_compute(AvbdWarmstartInfo{}.info);
@@ -343,7 +345,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         // dbg_fresh accumulates in the narrow phase, so its reset must precede it (the
         // graph-coloring stat reset runs between narrow phase and readback and would
         // wipe the value before the CPU ever saw it)
-        auto reset_fresh = std::array<daxa_u32, 7>{}; // dbg_fresh..dbg_dm_mon (per-frame block;
+        auto reset_fresh = std::array<daxa_u32, 19>{}; // dbg_fresh..dbg_state_pad (per-frame block;
                                                       // dm_ids/walk_a/walk_b persist as the latch)
         allocate_fill_copy(ti, reset_fresh, ti.get(task_sim_config), offsetof(SimConfig, dbg_fresh));
 
@@ -650,6 +652,36 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        daxa::attachment_view(NarrowPhaseTaskHead::AT.scratch_body_links, task_scratch_body_links),
                    },
                    user_callback_NP);
+
+  // canonical chain sort (determinism): per-body pass right after the narrow phase
+  // reorders each dynamic body's manifold chain by persistent pair key, so every
+  // downstream chain walk (AVBD primal gather, coloring adjacency) accumulates in an
+  // order that is a pure function of the contact graph, not of the atomic insertion race
+  auto user_callback_CHS = [this](daxa::TaskInterface ti, auto &)
+  {
+    ti.recorder.set_pipeline(*pipeline_CHS);
+    ti.recorder.push_constant(NarrowPhasePushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = (MAX_RIGID_BODY_COUNT + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X, .y = 1, .z = 1});
+  };
+  using TTask_CHS = TaskTemplate<NarrowPhaseTaskHead::Task, decltype(user_callback_CHS)>;
+  TTask_CHS task_CHS(std::array{
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.sim_config, task_sim_config),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.previous_sim_config, task_old_sim_config),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.broad_phase_collisions, task_broad_phase_collisions),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_body_map, task_rigid_body_entries),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_body_link_manifolds, task_rigid_body_link_manifolds),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.collision_map, task_collision_entries),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.collisions, task_collision_scratch),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.rigid_body_map_prev, task_previous_rigid_body_entries),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.previous_rigid_bodies, task_previous_rigid_bodies),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.previous_rigid_body_link_manifolds, task_previous_rigid_body_link_manifolds),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.collision_map_prev, task_collision_entries_previous),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.old_collisions, task_old_collisions),
+                         daxa::attachment_view(NarrowPhaseTaskHead::AT.scratch_body_links, task_scratch_body_links),
+                     },
+                     user_callback_CHS);
 
   auto user_callback_advect = [this](daxa::TaskInterface ti, auto &)
   {
@@ -1247,6 +1279,17 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_AVBD_CV = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_CV)>;
   TTask_AVBD_CV task_AVBD_CV(avbd_views, user_callback_AVBD_CV);
 
+  // commit phase paired with each JP round (race-free body coloring). Vector of identical tasks so
+  // each round gets its own committed-color barrier before the next round reads neighbor colors.
+  auto user_callback_AVBD_CMT = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CMT, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_CMT = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_CMT)>;
+  std::vector<TTask_AVBD_CMT> task_AVBD_CMT_vec;
+  task_AVBD_CMT_vec.reserve(BB_AVBD_COLOR_ROUNDS);
+  for (daxa_u32 rd = 0u; rd < BB_AVBD_COLOR_ROUNDS; ++rd)
+  {
+    task_AVBD_CMT_vec.emplace_back(avbd_views, user_callback_AVBD_CMT);
+  }
+
   auto user_callback_AVBD_PRE = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRE, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
   using TTask_AVBD_PRE = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_PRE)>;
   TTask_AVBD_PRE task_AVBD_PRE(avbd_views, user_callback_AVBD_PRE);
@@ -1399,6 +1442,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   G.add_task(task_BP);
   G.add_task(task_NPD);
   G.add_task(task_NP);
+  G.add_task(task_CHS); // determinism: canonical chain sort (post-NP, before advect)
   G.add_task(task_advect);
   G.add_task(task_IC);
   G.add_task(task_CS_dispatcher);
@@ -1451,7 +1495,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   G.add_task(task_AVBD_CR);
   for (daxa_u32 rd = 0u; rd < BB_AVBD_COLOR_ROUNDS; ++rd)
   {
-    G.add_task(task_AVBD_CRND_vec[rd]);
+    G.add_task(task_AVBD_CRND_vec[rd]); // propose (writes proposed_color, reads stable body_color)
+    G.add_task(task_AVBD_CMT_vec[rd]);  // commit proposed_color -> body_color (barrier between rounds)
   }
   G.add_task(task_AVBD_CV);
   G.add_task(task_AVBD_PRE); // AVBD: save step-start pose + jump to the inertial target

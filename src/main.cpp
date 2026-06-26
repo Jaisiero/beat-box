@@ -91,6 +91,10 @@ int main()
       status_manager->switch_simulating();
       std::cout << "[AUTOSTART] simulating ON" << std::endl;
     }
+    if (std::getenv("BB_DETERMINISTIC")) {
+      rigid_body_manager->set_sim_flags(SimFlag::DETERMINISTIC);
+      std::cout << "[AUTOSTART] DETERMINISTIC mode ON (post-stab skipped -> cross-launch reproducible)" << std::endl;
+    }
 
     // Main loop
     renderer->render();

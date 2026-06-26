@@ -158,6 +158,11 @@ enum SimFlag : daxa_u32
   USE_GRAPH_COLORING = 1 << 5, // solve contacts by graph color (parallel) instead of by contact-island (serial-per-island)
   DEBUG_GRAPH_COLORS = 1 << 6, // tint contact debug geometry by each manifold's graph color
   SLEEPING_ENABLED = 1 << 7,   // island sleeping: resting islands stop advecting/solving/integrating
+  DETERMINISTIC = 1 << 8,      // cross-launch reproducibility mode: skip the alpha=0 post-stab (its
+                               // over-constrained depenetration has no unique fixed point, so its
+                               // layout-dependent per-sweep noise can't converge out -> ph=cph, which
+                               // IS bitwise-deterministic across launches). Trades depenetration depth
+                               // for reproducibility; the converged main solve + rest state are unaffected.
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 SimFlag  operator|(SimFlag a, SimFlag b)
@@ -628,6 +633,24 @@ struct SimConfig
                                    // 1 = an NP thread processed the pair this frame,
                                    // 2 = SAT produced a manifold, 4 = warm-start matched.
                                    // Anomaly frames read 0 (broad miss!) or 1 (SAT false)
+  daxa_u32 dbg_poshash;            // DETERMINISM gauge: XOR of asuint(position.xyz) over all
+                                   // dynamic bodies (XOR = exactly order-independent). Two
+                                   // same-seed runs must produce identical values at rest;
+                                   // the first diverging frame localizes residual
+                                   // nondeterminism. Constant once the pile fully sleeps.
+  daxa_u32 dbg_rothash;            // same, over asuint(rotation.xyzw)
+  daxa_u32 dbg_cp_poshash;         // DETERMINISM CHECKPOINT (debug): same XOR hash but written at
+  daxa_u32 dbg_cp_rothash;         // entry_avbd_finalize (after the main primal/dual sweeps, BEFORE
+                                   // impact+post-stab). cp diverges with poshash => main solve is the
+                                   // source; cp matches but poshash diverges => impact/post-stab is.
+  daxa_u32 dbg_cp2_poshash;        // SECOND checkpoint at entry_avbd_prepare (post free-fall predict,
+  daxa_u32 dbg_cp2_rothash;        // PRE-primal). cp2 matches but cp diverges => the primal sweeps.
+  daxa_u32 dbg_vh_fin;             // velocity+omega hash at FIN end (PRE-impact): diverges => FIN/sponge
+  daxa_u32 dbg_vh_imp;             // velocity+omega hash at impact-apply end (POST-impact): => impact
+  daxa_u32 dbg_color_hash;         // XOR hash of body_color (entry_avbd_color_validate): diverges =>
+  daxa_u32 dbg_color_pad;          // (repurposed = full contact-geometry lh hash, computed in IMPJ)
+  daxa_u32 dbg_state_hash;         // XOR hash of avbd_state (pos_tilde+support_depth) — un-hashed
+  daxa_u32 dbg_state_pad;          // read of the post-stab; diverges => avbd_state is process-specific
                                    // --- per-frame reset boundary (see reset_fresh array) ---
   daxa_u32 dbg_dm_ids;             // PERSISTENT: first deep-MISS pair ever ((idA<<16)|idB)
   daxa_u32 dbg_dm_walk_a;          // PERSISTENT: that event's chain-walk forensics
@@ -1027,6 +1050,9 @@ struct AvbdBodyState {
   daxa_u32 support_depth; // shock propagation: contact-graph BFS distance from static
                           // or sleeping support (0 = static/sleeping, 1 = resting on it,
                           // ...; MAX_U32 = unsupported/free-falling). Rebuilt every step.
+  daxa_u32 proposed_color; // JP body-coloring: the color a round PROPOSES (committed to body_color
+                           // by entry_avbd_color_commit). Keeping the proposal out of body_color
+                           // makes the per-round read of a neighbor's color race-free (determinism).
 };
 DAXA_DECL_BUFFER_PTR(AvbdBodyState)
 

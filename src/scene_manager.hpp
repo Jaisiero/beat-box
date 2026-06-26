@@ -853,8 +853,11 @@ public:
       return false;
     }
 
-    std::random_device rd; // obtain a random number from hardware
-    gen = std::mt19937(rd()); // seed the generator
+    // FIXED SEED (determinism): scene spawns must be identical run to run so that
+    // same-machine replays, golden-trace regression and solver A/Bs compare like with
+    // like (landing variance was the dominant measurement noise of the whole solver
+    // campaign). Change the constant to explore different pilings.
+    gen = std::mt19937(0xBEA7B0C5u);
 
     // Scene dispatch by current_scene (set at startup default + switched at runtime via F1-F8).
     // scene_1 .. scene_8 are compile-time builders; switch_scene() resets the host state so a

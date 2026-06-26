@@ -140,6 +140,20 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   r->position = r->position + r->velocity * dt + daxa_f32vec3(0.0f, grav, 0.0f) * (accel_w * dt * dt);
   r->rotation.v = q_tilde.v;
   r->rotation.w = q_tilde.w;
+
+  // DETERMINISM CHECKPOINT 2 (debug): hash the post-PRE (predicted) pose, BEFORE the primal sweeps.
+  // cp2 matches but cp (FIN) diverges => the primal sweeps are the source. Same gate as the FIN hash.
+  if (avbd_is_dynamic(r) && (r->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE)
+  {
+    daxa_u32 c2ph = asuint(r->position.x) ^ (asuint(r->position.y) * 0x9e3779b9u) ^
+                    (asuint(r->position.z) * 0x85ebca6bu) ^ (r->id * 0xc2b2ae35u);
+    daxa_u32 c2rh = asuint(r->rotation.v.x) ^ (asuint(r->rotation.v.y) * 0x9e3779b9u) ^
+                    (asuint(r->rotation.v.z) * 0x85ebca6bu) ^ (asuint(r->rotation.w) * 0x27d4eb2fu) ^
+                    (r->id * 0xc2b2ae35u);
+    daxa_u32 _c2prev;
+    InterlockedXor(sim_config->dbg_cp2_poshash, c2ph, _c2prev);
+    InterlockedXor(sim_config->dbg_cp2_rothash, c2rh, _c2prev);
+  }
 }
 
 // Reconstructs velocities from the pose delta (BDF1): v = (x - x_start)/dt,
@@ -181,6 +195,49 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   daxa_f32 sign = dq.w < 0.0f ? -1.0f : 1.0f;
   r->omega = dq.v * (2.0f * sign * inv_dt);
 
+  // DETERMINISM CHECKPOINT (debug): hash the post-main-solve pose here (impact + post-stab have
+  // not moved it yet), mirroring the end-of-step gauge in entry_rigid_body_update. Comparing cp vs
+  // poshash between two runs localizes whether the divergence enters the main solve or after it.
+  {
+    daxa_u32 cph = asuint(r->position.x) ^ (asuint(r->position.y) * 0x9e3779b9u) ^
+                   (asuint(r->position.z) * 0x85ebca6bu) ^ (r->id * 0xc2b2ae35u);
+    daxa_u32 crh = asuint(r->rotation.v.x) ^ (asuint(r->rotation.v.y) * 0x9e3779b9u) ^
+                   (asuint(r->rotation.v.z) * 0x85ebca6bu) ^ (asuint(r->rotation.w) * 0x27d4eb2fu) ^
+                   (r->id * 0xc2b2ae35u);
+    daxa_u32 _cprev;
+    InterlockedXor(sim_config->dbg_cp_poshash, cph, _cprev);
+    InterlockedXor(sim_config->dbg_cp_rothash, crh, _cprev);
+    // avbd_state hash (pos_tilde + support_depth) — un-hashed inputs the post-stab reads regardless
+    // of the layer filter. Diverges cross-process => an avbd_state field is process-specific.
+    daxa_u32 sh = asuint(s->pos_tilde.x) ^ (asuint(s->pos_tilde.y) * 0x9e3779b9u) ^
+                  (asuint(s->pos_tilde.z) * 0x85ebca6bu) ^ (s->support_depth * 0x27d4eb2fu) ^ (r->id * 0xc2b2ae35u);
+    InterlockedXor(sim_config->dbg_state_hash, sh, _cprev);
+    // CHAIN-WALK hash: replicate the primal's chain walk and roll a hash over the RESOLVED partner
+    // ids + walk order. The post-stab primal processes contacts via this walk; if collision_map
+    // resolution (allocation-order dependent) MISSES a contact in one launch but not the other, the
+    // processed SET differs while lh (per-manifold direct) still matches. Diverges => deep-miss is it.
+    {
+      ManifoldNode* mnodes = (ManifoldNode*)(AVBD_PC.task_head.manifold_nodes);
+      CollisionEntry* cmap = (CollisionEntry*)(AVBD_PC.task_head.collision_map);
+      Manifold* colls = (Manifold*)(AVBD_PC.task_head.collisions);
+      daxa_u32 mnc = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+      daxa_u32 ccnt = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+      daxa_u32 wh = r->id + 1u;
+      daxa_u32 wnode = r->manifold_node_index;
+      daxa_u32 wsteps = 0u;
+      while (wnode != MAX_U32 && wsteps < mnc)
+      {
+        daxa_u32 wpacked = avbd_node_to_packed(wnode, mnc, ccnt, mnodes, cmap);
+        daxa_u32 token = (wpacked != MAX_U32) ? (avbd_partner(&colls[wpacked], i) + 1u) : 0xDEADu;
+        wh = wh * 0x9e3779b9u + token; // order-sensitive
+        daxa_i32 wnx = mnodes[wnode].next;
+        wnode = wnx < 0 ? MAX_U32 : daxa_u32(wnx);
+        ++wsteps;
+      }
+      InterlockedXor(sim_config->dbg_state_pad, wh, _cprev);
+    }
+  }
+
   // SETTLE ASSIST: a body that is clearly part of a settled pile (3+ manifolds) and
   // already slow gets its residual micro-velocity sponged exponentially, so the crust
   // crosses the sleep threshold (0.12 m/s for 30 steps) in a fraction of a second
@@ -213,6 +270,14 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
       r->velocity *= 0.9f;
       r->omega *= 0.9f;
     }
+  }
+
+  // DETERMINISM velocity checkpoint (debug): post-FIN velocity+omega (PRE-impact).
+  {
+    daxa_u32 vh = asuint(r->velocity.x) ^ (asuint(r->velocity.y) * 0x9e3779b9u) ^ (asuint(r->velocity.z) * 0x85ebca6bu)
+                ^ (asuint(r->omega.x) * 0x27d4eb2fu) ^ (asuint(r->omega.y) * 0x165667b1u) ^ (asuint(r->omega.z) * 0xc2b2ae35u)
+                ^ (r->id * 0x9e3779b9u);
+    daxa_u32 _vp; InterlockedXor(sim_config->dbg_vh_fin, vh, _vp);
   }
 }
 
@@ -495,6 +560,13 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
 {
   SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
   if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  // DETERMINISM mode: skip the non-convergent alpha=0 post-stab (the driver's per-launch SPIR-V->ISA
+  // codegen perturbs its FP sub-ULP, and with no unique fixed point it can't converge that out). ph
+  // collapses to cph (the CONVERGED main solve), which IS bitwise-deterministic. Main sweeps untouched.
+  if (AVBD_PC.stab_alpha < 0.5f && sim_config->has_flag(SimFlag::DETERMINISTIC))
   {
     return;
   }
@@ -875,6 +947,35 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     return;
   }
   Manifold* m = &((Manifold*)(AVBD_PC.task_head.collisions))[m_idx];
+
+  // DETERMINISM (debug): hash this manifold's final main-solve contact lambda/k (post-dual, pre
+  // post-stab). Keyed by body indices => order-independent + deterministic. If dbg_color_pad
+  // diverges while cph (pose) matches, the per-contact LAMBDA/K is the non-deterministic carrier
+  // the post-stab amplifies (the pose converges; lambda need not).
+  {
+    daxa_u32 hcc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
+    daxa_u32 lh = (m->obb1_index * 0x9e3779b9u) ^ (m->obb2_index * 0x85ebca6bu);
+    lh ^= asuint(m->normal.x) ^ (asuint(m->normal.y) * 0x27d4eb2fu) ^ (asuint(m->normal.z) * 0x165667b1u);
+    lh ^= asuint(m->tangent_vectors[0].x) ^ (asuint(m->tangent_vectors[0].y) * 0x9e3779b9u) ^ (asuint(m->tangent_vectors[1].z) * 0x85ebca6bu);
+    for (daxa_u32 hj = 0u; hj < hcc; ++hj)
+    {
+      lh ^= asuint(m->contacts[hj].normal_impulse) * 0x27d4eb2fu;
+      lh ^= asuint(m->contacts[hj].mass_coefficient) * 0x165667b1u;
+      lh ^= asuint(m->contacts[hj].position.x) ^ (asuint(m->contacts[hj].position.y) * 0x9e3779b9u) ^ (asuint(m->contacts[hj].position.z) * 0x85ebca6bu);
+      lh ^= asuint(m->contacts[hj].penetration) * 0xc2b2ae35u;
+      lh ^= asuint(m->contacts[hj].anchor_a.x) ^ (asuint(m->contacts[hj].anchor_a.y) * 0x27d4eb2fu) ^ (asuint(m->contacts[hj].anchor_a.z) * 0x165667b1u);
+      lh ^= asuint(m->contacts[hj].anchor_b.x) ^ (asuint(m->contacts[hj].anchor_b.y) * 0x9e3779b9u) ^ (asuint(m->contacts[hj].anchor_b.z) * 0x85ebca6bu);
+      lh ^= m->contacts[hj].stick * 0x27d4eb2fu;
+      lh ^= asuint(m->contacts[hj].tangent_impulse[0]) ^ (asuint(m->contacts[hj].tangent_impulse[1]) * 0xc2b2ae35u);
+      // the post-stab primal reads tangent_mass (friction rows) — NOT hashed before; prime uninit suspect
+      lh ^= asuint(m->contacts[hj].tangent_mass[0]) * 0x9e3779b9u ^ (asuint(m->contacts[hj].tangent_mass[1]) * 0x85ebca6bu);
+      lh ^= asuint(m->contacts[hj].normal_mass) * 0x27d4eb2fu;
+      lh ^= asuint(m->contacts[hj].bias_factor) ^ (asuint(m->contacts[hj].impulse_coefficient) * 0x165667b1u);
+    }
+    daxa_u32 _lp;
+    InterlockedXor(sim_config->dbg_color_pad, lh, _lp);
+  }
+
   daxa_u32 b1, b2;
   if (!avbd_impact_pair_gates(sim_config, m, b1, b2))
   {
@@ -995,6 +1096,13 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   }
   r->velocity += dv;
   r->omega += dw;
+  // DETERMINISM velocity checkpoint (debug): post-impact velocity+omega.
+  {
+    daxa_u32 vh = asuint(r->velocity.x) ^ (asuint(r->velocity.y) * 0x9e3779b9u) ^ (asuint(r->velocity.z) * 0x85ebca6bu)
+                ^ (asuint(r->omega.x) * 0x27d4eb2fu) ^ (asuint(r->omega.y) * 0x165667b1u) ^ (asuint(r->omega.z) * 0xc2b2ae35u)
+                ^ (r->id * 0x9e3779b9u);
+    daxa_u32 _vp; InterlockedXor(sim_config->dbg_vh_imp, vh, _vp);
+  }
 }
 
 // ----- deep-pocket oscillator trace (diagnostic, per-frame CSV via SimConfig latch) -----
@@ -1083,6 +1191,7 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   }
   daxa_u32* body_color = (daxa_u32*)(AVBD_PC.task_head.body_color);
   body_color[i] = AVBD_UNCOLORED;
+  ((AvbdBodyState*)(AVBD_PC.task_head.avbd_state))[i].proposed_color = AVBD_UNCOLORED;
 }
 
 // One Jones-Plassmann round (push constant = round number): an uncolored body colors itself when
@@ -1165,7 +1274,34 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   {
     return;
   }
-  body_color[i] = c;
+  // PROPOSE, do not commit: write proposed_color, NOT body_color. entry_avbd_color_commit copies it
+  // to body_color after a barrier. Writing body_color here raced the neighbor reads above (a thread
+  // could see a neighbor's same-round commit or not depending on warp order -> nondeterministic
+  // coloring -> nondeterministic per-color solve order -> the main-solve divergence).
+  ((AvbdBodyState*)(AVBD_PC.task_head.avbd_state))[i].proposed_color = c;
+}
+
+// Commit phase of a JP round: copy each body's proposed color into body_color. Separated from the
+// round (a barrier between) so the round's neighbor-color reads never observe a same-round write.
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_color_commit(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+  daxa_u32* body_color = (daxa_u32*)(AVBD_PC.task_head.body_color);
+  if (body_color[i] != AVBD_UNCOLORED)
+  {
+    return; // already committed in an earlier round
+  }
+  daxa_u32 prop = ((AvbdBodyState*)(AVBD_PC.task_head.avbd_state))[i].proposed_color;
+  if (prop < BB_AVBD_MAX_BODY_COLORS)
+  {
+    body_color[i] = prop;
+  }
 }
 
 // validator: no two adjacent dynamic bodies share a color; uncolored dynamic bodies WITH
@@ -1189,6 +1325,14 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
 
   daxa_u32* body_color = (daxa_u32*)(AVBD_PC.task_head.body_color);
   daxa_u32 my_color = body_color[i];
+
+  // DETERMINISM (debug): hash this body's assigned color. If dbg_color_hash diverges between two
+  // runs at the same step, the BODY COLORING is non-deterministic (different valid coloring =>
+  // different per-color sweep order => exposed by the non-converged post-stab).
+  {
+    daxa_u32 _ch;
+    InterlockedXor(sim_config->dbg_color_hash, (i + 1u) * (my_color + 1u) * 0x9e3779b9u, _ch);
+  }
 
   ManifoldNode* manifold_nodes = (ManifoldNode*)(AVBD_PC.task_head.manifold_nodes);
   CollisionEntry* collision_map = (CollisionEntry*)(AVBD_PC.task_head.collision_map);
