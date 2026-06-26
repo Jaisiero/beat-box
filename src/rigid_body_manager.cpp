@@ -338,7 +338,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         // dbg_fresh accumulates in the narrow phase, so its reset must precede it (the
         // graph-coloring stat reset runs between narrow phase and readback and would
         // wipe the value before the CPU ever saw it)
-        auto reset_fresh = std::array<daxa_u32, 11>{}; // dbg_fresh..dbg_cp_rothash (per-frame block;
+        auto reset_fresh = std::array<daxa_u32, 19>{}; // dbg_fresh..dbg_state_pad (per-frame block;
                                                       // dm_ids/walk_a/walk_b persist as the latch)
         allocate_fill_copy(ti, reset_fresh, ti.get(task_sim_config), offsetof(SimConfig, dbg_fresh));
 

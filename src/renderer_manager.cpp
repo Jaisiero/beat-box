@@ -234,6 +234,19 @@ void RendererManager::render()
   // captured [PERF] log self-terminates and A/B solver measurement runs are reproducible. 0 = no limit.
   double run_limit_s = 0.0;
   if (const char *e = std::getenv("BB_RUN_SECONDS")) run_limit_s = std::atof(e);
+  // DETERMINISM debug mode (BB_DET_STEPS=N): exactly one sim step per render frame, wall-clock
+  // ignored, so two runs execute a bit-identical step sequence (isolates kernel races from the
+  // real-time catch-up). Prints every step's pose hash; exits after N steps. 0 = off.
+  int det_steps = 0;
+  if (const char *e = std::getenv("BB_DET_STEPS")) det_steps = std::atoi(e);
+  bool det_inited = false; daxa_u32 det_count = 0u;
+  // BB_DET_INPROC=1: after N steps, reset to the IDENTICAL initial state and run N again IN THE SAME
+  // PROCESS, comparing a cumulative path-hash. If the two passes DIFFER, the AVBD solve is genuinely
+  // GPU-kernel non-deterministic (same process, GPU, buffer addresses); if they MATCH but cross-
+  // process diverges, the source is process-specific (addresses/driver state).
+  bool det_inproc = std::getenv("BB_DET_INPROC") != nullptr;
+  int det_pass = 1; daxa_u32 det_hashA = 0u; daxa_u32 det_acc = 0u;
+  if (det_steps > 0) { status_manager->request_scene(3); } // self-contained: load scene_3 fresh
   auto const run_start = std::chrono::steady_clock::now();
   while (!window.should_close())
   {
@@ -280,6 +293,59 @@ void RendererManager::render()
     // 60/MAX_CATCHUP_STEPS fps the sim slows down instead of spiraling.
     constexpr daxa_u32 MAX_CATCHUP_STEPS = 4u;
     daxa_u32 sim_steps_this_frame = 0u;
+    if (det_steps > 0)
+    {
+      // Deterministic stepping: one step per frame, wall-clock ignored, scene_3 self-loaded fresh.
+      // Two runs thus execute a bit-identical step sequence from an identical initial state; any
+      // divergence is a true kernel race, not real-time pacing. Local counter = same step ids both runs.
+      if (!det_inited)
+      {
+        // iter 1: scene_3 was just consumed/loaded at the top of this frame; enable simulating and
+        // begin counting from the fresh initial state on the NEXT frame.
+        if (!status_manager->is_simulating()) { status_manager->switch_simulating(); }
+        det_inited = true;
+      }
+      else
+      {
+        gpu->synchronize();
+        rigid_body_manager->simulate();
+        gpu->synchronize();
+        sim_steps_this_frame = 1u;
+        ++det_count;
+        rigid_body_manager->read_back_sim_config();
+        auto const &dsc = rigid_body_manager->get_sim_config_reference();
+        std::cout << "DET step=" << det_count << std::hex << " ph=" << dsc.dbg_poshash
+                  << " rh=" << dsc.dbg_rothash << " cp2=" << dsc.dbg_cp2_poshash
+                  << " cph=" << dsc.dbg_cp_poshash << " vhf=" << dsc.dbg_vh_fin
+                  << " vhi=" << dsc.dbg_vh_imp << " chash=" << dsc.dbg_color_hash
+                  << " lh=" << dsc.dbg_color_pad << " sh=" << dsc.dbg_state_hash
+                  << " wh=" << dsc.dbg_state_pad
+                  << std::dec << " viol=" << dsc.avbd_violations << std::endl;
+        det_acc = det_acc * 0x9e3779b9u + dsc.dbg_poshash; // cumulative path hash (catches transient divergence)
+        if (det_count >= (daxa_u32)det_steps)
+        {
+          if (det_inproc && det_pass == 1)
+          {
+            det_hashA = det_acc;
+            std::cout << "INPROC passA acc=" << std::hex << det_acc << std::dec << " -> reset + replay" << std::endl;
+            scene_manager->reset();   // reload scene_3 to the IDENTICAL initial state
+            sim_accum_s = 0.0;
+            det_count = 0u; det_acc = 0u; det_pass = 2; det_inited = false; // re-arm for pass 2
+          }
+          else
+          {
+            if (det_inproc)
+            {
+              std::cout << "INPROC A=" << std::hex << det_hashA << " B=" << det_acc << std::dec
+                        << ((det_hashA == det_acc) ? "  => IN-PROCESS MATCH (deterministic; cross-process source)"
+                                                   : "  => IN-PROCESS DIFF (GPU-kernel non-determinism)") << std::endl;
+            }
+            break;
+          }
+        }
+      }
+    }
+    else
     {
       auto const sim_clock_now = std::chrono::steady_clock::now();
       double const elapsed_s = std::chrono::duration<double>(sim_clock_now - sim_clock_prev).count();
@@ -374,7 +440,9 @@ void RendererManager::render()
                     << " A:" << dm_walk_str(sc.dbg_dm_walk_a) << " B:" << dm_walk_str(sc.dbg_dm_walk_b) << "]"
                     << " np=" << sc.dbg_np_processed << "/" << sc.broad_phase_collision_count
                     << std::hex << " ph=" << sc.dbg_poshash << " rh=" << sc.dbg_rothash
-                    << " cph=" << sc.dbg_cp_poshash << " crh=" << sc.dbg_cp_rothash << std::dec
+                    << " cph=" << sc.dbg_cp_poshash << " crh=" << sc.dbg_cp_rothash
+                    << " c2ph=" << sc.dbg_cp2_poshash << " c2rh=" << sc.dbg_cp2_rothash
+                    << " vhf=" << sc.dbg_vh_fin << " vhi=" << sc.dbg_vh_imp << std::dec
                     << " pen=" << sc.dbg_pen
                     << " miny=" << (sc.dbg_min_y == 0xFFFFFFFFu ? 0.0 : (double)sc.dbg_min_y / 1000.0 - 100.0)
                     << " deep100=" << sc.dbg_deep100 << " deep200=" << sc.dbg_deep200
