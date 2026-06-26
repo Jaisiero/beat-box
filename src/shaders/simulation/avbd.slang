@@ -143,7 +143,7 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
 
   // DETERMINISM CHECKPOINT 2 (debug): hash the post-PRE (predicted) pose, BEFORE the primal sweeps.
   // cp2 matches but cp (FIN) diverges => the primal sweeps are the source. Same gate as the FIN hash.
-  if (avbd_is_dynamic(r) && (r->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE)
+  if (sim_config->has_flag(SimFlag::DET_HASHES) && avbd_is_dynamic(r) && (r->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE)
   {
     daxa_u32 c2ph = asuint(r->position.x) ^ (asuint(r->position.y) * 0x9e3779b9u) ^
                     (asuint(r->position.z) * 0x85ebca6bu) ^ (r->id * 0xc2b2ae35u);
@@ -198,6 +198,8 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   // DETERMINISM CHECKPOINT (debug): hash the post-main-solve pose here (impact + post-stab have
   // not moved it yet), mirroring the end-of-step gauge in entry_rigid_body_update. Comparing cp vs
   // poshash between two runs localizes whether the divergence enters the main solve or after it.
+  // Gated: only runs while measuring determinism (the chain-walk hash below is not free).
+  if (sim_config->has_flag(SimFlag::DET_HASHES))
   {
     daxa_u32 cph = asuint(r->position.x) ^ (asuint(r->position.y) * 0x9e3779b9u) ^
                    (asuint(r->position.z) * 0x85ebca6bu) ^ (r->id * 0xc2b2ae35u);
@@ -273,6 +275,7 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   }
 
   // DETERMINISM velocity checkpoint (debug): post-FIN velocity+omega (PRE-impact).
+  if (sim_config->has_flag(SimFlag::DET_HASHES))
   {
     daxa_u32 vh = asuint(r->velocity.x) ^ (asuint(r->velocity.y) * 0x9e3779b9u) ^ (asuint(r->velocity.z) * 0x85ebca6bu)
                 ^ (asuint(r->omega.x) * 0x27d4eb2fu) ^ (asuint(r->omega.y) * 0x165667b1u) ^ (asuint(r->omega.z) * 0xc2b2ae35u)
@@ -952,6 +955,7 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   // post-stab). Keyed by body indices => order-independent + deterministic. If dbg_color_pad
   // diverges while cph (pose) matches, the per-contact LAMBDA/K is the non-deterministic carrier
   // the post-stab amplifies (the pose converges; lambda need not).
+  if (sim_config->has_flag(SimFlag::DET_HASHES))
   {
     daxa_u32 hcc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
     daxa_u32 lh = (m->obb1_index * 0x9e3779b9u) ^ (m->obb2_index * 0x85ebca6bu);
@@ -1097,6 +1101,7 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   r->velocity += dv;
   r->omega += dw;
   // DETERMINISM velocity checkpoint (debug): post-impact velocity+omega.
+  if (sim_config->has_flag(SimFlag::DET_HASHES))
   {
     daxa_u32 vh = asuint(r->velocity.x) ^ (asuint(r->velocity.y) * 0x9e3779b9u) ^ (asuint(r->velocity.z) * 0x85ebca6bu)
                 ^ (asuint(r->omega.x) * 0x27d4eb2fu) ^ (asuint(r->omega.y) * 0x165667b1u) ^ (asuint(r->omega.z) * 0xc2b2ae35u)
@@ -1329,6 +1334,7 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   // DETERMINISM (debug): hash this body's assigned color. If dbg_color_hash diverges between two
   // runs at the same step, the BODY COLORING is non-deterministic (different valid coloring =>
   // different per-color sweep order => exposed by the non-converged post-stab).
+  if (sim_config->has_flag(SimFlag::DET_HASHES))
   {
     daxa_u32 _ch;
     InterlockedXor(sim_config->dbg_color_hash, (i + 1u) * (my_color + 1u) * 0x9e3779b9u, _ch);

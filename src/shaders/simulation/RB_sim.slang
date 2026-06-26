@@ -1868,13 +1868,16 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     // commutative/associative, so the hash is independent of thread order - two same-seed
     // runs must print identical values (constant once the pile fully sleeps); the first
     // diverging sample localizes any residual nondeterminism.
-    daxa_u32 ph = asuint(r->position.x) ^ (asuint(r->position.y) * 0x9e3779b9u) ^
-                  (asuint(r->position.z) * 0x85ebca6bu) ^ (r->id * 0xc2b2ae35u);
-    daxa_u32 rh = asuint(r->rotation.v.x) ^ (asuint(r->rotation.v.y) * 0x9e3779b9u) ^
-                  (asuint(r->rotation.v.z) * 0x85ebca6bu) ^ (asuint(r->rotation.w) * 0x27d4eb2fu) ^
-                  (r->id * 0xc2b2ae35u);
-    InterlockedXor(sim_config->dbg_poshash, ph, _prev);
-    InterlockedXor(sim_config->dbg_rothash, rh, _prev);
+    if (sim_config->has_flag(SimFlag::DET_HASHES))
+    {
+      daxa_u32 ph = asuint(r->position.x) ^ (asuint(r->position.y) * 0x9e3779b9u) ^
+                    (asuint(r->position.z) * 0x85ebca6bu) ^ (r->id * 0xc2b2ae35u);
+      daxa_u32 rh = asuint(r->rotation.v.x) ^ (asuint(r->rotation.v.y) * 0x9e3779b9u) ^
+                    (asuint(r->rotation.v.z) * 0x85ebca6bu) ^ (asuint(r->rotation.w) * 0x27d4eb2fu) ^
+                    (r->id * 0xc2b2ae35u);
+      InterlockedXor(sim_config->dbg_poshash, ph, _prev);
+      InterlockedXor(sim_config->dbg_rothash, rh, _prev);
+    }
   }
 
   copy_rigid_body_fields(r_copy, r);

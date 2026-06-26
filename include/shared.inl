@@ -163,6 +163,10 @@ enum SimFlag : daxa_u32
                                // layout-dependent per-sweep noise can't converge out -> ph=cph, which
                                // IS bitwise-deterministic across launches). Trades depenetration depth
                                // for reproducibility; the converged main solve + rest state are unaffected.
+  DET_HASHES = 1 << 9,         // compute the determinism debug pose/state hashes (dbg_*). OFF in normal
+                               // runs so the per-body/per-manifold InterlockedXor + the chain-walk hash
+                               // don't add hot-path atomic contention; set by main.cpp when any of
+                               // BB_DET_STEPS / BB_DET_INPROC / BB_DETERMINISTIC is active (the harness).
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 SimFlag  operator|(SimFlag a, SimFlag b)
