@@ -248,6 +248,14 @@ void RendererManager::render()
   int det_pass = 1; daxa_u32 det_hashA = 0u; daxa_u32 det_acc = 0u;
   if (det_steps > 0) { status_manager->request_scene(3); } // self-contained: load scene_3 fresh
   auto const run_start = std::chrono::steady_clock::now();
+  // The acceleration-structure build runs async on COMPUTE_0, and the render graph waits the SIM
+  // timeline (sim_wait_span) -- which is ONLY advanced/signalled by a sim step, never by the scene-load
+  // AS build. So after a scene load/switch the render never waits for the build and traverses an
+  // in-flight BLAS -> cubes render with rounded ("dented") corners until the first sim step. Run ONE
+  // real sim step on scene load/switch: it publishes the AS through the render-synced timeline path
+  // (the only thing that reliably fixes it). Bodies advance one 1/60s step (~3mm of gravity --
+  // imperceptible; the pool is floating mid-air at rest anyway).
+  bool force_sim_step = true;
   while (!window.should_close())
   {
     if (run_limit_s > 0.0 &&
@@ -273,6 +281,7 @@ void RendererManager::render()
     if (status_manager->consume_reset()) {
       scene_manager->reset();
       sim_accum_s = 0.0;
+      force_sim_step = true;
     }
 
     // scene switch request (F1-F8): rebuild from the chosen scene at this same frame boundary,
@@ -280,6 +289,7 @@ void RendererManager::render()
     if (int const requested_scene = status_manager->consume_scene(); requested_scene >= 0) {
       scene_manager->switch_scene(requested_scene);
       sim_accum_s = 0.0;
+      force_sim_step = true;
     }
 
     if(rigid_body_manager->is_dirty()) {
@@ -350,6 +360,17 @@ void RendererManager::render()
       auto const sim_clock_now = std::chrono::steady_clock::now();
       double const elapsed_s = std::chrono::duration<double>(sim_clock_now - sim_clock_prev).count();
       sim_clock_prev = sim_clock_now;
+      // ONE forced step after a scene load/switch to publish the async AS through the render-synced
+      // timeline path (cures the at-rest "dented/rounded cubes"). At rest is_simulating() is false, so
+      // only this runs; sim_steps_this_frame=1 makes the AS-update block below rebuild + signal.
+      if (force_sim_step)
+      {
+        gpu->synchronize();
+        rigid_body_manager->simulate();
+        gpu->synchronize();
+        sim_steps_this_frame = 1u;
+        force_sim_step = false;
+      }
       if (status_manager->is_simulating())
       {
         // during a GUI-toggle hitch, cap the accumulator to ONE step (no burst -> no jerk); the few
