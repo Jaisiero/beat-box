@@ -271,6 +271,20 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
     return false;
   }
 
+  // UNIT-QUATERNION INVARIANT. Hand-authored scene rotations are frequently non-unit (e.g.
+  // (0,0,0.5,1) -> |q|^2=1.25, (0,1,1,0.8) -> |q|^2=2.64). RigidBody::to_matrix() (used to build the
+  // TLAS instance transform) does NOT normalize, while the path tracer's world_to_object() uses the
+  // quaternion sandwich q*.v.q which scales by |q|^2 -- the two diverge for non-unit q, so a cube's
+  // ray-traced traversal AABB and its intersection OBB mismatch and the corners render clipped
+  // ("dented") at rest, until the first sim step (which normalizes the quaternion) hides it.
+  // Enforce the invariant at upload so the AT-REST render is already correct.
+  for (auto &rb : rigid_bodies)
+  {
+    daxa_f32 m2 = rb.rotation.v.x * rb.rotation.v.x + rb.rotation.v.y * rb.rotation.v.y +
+                  rb.rotation.v.z * rb.rotation.v.z + rb.rotation.w * rb.rotation.w;
+    rb.rotation = (m2 > 1.0e-12f) ? rb.rotation.normalize() : Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+  }
+
   // Copy primitives to the buffer
   std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
 
