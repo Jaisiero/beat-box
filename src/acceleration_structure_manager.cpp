@@ -277,11 +277,22 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   // quaternion sandwich q*.v.q which scales by |q|^2 -- the two diverge for non-unit q, so a cube's
   // ray-traced traversal AABB and its intersection OBB mismatch and the corners render clipped
   // ("dented") at rest, until the first sim step (which normalizes the quaternion) hides it.
-  // Enforce the invariant at upload so the AT-REST render is already correct.
-  for (auto &rb : rigid_bodies)
+  // This is the single canonical chokepoint that establishes the invariant (it runs on every AS build:
+  // load, scene switch, runtime spawn) and feeds BOTH the render AS and the sim rigid_body buffers.
+  // Downstream the hot conversions (to_matrix / rotate_vector) rely on it instead of paying a per-call
+  // normalize. (NOT normalized per-call in those: they are on the per-pair / per-ray hot path.)
+  for (size_t i = 0; i < rigid_bodies.size(); ++i)
   {
+    auto &rb = rigid_bodies[i];
     daxa_f32 m2 = rb.rotation.v.x * rb.rotation.v.x + rb.rotation.v.y * rb.rotation.v.y +
                   rb.rotation.v.z * rb.rotation.v.z + rb.rotation.w * rb.rotation.w;
+#if !defined(NDEBUG)
+    // Surface dirty source data to the scene author -- a non-unit authored rotation is the only way the
+    // invariant gets violated, so catch it at the door (we still auto-normalize below).
+    if (m2 > 1.0e-12f && (m2 < 0.999f || m2 > 1.001f))
+      std::cerr << "[WARN] rigid body " << i << " has a non-unit rotation (|q|^2=" << m2
+                << "); auto-normalized. Fix the scene authoring to keep |q| == 1." << std::endl;
+#endif
     rb.rotation = (m2 > 1.0e-12f) ? rb.rotation.normalize() : Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
   }
 
