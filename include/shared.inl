@@ -359,6 +359,11 @@ struct RigidBody
   // voxel collision shape: 0 = none (legacy OBB body), otherwise voxel_shapes[shape_index - 1]
   daxa_u32 shape_index;
   daxa_f32vec3 position;
+  // INVARIANT: unit quaternion (|rotation| == 1). Both rotation->matrix paths assume it:
+  // Quaternion::to_matrix() (math.hpp) and the rotate_vector() sandwich below. A non-unit value makes
+  // them silently diverge (each scales differently by |q|^2) -> at-rest render mismatch. The invariant
+  // is established at scene upload (AccelerationStructureManager::build_accel_structs) and maintained
+  // by integrate_positions() (extensions.slang), which renormalizes after every step.
   Quaternion rotation;
   daxa_f32vec3 minimum;
   daxa_f32vec3 maximum;
@@ -462,6 +467,11 @@ struct RigidBody
   // triggers a whole-struct load through the daxa buffer pointer, which Daxa 3.6
   // pads vec3->16 (corrupting rotation/position). By-ref reads fields with the
   // correct scalar layout. (Method does not actually mutate.)
+  //
+  // PRECONDITION: |rotation| == 1 (see the rotation field's invariant). The sandwich q*.v.q scales the
+  // result by |q|^2 for a non-unit q, so it would diverge from to_matrix(). Deliberately NOT normalized
+  // here: this is on the per-pair collision hot path (collision_detection.slang) and per-ray in the path
+  // tracer (ray_tracing.slang); the invariant already holds upstream, so a normalize() would be pure cost.
   [mutating] daxa_f32vec3 rotate_vector(const daxa_f32vec3 v)
   {
     return (rotation * Quaternion(v, 0) * rotation.conjugate()).v;

@@ -289,6 +289,12 @@ struct Quaternion {
     return Quaternion(-v.x, -v.y, -v.z, w);
   }
 
+  // PRECONDITION: |q| == 1. This is the standard quaternion->matrix; for a non-unit q it yields
+  // |q|^2 * R (a uniformly scaled rotation), which silently diverges from the rotate_vector() sandwich
+  // (shared.inl) used by the path tracer's world_to_object -> at-rest render mismatch ("dented" cubes).
+  // The unit invariant on RigidBody::rotation is enforced at scene upload (build_accel_structs) and
+  // maintained by integrate_positions(). Deliberately NOT normalized here: to_matrix() is on the per-pair
+  // collision hot path (RigidBody::get_rotation_matrix), and the invariant already holds upstream.
   daxa_f32mat3x3 to_matrix() {
     daxa_f32 x2 = v.x + v.x;
     daxa_f32 y2 = v.y + v.y;
