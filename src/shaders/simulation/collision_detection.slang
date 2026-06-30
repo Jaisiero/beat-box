@@ -833,7 +833,10 @@ struct OBBvsOBBCollision {
 
           manifold.contacts[i].fp = out_vertices[i].f;
           manifold.contacts[i].position = out_vertices[i].v;
-          manifold.contacts[i].penetration = depths[i];
+          // A clipped vertex cannot penetrate deeper than the SAT projection overlap (|s_max|) along
+          // the reference normal -- far-side vertices (z near -e.z) otherwise report ~1 cube-length of
+          // bogus depth. Clamp to s_max (the true separation) to kill the gross over-report.
+          manifold.contacts[i].penetration = max(depths[i], s_max);
           manifold.contacts[i].tangent_impulse[0] = manifold.contacts[i].tangent_impulse[1] = manifold.contacts[i].normal_impulse = 0.0f;
           manifold.contacts[i].warm_start = 0u;
         }
@@ -863,7 +866,18 @@ struct OBBvsOBBCollision {
       manifold.normal = normal;
 
       manifold.contacts[0].position = (CA + CB) * 0.5f;
-      manifold.contacts[0].penetration = s_max;
+      // The edge separation s_max = s/|cross| amplifies float noise for near-parallel edges (q_tilt
+      // cubes) and over-reports depth. Clamp to the true overlap along the edge normal (same bound as
+      // the face path); a spurious edge axis (no real overlap) naturally clamps toward separation.
+      {
+        daxa_f32vec3 dd = B->position - A->position;
+        daxa_f32vec3 hA = (A->maximum - A->minimum) * 0.5f;
+        daxa_f32vec3 hB = (B->maximum - B->minimum) * 0.5f;
+        daxa_f32 pA = hA.x * abs(dot(normal, A->rotate_vector(daxa_f32vec3(1,0,0)))) + hA.y * abs(dot(normal, A->rotate_vector(daxa_f32vec3(0,1,0)))) + hA.z * abs(dot(normal, A->rotate_vector(daxa_f32vec3(0,0,1))));
+        daxa_f32 pB = hB.x * abs(dot(normal, B->rotate_vector(daxa_f32vec3(1,0,0)))) + hB.y * abs(dot(normal, B->rotate_vector(daxa_f32vec3(0,1,0)))) + hB.z * abs(dot(normal, B->rotate_vector(daxa_f32vec3(0,0,1))));
+        daxa_f32 ovlp = pA + pB - abs(dot(dd, normal));
+        manifold.contacts[0].penetration = max(s_max, -ovlp);
+      }
       manifold.key_to_fp(axis, manifold.contacts[0].fp);
       manifold.contacts[0].tangent_impulse[0] = manifold.contacts[0].tangent_impulse[1] = manifold.contacts[0].normal_impulse = 0.0f;
       manifold.contacts[0].warm_start = 0u;
