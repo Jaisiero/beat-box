@@ -936,7 +936,7 @@ static const daxa_f32 BB_AVBD_PENALTY_MAX = 1000000000.0f;
 // floor k for deep contacts so they dominate and push out. Trace is the objective judge:
 // global_pen should drop, maxv must NOT spike (a spike = too strong -> avalanche, lower the floor).
 static const daxa_f32 BB_AVBD_DEEP_EXTRACT_THRESH = 0.08f; // contacts deeper than 80mm
-static const daxa_f32 BB_AVBD_DEEP_EXTRACT_K = 2000.0f;    // k floor for them in post-stab
+static const daxa_f32 BB_AVBD_DEEP_EXTRACT_K = 8000.0f;    // k floor in post-stab for unloaded deep contacts. 2000 was too weak to push them out (lambda~0, sideways overlaps never extracted); 50000 boils the rain pile (extracts up to the 0.25m cap/frame = teleport->avalanche). 8000 is the measured window: deep200 0, no boil, canonicals untouched (floor only fires >80mm).
 // TGS_SOFT (Box2D v3 / solver2d): N sub-steps per frame, each integrates positions and updates
 // contact separations -> stable stacking + fast convergence. Catto's default is 4 sub-steps.
 static const daxa_u32 BB_TGS_SUBSTEPS = 4u;
