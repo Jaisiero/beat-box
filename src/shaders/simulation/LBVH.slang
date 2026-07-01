@@ -232,6 +232,14 @@ struct LBVH {
 
         // Traverse nodes starting from the root
         LBVHNode* node = &lbvh_nodes[0];
+        // Root-is-leaf guard: with a single primitive the tree has no internal nodes, so the root
+        // (node 0) is itself a leaf with left == right == -1. The loop below unconditionally reads
+        // lbvh_nodes[node->left] / lbvh_nodes[node->right] on the first iteration, which for a leaf
+        // root indexes lbvh_nodes[(u32)-1] — an out-of-bounds read. A lone primitive has nothing to
+        // broad-phase against, so bail out.
+        if (node.is_leaf()) {
+            return;
+        }
         do {
 
             // Check each child node for overlap
