@@ -606,6 +606,7 @@ struct SimConfig
   daxa_u32 gc_round;               // graph-coloring: current round index (incremented by owner_reset; seeds the fair-arbitration priority)
   daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
   daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)
+  daxa_u32 avbd_max_support_depth; // AVBD: max support-depth layer over dynamic bodies this step (post-BFS, clamped to SHOCK_LAYERS-1); the post-stab cascade skips layers above this
   daxa_u32 avbd_violations;        // AVBD: body-coloring invariant violations (adjacent same color; must be 0)
   daxa_u32 avbd_stick_count;       // AVBD: # contacts whose sticking anchors were reused this step (diagnostics)
   daxa_u32 gc_max_degree;          // graph-coloring DIAG: max colored-degree = max popcount(body_color_mask) over bodies
@@ -820,6 +821,7 @@ static const daxa_u32 NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET = 6;
 static const daxa_u32 GRAPH_COLOR_DISPATCH_COUNT_OFFSET = 7; // graph-coloring passes over manifolds (ceil(collision_count/X))
 static const daxa_u32 GRAPH_COLOR_SOLVE_DISPATCH_OFFSET = 8; // per-color solve dispatch array starts here (color c at offset 8+c)
 static const daxa_u32 AVBD_COLOR_SOLVE_DISPATCH_OFFSET = GRAPH_COLOR_SOLVE_DISPATCH_OFFSET + 32; // per-color AVBD PRIMAL dispatch array (body color c at offset +c); empty body colors get 0 workgroups
+static const daxa_u32 AVBD_CASCADE_DISPATCH_OFFSET = AVBD_COLOR_SOLVE_DISPATCH_OFFSET + 32; // per-(layer,color) AVBD post-stab CASCADE dispatch array; entry [d*32+c]; layers d > avbd_max_support_depth get 0 workgroups
 
 struct DispatchBuffer
 {
@@ -838,6 +840,10 @@ struct DispatchBuffer
   daxa_u32vec3 avbd_color_dispatch[32]; // per-color AVBD PRIMAL dispatch (same idea as above but per-BODY):
                                                     // used body colors (c < avbd_color_count = max(body_color)+1) get
                                                     // ceil(rigid_body_count/X), the rest get 0 (a pile uses ~7 of 32)
+  daxa_u32vec3 avbd_cascade_dispatch[12 * 32]; // per-(layer,color) post-stab CASCADE dispatch [d*32+c]; 12 = BB_AVBD_SHOCK_LAYERS,
+                                                          // 32 = BB_MAX_COLORS (both defined below). entry = (d <= avbd_max_support_depth
+                                                          // && c < avbd_color_count) ? ceil(rigid_body_count/X) : 0 — a 2-4 layer pile
+                                                          // skips layers 4..11 entirely (subsumes the per-color skip for the cascade)
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 

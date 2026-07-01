@@ -426,6 +426,8 @@ const auto entry_graph_color_solve_dispatcher = "entry_graph_color_solve_dispatc
 const auto graph_color_solve_dispatcher_pipeline_name = "Graph Color Solve Dispatcher";
 const auto entry_avbd_color_dispatcher = "entry_avbd_color_dispatcher";
 const auto avbd_color_dispatcher_pipeline_name = "AVBD Color Dispatcher";
+const auto entry_avbd_cascade_dispatcher = "entry_avbd_cascade_dispatcher";
+const auto avbd_cascade_dispatcher_pipeline_name = "AVBD Cascade Dispatcher";
 const auto entry_graph_color_reset = "entry_graph_color_reset";
 const auto graph_color_reset_pipeline_name = "Graph Color Reset";
 const auto entry_graph_color_owner_reset = "entry_graph_color_owner_reset";
@@ -474,6 +476,8 @@ const auto entry_avbd_depth_reset = "entry_avbd_depth_reset";
 const auto avbd_depth_reset_pipeline_name = "AVBD Depth Reset";
 const auto entry_avbd_depth_relax = "entry_avbd_depth_relax";
 const auto avbd_depth_relax_pipeline_name = "AVBD Depth Relax";
+const auto entry_avbd_max_depth = "entry_avbd_max_depth";
+const auto avbd_max_depth_pipeline_name = "AVBD Max Depth";
 // island sleeping (entries in RB_sim.slang)
 const auto entry_sleep_reduce = "entry_sleep_reduce";
 const auto sleep_reduce_pipeline_name = "Sleep Reduce";
@@ -1046,6 +1050,17 @@ struct AvbdColorDispatcherInfo {
       .name = avbd_color_dispatcher_pipeline_name,
   };
 };
+struct AvbdCascadeDispatcherInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_cascade_dispatcher, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyDispatcherPushConstants),
+      .name = avbd_cascade_dispatcher_pipeline_name,
+  };
+};
 struct GraphColorResetInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{coloring_shader_file_string},
@@ -1299,6 +1314,17 @@ struct AvbdDepthRelaxInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(AvbdPushConstants),
       .name = avbd_depth_relax_pipeline_name,
+  };
+};
+struct AvbdMaxDepthInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_max_depth, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(AvbdPushConstants),
+      .name = avbd_max_depth_pipeline_name,
   };
 };
 // island sleeping passes (entries in RB_sim.slang; share SleepPushConstants)

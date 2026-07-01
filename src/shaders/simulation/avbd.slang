@@ -792,6 +792,10 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   {
     return;
   }
+  if (compute_i.x == 0u)
+  {
+    sim_config->avbd_max_support_depth = 0u; // A2: reset before the per-body reduction (entry_avbd_max_depth)
+  }
   daxa_u32 i = compute_i.x;
   if (i >= sim_config->rigid_body_count)
   {
@@ -841,6 +845,34 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   {
     InterlockedMin(states[b2].support_depth, d1 + 1u, prev);
   }
+}
+
+// A2: reduce the max support-depth LAYER over dynamic bodies AFTER the BFS has converged (support_depth
+// only decreases during relaxation, so this cannot run during the BFS — an intermediate MAX_U32 would
+// clamp to SHOCK_LAYERS-1 and defeat the cap). The post-stab cascade dispatcher then zeros layers above
+// this, so a 2-4 layer pile skips launching the empty upper layers (8+ of 12) entirely.
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_max_depth(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  if (sim_config->solver_type != SimSolverType::AVBD)
+  {
+    return;
+  }
+  daxa_u32 i = compute_i.x;
+  if (i >= sim_config->rigid_body_count)
+  {
+    return;
+  }
+  RigidBody* r = &((RigidBody*)(AVBD_PC.task_head.rigid_bodies))[i];
+  if (!avbd_is_dynamic(r) || (r->flags & RigidBodyFlag::SLEEPING) != RigidBodyFlag::NONE)
+  {
+    return;
+  }
+  AvbdBodyState* s = &((AvbdBodyState*)(AVBD_PC.task_head.avbd_state))[i];
+  daxa_u32 layer = min(s->support_depth, BB_AVBD_SHOCK_LAYERS - 1u); // same clamp the cascade filter uses
+  daxa_u32 prev;
+  InterlockedMax(sim_config->avbd_max_support_depth, layer, prev);
 }
 
 // dual: one thread per manifold; assign lambda = clamped force, grow the penalty linearly

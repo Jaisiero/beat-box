@@ -206,6 +206,8 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CRND; // AVBD body-color JP round
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CV;   // AVBD body-color validate
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CDISP; // AVBD per-color primal dispatch args (skip empty body colors)
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_MAXD;  // AVBD max support-depth reduction (A2)
+  std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CASCD; // AVBD per-(layer,color) cascade dispatch args (skip empty layers) (A2)
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_CMT;  // AVBD body-color commit (race-free split)
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_PRE;  // AVBD prepare (inertial target)
   std::shared_ptr<daxa::ComputePipeline> pipeline_AVBD_FIN;  // AVBD finalize (velocity reconstruction)

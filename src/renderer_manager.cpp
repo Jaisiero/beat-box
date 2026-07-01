@@ -486,7 +486,7 @@ int RendererManager::render()
           std::cout << "[PERF] step=" << sc.frame_count << " manifolds=" << sc.g_c_info.collision_count
                     << " contact_of=" << sc.dbg_contact_overflow << " node_of=" << sc.dbg_node_overflow
                     << " sleeping=" << sc.sleeping_count
-                    << " avbdc=" << sc.avbd_color_count << " avbdv=" << sc.avbd_violations
+                    << " avbdc=" << sc.avbd_color_count << " maxd=" << sc.avbd_max_support_depth << " avbdv=" << sc.avbd_violations
                     << " astick=" << sc.avbd_stick_count
                     << " colors=" << sc.graph_color_count << " violations=" << sc.graph_color_violations
                     << " overflow=" << sc.graph_color_overflow
