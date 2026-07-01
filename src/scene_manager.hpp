@@ -9,8 +9,25 @@
 #include <random>
 #include <cmath>
 #include <cstdlib> // std::getenv / std::atoi (BB_SCENE headless scene selection)
+#include <fstream> // BB_SCENE_FILE / BB_SCENE_DUMP data-driven scenes (F3)
+#include <sstream>
+#include <string>
 
 BB_NAMESPACE_BEGIN
+
+// getenv wrapper that silences MSVC C4996 for a read-only env lookup (this header is included by TUs
+// that don't #define _CRT_SECURE_NO_WARNINGS).
+inline char const *bb_getenv(char const *key)
+{
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+  return std::getenv(key);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+}
 
 struct SceneManager
 {
@@ -847,6 +864,67 @@ public:
     rigid_bodies.back().material_index = 2u; // green
   }
 
+  // F3: data-driven scene from a text file (BB_SCENE_FILE=path). One dynamic cube per line:
+  //   px py pz [half_extent] [mass] [restitution] [friction]   (# comments and blank lines ignored)
+  // A floor + an emissive light panel are added automatically; the common load_scene() post-pass fills
+  // in inv_mass / inv_inertia / aabb / random materials. Lets you iterate on repro scenes with no rebuild.
+  void scene_from_file(std::string const &path)
+  {
+    materials = {
+      {.albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f)}, // 0 static/floor
+      {.albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f), .emission = daxa_f32vec3(10.0f, 10.0f, 10.0f)}, // 1 light
+      {.albedo = daxa_f32vec3(1.0f, 0.0f, 0.0f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f)},
+      {.albedo = daxa_f32vec3(0.0f, 1.0f, 0.0f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f)},
+      {.albedo = daxa_f32vec3(0.0f, 0.0f, 1.0f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f)},
+      {.albedo = daxa_f32vec3(1.0f, 1.0f, 0.0f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f)},
+      {.albedo = daxa_f32vec3(0.0f, 1.0f, 1.0f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f)},
+      {.albedo = daxa_f32vec3(1.0f, 0.0f, 1.0f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f)},
+    };
+    auto const Q = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    auto const I0 = daxa_mat3_from_glm_mat3(glm::mat3(0));
+    auto const I1 = daxa_mat3_from_glm_mat3(glm::mat3(1));
+    // floor (static; top at y=0)
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Q, .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.6f});
+    // emissive light panel (static; material index 1 -> becomes a light in the post-pass)
+    auto light = RigidBody{.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 22.0f, 0.0f), .rotation = Q, .minimum = daxa_f32vec3(-5.0f, -0.2f, -5.0f), .maximum = daxa_f32vec3(5.0f, 0.2f, 5.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.6f};
+    light.material_index = 1u;
+    rigid_bodies.push_back(light);
+    // dynamic cubes from the file
+    std::ifstream in(path);
+    if (!in) { std::cerr << "BB_SCENE_FILE: cannot open '" << path << "'" << std::endl; return; }
+    daxa_u32 n = 0u;
+    std::string line;
+    while (std::getline(in, line))
+    {
+      auto const s = line.find_first_not_of(" \t\r\n");
+      if (s == std::string::npos || line[s] == '#') { continue; }
+      std::istringstream ss(line);
+      float px, py, pz; float h = 0.5f, m = 5.0f, e = 0.0f, fr = 0.6f, tmp;
+      if (!(ss >> px >> py >> pz)) { continue; }
+      if (ss >> tmp) h = tmp;  if (ss >> tmp) m = tmp;  if (ss >> tmp) e = tmp;  if (ss >> tmp) fr = tmp;
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(px, py, pz), .rotation = Q, .minimum = daxa_f32vec3(-h, -h, -h), .maximum = daxa_f32vec3(h, h, h), .mass = m, .inv_mass = (m == 0.0f ? 0.0f : 1.0f / m), .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I1, .restitution = e, .friction = fr});
+      ++n;
+    }
+    std::cout << "[SCENE] BB_SCENE_FILE loaded " << n << " bodies from '" << path << "'" << std::endl;
+  }
+
+  // F3: dump the current scene's dynamic cubes in the BB_SCENE_FILE format (edit + reload without a rebuild).
+  void dump_scene(std::string const &path)
+  {
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) { std::cerr << "BB_SCENE_DUMP: cannot open '" << path << "'" << std::endl; return; }
+    out << "# BB_SCENE_FILE: px py pz [half_extent] [mass] [restitution] [friction] (a floor + light are auto-added)\n";
+    daxa_u32 n = 0u;
+    for (auto const &b : rigid_bodies)
+    {
+      if ((b.flags & RigidBodyFlag::DYNAMIC) == RigidBodyFlag::NONE) { continue; }
+      float const h = (b.maximum.x - b.minimum.x) * 0.5f;
+      out << b.position.x << " " << b.position.y << " " << b.position.z << " " << h << " " << b.mass << " " << b.restitution << " " << b.friction << "\n";
+      ++n;
+    }
+    std::cout << "[SCENE] BB_SCENE_DUMP wrote " << n << " bodies to '" << path << "'" << std::endl;
+  }
+
   bool load_scene()
   {
     if (!initialized)
@@ -884,18 +962,29 @@ public:
     // Scene dispatch by current_scene (set at startup default + switched at runtime via F1-F8).
     // scene_1 .. scene_8 are compile-time builders; switch_scene() resets the host state so a
     // different builder can repopulate the shared vectors.
-    switch (current_scene)
+    // F3: BB_SCENE_FILE=path loads a data-driven scene from a text file instead of a compile-time
+    // builder (no rebuild needed to iterate on a repro scene). F1-F8 still switch the built-in scenes.
+    if (char const *scene_file = bb_getenv("BB_SCENE_FILE"))
     {
-      case 1: scene_1(); break;
-      case 2: scene_2(); break;
-      case 3: scene_3(); break;
-      case 4: scene_4(); break;
-      case 5: scene_5(); break; // V3 showcase: frame threads onto the post + mixed concave pile
-      case 6: scene_6(); break; // deterministic stability probe (rests + stacks; fresh/pen 0/single-digit)
-      case 7: scene_7(); break; // box pool: 432 cubes rain into the pit (all must settle and sleep)
-      case 8: scene_8(); break; // single-cube free-fall A/B (AVBD vs TGS time-to-floor)
-      default: scene_6(); break;
+      scene_from_file(scene_file);
     }
+    else
+    {
+      switch (current_scene)
+      {
+        case 1: scene_1(); break;
+        case 2: scene_2(); break;
+        case 3: scene_3(); break;
+        case 4: scene_4(); break;
+        case 5: scene_5(); break; // V3 showcase: frame threads onto the post + mixed concave pile
+        case 6: scene_6(); break; // deterministic stability probe (rests + stacks; fresh/pen 0/single-digit)
+        case 7: scene_7(); break; // box pool: 432 cubes rain into the pit (all must settle and sleep)
+        case 8: scene_8(); break; // single-cube free-fall A/B (AVBD vs TGS time-to-floor)
+        default: scene_6(); break;
+      }
+    }
+    // F3: BB_SCENE_DUMP=path writes the current scene's dynamic cubes in the BB_SCENE_FILE format.
+    if (char const *dump = bb_getenv("BB_SCENE_DUMP")) { dump_scene(dump); }
 
     // random materials for bodies with material_index 0 (unset). Start at 2: index 1 is
     // the emissive light-panel material, and randomly emissive bodies read as glaring

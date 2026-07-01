@@ -127,7 +127,16 @@ int main()
     return render_rc;
   }
   catch (const std::exception& e) {
-    std::cerr << "\nCRITICAL ERROR (Standard Exception Thrown): " << e.what() << std::endl;
+    std::string const msg = e.what();
+    std::cerr << "\nCRITICAL ERROR (Standard Exception Thrown): " << msg << std::endl;
+    // F2: name the likely GPU out-of-memory case explicitly (the AS pools + per-frame buffers are the
+    // large device allocations); a raw daxa/Vulkan message is otherwise opaque.
+    if (msg.find("memory") != std::string::npos || msg.find("MEMORY") != std::string::npos ||
+        msg.find("ALLOCATION") != std::string::npos || msg.find("allocat") != std::string::npos) {
+      std::cerr << "This looks like a GPU out-of-memory failure. The acceleration-structure pools and "
+                   "per-frame buffers are the largest device allocations (see BLAS_POOL_BUDGET / "
+                   "MAX_RIGID_BODY_COUNT); reduce them or free VRAM." << std::endl;
+    }
     std::cerr << "Please verify device/Vulkan features and initialization parameters." << std::endl;
     return 1;
   }

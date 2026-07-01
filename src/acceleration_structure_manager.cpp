@@ -59,13 +59,13 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
 
     // Create BLAS buffer
     proc_blas_buffer = device.create_buffer({
-        .size = AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT,
+        .size = BLAS_POOL_BUDGET,
         .name = "proc_blas_buffer",
     });
 
     // Create BLAS scratch buffer
     proc_blas_scratch_buffer = device.create_buffer({
-        .size = AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT,
+        .size = BLAS_POOL_BUDGET,
         .name = "proc_blas_scratch_buffer",
     });
 
@@ -384,10 +384,10 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
     auto scratch_offset = get_aligned(blas_build_sizes.back().build_scratch_size, acceleration_structure_scratch_offset_alignment);
 
-    if (proc_blas_scratch_offset + scratch_offset > AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT)
+    if (proc_blas_scratch_offset + scratch_offset > BLAS_POOL_BUDGET)
     {
       std::cerr << "ERROR: Exceeded BLAS scratch offset limit! Current: " << (proc_blas_scratch_offset + scratch_offset) 
-                << ", Limit: " << (AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT) << std::endl;
+                << ", Limit: " << (BLAS_POOL_BUDGET) << std::endl;
       clear_build_AS();
       return false;
     }
@@ -402,10 +402,10 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
     auto blas_instance_offset = get_aligned(blas_build_sizes.back().acceleration_structure_size, ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT);
 
     // Check if the buffer offset is within the limits
-    if (proc_blas_buffer_offset + blas_instance_offset > AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT)
+    if (proc_blas_buffer_offset + blas_instance_offset > BLAS_POOL_BUDGET)
     {
       std::cerr << "ERROR: Exceeded BLAS buffer offset limit! Current: " << (proc_blas_buffer_offset + blas_instance_offset) 
-                << ", Limit: " << (AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT) << std::endl;
+                << ", Limit: " << (BLAS_POOL_BUDGET) << std::endl;
       clear_build_AS();
       return false;
     }
@@ -570,11 +570,11 @@ bool AccelerationStructureManager::update()
 
     auto scratch_offset = get_aligned(blas_build_sizes.back().build_scratch_size, acceleration_structure_scratch_offset_alignment);
 
-    if (proc_blas_scratch_offset + scratch_offset > AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT)
+    if (proc_blas_scratch_offset + scratch_offset > BLAS_POOL_BUDGET)
     {
       // B4: mirror the descriptive message the build_accel_structs guard emits (was silent here)
       std::cerr << "ERROR: Exceeded BLAS scratch offset limit (LBVH build)! Current: " << (proc_blas_scratch_offset + scratch_offset)
-                << ", Limit: " << (AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT) << std::endl;
+                << ", Limit: " << (BLAS_POOL_BUDGET) << std::endl;
       clear_build_AS(0);
       return false;
     }

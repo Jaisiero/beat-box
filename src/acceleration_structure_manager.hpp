@@ -66,7 +66,13 @@ struct AccelerationStructureManager
 private:
   // TODO: temporary
   static constexpr u32 MAX_ACCELERATION_STRUCTURE_COUNT = 1024;
-  static constexpr u32 AVERAGE_AS_SIZE = 1024 * 1024;
+  static constexpr u32 AVERAGE_AS_SIZE = 1024 * 1024; // per-TLAS/scratch fixed size (B4-guarded)
+  // F2: the procedural-BLAS pool (proc_blas_buffer + proc_blas_scratch) was reserved at
+  // AVERAGE_AS_SIZE * MAX = 1 GiB EACH (2 GiB total) — a blind over-estimate. Measured peak usage
+  // (scene_2, 1001 bodies): 751 KB buffer, 2.6 MB scratch. 64 MiB is a ~25x-over-measured budget
+  // that comfortably covers voxel-concave shapes too; the offset guards below fail loudly (not GPU
+  // corruption) if a pathological scene ever exceeds it, at which point raise this one number.
+  static constexpr u32 BLAS_POOL_BUDGET = 64u * 1024u * 1024u;
   
   // Alignment of the acceleration structure build offset
   static constexpr u64 ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT = 256;
