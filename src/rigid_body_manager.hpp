@@ -124,6 +124,17 @@ private:
   
   // Device reference
   daxa::Device& device;
+  // B2: every GPU buffer this manager owns is created through create_owned() and registered here,
+  // so destroy() frees EXACTLY what create() allocated by iterating this list — no more hand-edited
+  // parallel destroy list that can drift (it did once: the graph-coloring/AVBD buffers were missing).
+  // The lazily-created voxel pools stay explicit (is_empty()-guarded) as they have their own lifecycle.
+  std::vector<daxa::BufferId> owned_buffers;
+  daxa::BufferId create_owned(daxa::BufferInfo const &info)
+  {
+    auto id = device.create_buffer(info);
+    owned_buffers.push_back(id);
+    return id;
+  }
   // Initialization flag
   bool initialized = false;
   // iteration count

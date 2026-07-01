@@ -147,71 +147,73 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
   {
-    sim_config_host_buffer[i] = device.create_buffer({
+    sim_config_host_buffer[i] = create_owned({
         .size = sizeof(SimConfig),
         .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
         .name = "sim_config_host_" + std::to_string(i),
     });
-    sim_config[i] = device.create_buffer({
+    sim_config[i] = create_owned({
         .size = sizeof(SimConfig),
         .name = "sim_config_" + std::to_string(i),
     });
     // FIXME: think about a better way to handle this
     auto max_number_of_workgroups = (MAX_RIGID_BODY_COUNT + RADIX_SORT_WORKGROUP_SIZE - 1) / RADIX_SORT_WORKGROUP_SIZE;
-    global_histograms[i] = device.create_buffer({
+    global_histograms[i] = create_owned({
         .size = sizeof(daxa_u32) * RADIX_SORT_BINS * max_number_of_workgroups,
         .name = "global_histograms" + std::to_string(i),
     });
-    lbvh_nodes[i] = device.create_buffer({
+    lbvh_nodes[i] = create_owned({
         .size = sizeof(LBVHNode) * MAX_LBVH_NODE_COUNT,
         .name = "lbvh_nodes" + std::to_string(i),
     });
-    broad_phase_collisions[i] = device.create_buffer({
+    broad_phase_collisions[i] = create_owned({
         .size = sizeof(BroadPhaseCollision) * MAX_COLLISION_COUNT,
         .name = "broad_phase_collisions" + std::to_string(i),
     });
-    collision_entries[i] = device.create_buffer({
+    collision_entries[i] = create_owned({
         .size = sizeof(CollisionEntry) * MAX_COLLISION_COUNT,
         .name = "collision_entries" + std::to_string(i),
     });
-    collisions[i] = device.create_buffer({
+    collisions[i] = create_owned({
         .size = sizeof(Manifold) * MAX_COLLISION_COUNT,
         .name = "collisions" + std::to_string(i),
     });
-    rigid_body_entries[i] = device.create_buffer({
+    rigid_body_entries[i] = create_owned({
         .size = sizeof(RigidBodyEntry) * MAX_RIGID_BODY_COUNT,
         .name = "rigid_body_map" + std::to_string(i),
     });
-    active_rigid_bodies[i] = device.create_buffer({
+    active_rigid_bodies[i] = create_owned({
         .size = sizeof(ActiveRigidBody) * MAX_RIGID_BODY_COUNT,
         .name = "active_rigid_bodies" + std::to_string(i),
     });
-    rigid_body_link_manifolds[i] = device.create_buffer({
+    rigid_body_link_manifolds[i] = create_owned({
         .size = sizeof(ManifoldNode) * BB_MAX_MANIFOLD_NODE_COUNT,
         .name = "rigid_body_link_manifolds" + std::to_string(i),
     });
-    scratch_body_links[i] = device.create_buffer({
+    scratch_body_links[i] = create_owned({
         .size = sizeof(BodyLink) * MAX_RIGID_BODY_COUNT,
         .name = "scratch_body_links" + std::to_string(i),
     });
-    body_links[i] = device.create_buffer({
+    body_links[i] = create_owned({
         .size = sizeof(BodyLinkIsland) * MAX_RIGID_BODY_COUNT,
         .name = "body_links" + std::to_string(i),
     });
-    manifold_links[i] = device.create_buffer({
+    manifold_links[i] = create_owned({
         .size = sizeof(ManifoldLinkIsland) * MAX_COLLISION_COUNT,
         .name = "manifold_links" + std::to_string(i),
     });
-    island_buffer[i] = device.create_buffer({
+    island_buffer[i] = create_owned({
         .size = sizeof(Island) * MAX_RIGID_BODY_COUNT,
         .name = "islands" + std::to_string(i),
     });
-    contact_island_buffer[i] = device.create_buffer({
+    contact_island_buffer[i] = create_owned({
         .size = sizeof(ContactIsland) * MAX_RIGID_BODY_COUNT,
         .name = "contact_islands" + std::to_string(i),
     });
     // voxel collision shape data (host-writable: filled once by the scene at load time;
     // static afterwards, addressed through SimConfig - the NP head is at the push limit)
+    // voxel pools stay EXPLICIT (not create_owned): lazily created + is_empty()-guarded, so they own
+    // their own lifecycle and are torn down with matching is_empty() guards in destroy().
     if (voxel_shapes.is_empty())
     {
       voxel_shapes = device.create_buffer({
@@ -250,49 +252,49 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .voxel_surface_addr = device.device_address(voxel_surface).value(),
     };
   }
-  tmp_morton_codes = device.create_buffer({
+  tmp_morton_codes = create_owned({
       .size = sizeof(MortonCode) * MAX_RIGID_BODY_COUNT,
       .name = "tmp_morton_codes",
   });
-  morton_codes = device.create_buffer({
+  morton_codes = create_owned({
       .size = sizeof(MortonCode) * MAX_RIGID_BODY_COUNT,
       .name = "morton_codes",
   });
-  lbvh_construction_info = device.create_buffer({
+  lbvh_construction_info = create_owned({
       .size = sizeof(LBVHConstructionInfo) * MAX_LBVH_NODE_COUNT,
       .name = "lbvh_construction_info",
   });
-  rigid_body_scratch = device.create_buffer({
+  rigid_body_scratch = create_owned({
       .size = sizeof(RigidBody) * MAX_RIGID_BODY_COUNT,
       .name = "rigid_body_scratch",
   });
-  collision_scratch = device.create_buffer({
+  collision_scratch = create_owned({
       .size = sizeof(Manifold) * MAX_COLLISION_COUNT,
       .name = "collision_scratch",
   });
   // graph coloring buffers (raw u32 arrays)
-  body_color_mask = device.create_buffer({
+  body_color_mask = create_owned({
       .size = sizeof(daxa_u32) * MAX_RIGID_BODY_COUNT,
       .name = "body_color_mask",
   });
-  manifold_color = device.create_buffer({
+  manifold_color = create_owned({
       .size = sizeof(daxa_u32) * MAX_COLLISION_COUNT,
       .name = "manifold_color",
   });
-  body_color_owner = device.create_buffer({
+  body_color_owner = create_owned({
       .size = sizeof(daxa_u32) * MAX_RIGID_BODY_COUNT * BB_MAX_COLORS,
       .name = "body_color_owner",
   });
-  color_count = device.create_buffer({
+  color_count = create_owned({
       .size = sizeof(daxa_u32) * (BB_MAX_COLORS + 1),
       .name = "color_count",
   });
   // AVBD buffers
-  avbd_state = device.create_buffer({
+  avbd_state = create_owned({
       .size = sizeof(AvbdBodyState) * MAX_RIGID_BODY_COUNT,
       .name = "avbd_state",
   });
-  avbd_body_color = device.create_buffer({
+  avbd_body_color = create_owned({
       .size = sizeof(daxa_u32) * MAX_RIGID_BODY_COUNT,
       .name = "avbd_body_color",
   });
@@ -1791,39 +1793,17 @@ void RigidBodyManager::destroy()
     return;
   }
 
-  for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
+  // B2: free EXACTLY what create_owned() allocated (per-frame + scratch + color + AVBD buffers) by
+  // iterating the ownership list — the hand-maintained parallel destroy list (which drifted once) is gone.
+  for (auto b : owned_buffers)
   {
-    device.destroy_buffer(sim_config_host_buffer[i]);
-    device.destroy_buffer(sim_config[i]);
-    device.destroy_buffer(lbvh_nodes[i]);
-    device.destroy_buffer(broad_phase_collisions[i]);
-    device.destroy_buffer(collision_entries[i]);
-    device.destroy_buffer(collisions[i]);
-    device.destroy_buffer(active_rigid_bodies[i]);
-    device.destroy_buffer(rigid_body_entries[i]);
-    device.destroy_buffer(scratch_body_links[i]);
-    device.destroy_buffer(body_links[i]);
-    device.destroy_buffer(manifold_links[i]);
-    device.destroy_buffer(island_buffer[i]);
-    device.destroy_buffer(contact_island_buffer[i]);
-    device.destroy_buffer(rigid_body_link_manifolds[i]);
-    device.destroy_buffer(global_histograms[i]);
+    device.destroy_buffer(b);
   }
-  device.destroy_buffer(tmp_morton_codes);
-  device.destroy_buffer(morton_codes);
-  device.destroy_buffer(lbvh_construction_info);
-  device.destroy_buffer(rigid_body_scratch);
-  device.destroy_buffer(collision_scratch);
-  device.destroy_buffer(voxel_shapes);
-  device.destroy_buffer(voxel_occupancy);
-  device.destroy_buffer(voxel_surface);
-  // graph-coloring + AVBD buffers (added during the campaign; were missing from teardown)
-  device.destroy_buffer(body_color_mask);
-  device.destroy_buffer(manifold_color);
-  device.destroy_buffer(body_color_owner);
-  device.destroy_buffer(color_count);
-  device.destroy_buffer(avbd_state);
-  device.destroy_buffer(avbd_body_color);
+  owned_buffers.clear();
+  // voxel pools: explicit, is_empty()-guarded (lazily created, may not exist); reset so a re-create works.
+  if (!voxel_shapes.is_empty())    { device.destroy_buffer(voxel_shapes);    voxel_shapes = {}; }
+  if (!voxel_occupancy.is_empty()) { device.destroy_buffer(voxel_occupancy); voxel_occupancy = {}; }
+  if (!voxel_surface.is_empty())   { device.destroy_buffer(voxel_surface);   voxel_surface = {}; }
 
   initialized = false;
 }
