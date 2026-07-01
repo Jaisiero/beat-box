@@ -8,6 +8,7 @@
 #include "status_manager.hpp"
 #include <random>
 #include <cmath>
+#include <cstdlib> // std::getenv / std::atoi (BB_SCENE headless scene selection)
 
 BB_NAMESPACE_BEGIN
 
@@ -851,6 +852,17 @@ public:
     if (!initialized)
     {
       return false;
+    }
+
+    // Headless scene selection: BB_SCENE=N picks the launch scene ONCE (startup only, so F1-F8
+    // switch_scene() still works). Lets a headless run / A-B measure any scene, not just the default.
+    {
+      static bool bb_scene_applied = false;
+      if (!bb_scene_applied)
+      {
+        bb_scene_applied = true;
+        if (const char *s = std::getenv("BB_SCENE")) current_scene = std::atoi(s);
+      }
     }
 
     // FIXED SEED (determinism): scene spawns must be identical run to run so that
