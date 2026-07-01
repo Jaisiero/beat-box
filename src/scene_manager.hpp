@@ -861,7 +861,17 @@ public:
       if (!bb_scene_applied)
       {
         bb_scene_applied = true;
+        // std::getenv is flagged C4996 ('unsafe') by MSVC; the .cpp files including this HEADER don't
+        // all #define _CRT_SECURE_NO_WARNINGS (only main.cpp/renderer_manager.cpp do), so suppress it
+        // locally — a read-only env lookup is safe.
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
         if (const char *s = std::getenv("BB_SCENE")) current_scene = std::atoi(s);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
       }
     }
 
