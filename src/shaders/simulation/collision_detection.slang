@@ -893,13 +893,16 @@ struct OBBvsOBBCollision {
 
 
 struct BodyLinkManifold {
-  static void body_link_manifold(daxa_u32 manifold_id, daxa_u32 body_index, Ptr<daxa_u32> manifold_node_count, RigidBody* rigid_bodies, ManifoldNode* manifold_nodes)
+  static void body_link_manifold(daxa_u32 manifold_id, daxa_u32 body_index, Ptr<daxa_u32> manifold_node_count, Ptr<daxa_u32> node_overflow, RigidBody* rigid_bodies, ManifoldNode* manifold_nodes)
   {
     // Add manifold to buffer
     daxa_u32 node_index = 0;
     InterlockedAdd(*manifold_node_count, 1u, node_index);
     if (node_index >= BB_MAX_MANIFOLD_NODE_COUNT)
     {
+      // node pool full: this manifold link is silently dropped (the body's manifold list is
+      // truncated). Count it so saturation is OBSERVABLE (surfaced in [PERF] as node_of=).
+      daxa_u32 _of; InterlockedAdd(*node_overflow, 1u, _of);
       return;
     }
 
@@ -1623,6 +1626,9 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     InterlockedAdd(sim_config->g_c_info.collision_count, 1u, index);
     if (index >= BB_MAX_COLLISION_COUNT)
     {
+      // buffer full: this collision is silently dropped. Count it so saturation is OBSERVABLE
+      // (surfaced in [PERF] as contact_of=) instead of a body losing support with zero signal.
+      daxa_u32 _of; InterlockedAdd(sim_config->dbg_contact_overflow, 1u, _of);
       return;
     }
     manifold.compute_basis();
@@ -1630,9 +1636,9 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     // Add collision to collision map
     collision_map[index].index = index;
 
-    BodyLinkManifold::body_link_manifold(index, rba_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
+    BodyLinkManifold::body_link_manifold(index, rba_index, &sim_config->manifold_node_count, &sim_config->dbg_node_overflow, rigid_bodies, manifold_nodes);
 
-    BodyLinkManifold::body_link_manifold(index, rbb_index, &sim_config->manifold_node_count, rigid_bodies, manifold_nodes);
+    BodyLinkManifold::body_link_manifold(index, rbb_index, &sim_config->manifold_node_count, &sim_config->dbg_node_overflow, rigid_bodies, manifold_nodes);
 
     daxa::u32 rba_prev_index = previous_rigid_body_map[r->id].index;
     bool rba_prev_exists = rba_prev_index < previous_sim_config.rigid_body_count;

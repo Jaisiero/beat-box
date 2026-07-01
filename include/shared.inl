@@ -601,6 +601,8 @@ struct SimConfig
   daxa_u32 graph_color_count;      // graph-coloring: # colors used this frame (debug/validator)
   daxa_u32 graph_color_violations; // graph-coloring: validator invariant violations (must be 0)
   daxa_u32 graph_color_overflow;   // graph-coloring: # contacts the per-color solver skips (uncolored OR color>=BB_MAX_COLORS_SOLVE)
+  daxa_u32 dbg_contact_overflow;   // narrow phase: # collisions DROPPED because g_c_info.collision_count hit BB_MAX_COLLISION_COUNT (0 = healthy; >0 = manifolds silently lost -> a body can lose support and tunnel)
+  daxa_u32 dbg_node_overflow;      // narrow phase: # manifold-link nodes DROPPED because manifold_node_count hit BB_MAX_MANIFOLD_NODE_COUNT (0 = healthy; >0 = a body's manifold list truncated -> missed contacts)
   daxa_u32 gc_round;               // graph-coloring: current round index (incremented by owner_reset; seeds the fair-arbitration priority)
   daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
   daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)

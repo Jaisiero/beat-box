@@ -484,6 +484,7 @@ int RendererManager::render()
           };
           auto const &sc = rigid_body_manager->get_sim_config_reference();
           std::cout << "[PERF] step=" << sc.frame_count << " manifolds=" << sc.g_c_info.collision_count
+                    << " contact_of=" << sc.dbg_contact_overflow << " node_of=" << sc.dbg_node_overflow
                     << " sleeping=" << sc.sleeping_count
                     << " avbdc=" << sc.avbd_color_count << " avbdv=" << sc.avbd_violations
                     << " astick=" << sc.avbd_stick_count
