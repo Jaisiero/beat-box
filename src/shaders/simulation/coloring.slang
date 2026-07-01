@@ -54,6 +54,24 @@ static const daxa_u32 GC_PROPOSED_BASE = 0x80000000u;
   dispatch_buffer->graph_color_solve_dispatch[c] = (c < used) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
 }
 
+// AVBD analog: runs AFTER entry_avbd_color_validate (avbd_color_count final). AVBD's primal is per-BODY,
+// so a used body color needs ceil(rigid_body_count/X) workgroups. avbd_color_count = max(body_color)+1,
+// so colors >= avbd_color_count are provably empty -> 0 workgroups. A dense pile uses ~7 of 32 colors,
+// so the per-color primal dispatch (avbd_dispatch, indirect at AVBD_COLOR_SOLVE_DISPATCH_OFFSET + c) skips
+// the ~25 unused colors entirely instead of dispatching the full body grid for all 32 and early-outing.
+[shader("compute")]
+[numthreads(BB_MAX_COLORS, 1, 1)] void entry_avbd_color_dispatcher(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  daxa_u32 c = compute_i.x;
+  if (c >= BB_MAX_COLORS) return;
+  SimConfig* sim_config = (SimConfig*)(GCD.task_head.sim_config);
+  DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCD.task_head.dispatch_buffer);
+  let bodies = min(sim_config->rigid_body_count, BB_MAX_RIGID_BODY_COUNT);
+  let cnt = (bodies + RIGID_BODY_SIM_COMPUTE_X - 1u) / RIGID_BODY_SIM_COMPUTE_X;
+  let used = min(sim_config->avbd_color_count, BB_MAX_COLORS);
+  dispatch_buffer->avbd_color_dispatch[c] = (c < used) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
+}
+
 // A body is static (does not move) when it lacks the DYNAMIC flag (the floor is RigidBodyFlag::NONE).
 // Detect by flag, NOT inv_mass (the floor's inv_mass is 1.0 by a latent scene bug).
 bool gc_is_static(RigidBody* r)

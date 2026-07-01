@@ -424,6 +424,8 @@ const auto entry_graph_color_dispatcher = "entry_graph_color_dispatcher";
 const auto graph_color_dispatcher_pipeline_name = "Graph Color Dispatcher";
 const auto entry_graph_color_solve_dispatcher = "entry_graph_color_solve_dispatcher";
 const auto graph_color_solve_dispatcher_pipeline_name = "Graph Color Solve Dispatcher";
+const auto entry_avbd_color_dispatcher = "entry_avbd_color_dispatcher";
+const auto avbd_color_dispatcher_pipeline_name = "AVBD Color Dispatcher";
 const auto entry_graph_color_reset = "entry_graph_color_reset";
 const auto graph_color_reset_pipeline_name = "Graph Color Reset";
 const auto entry_graph_color_owner_reset = "entry_graph_color_owner_reset";
@@ -1031,6 +1033,17 @@ struct GraphColorSolveDispatcherInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(RigidBodyDispatcherPushConstants),
       .name = graph_color_solve_dispatcher_pipeline_name,
+  };
+};
+struct AvbdColorDispatcherInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{coloring_shader_file_string},
+      .compile_options = { .entry_point = entry_avbd_color_dispatcher, },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodyDispatcherPushConstants),
+      .name = avbd_color_dispatcher_pipeline_name,
   };
 };
 struct GraphColorResetInfo {
