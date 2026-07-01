@@ -1927,6 +1927,12 @@ void RigidBodyManager::update_buffers(daxa_u32 current_frame)
   task_morton_codes.set_buffer(morton_codes);
   task_tmp_morton_codes.set_buffer(tmp_morton_codes);
   task_radix_sort_histograms.set_buffer(global_histograms[current_frame]);
+  // NOTE: unlike every other binding here, these three resolve parity via the accel-struct
+  // manager's GLOBAL get_sim_frame_index() and IGNORE the `current_frame` argument. Harmless today
+  // (the graphs that call update_buffers(f) in a parity loop — update_SC_TG, ARB_TG — don't attach
+  // these buffers), but a latent trap: extending either graph to touch the rigid-body buffers would
+  // silently bind the global-current parity for the f=0 iteration. Add frame-indexed getter
+  // overloads if that ever changes.
   task_previous_rigid_bodies.set_buffer(accel_struct_mngr->get_previous_rigid_body_buffer());
   task_rigid_bodies.set_buffer(accel_struct_mngr->get_rigid_body_buffer());
   task_next_rigid_bodies.set_buffer(accel_struct_mngr->get_next_rigid_body_buffer());
