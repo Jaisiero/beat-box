@@ -185,6 +185,8 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   AvbdBodyState* s = &states[i];
 
   r->prev_velocity = r->velocity; // for next step's adaptive warm start
+  r->prev_omega = r->omega;       // E2: capture step-entry omega BEFORE it is overwritten below, so next
+                                  // step's impact classifier can build the exact approach velocity
   r->velocity = (r->position - s->pos_start) * inv_dt;
 
   // dq = q_cur * conjugate(q_start); small-angle: omega = 2*dq.v/dt (sign-fixed)
@@ -1054,9 +1056,10 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     daxa_f32vec3 ra = p - r1->position;
     daxa_f32vec3 rb = p - r2->position;
 
-    // entry (pre-step) approach velocity: prev_velocity holds the step-entry linear
-    // velocity (saved by FIN); omegas approximate entry values (no prev_omega stored)
-    daxa_f32vec3 vrel_pre = (r2->prev_velocity + cross(r2->omega, rb)) - (r1->prev_velocity + cross(r1->omega, ra));
+    // entry (pre-step) approach velocity: prev_velocity + prev_omega both hold the step-entry values
+    // (saved by FIN before they were overwritten), so vrel_pre is exact even for a spinning body
+    // landing on a corner (where omega x r dominates the contact velocity) — E2.
+    daxa_f32vec3 vrel_pre = (r2->prev_velocity + cross(r2->prev_omega, rb)) - (r1->prev_velocity + cross(r1->prev_omega, ra));
     daxa_f32 vn_pre = dot(n, vrel_pre);
     // approach threshold = ~one step's worth of gravity-induced normal velocity. Use the actual sim
     // gravity (sim_config->gravity, negative) instead of a hardcoded -9.8 so non-default-gravity

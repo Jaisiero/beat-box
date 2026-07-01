@@ -372,6 +372,7 @@ struct RigidBody
   daxa_f32vec3 velocity;
   daxa_f32vec3 omega;
   daxa_f32vec3 prev_velocity; // last step's velocity (AVBD adaptive warm start; rides the row reorder)
+  daxa_f32vec3 prev_omega;    // last step's angular velocity (E2: exact step-entry approach vel for the impact classifier; rides the row reorder next to prev_velocity)
   daxa_f32mat3x3 inv_inertia;
   daxa_f32 restitution;
   daxa_f32 friction;
