@@ -15,6 +15,8 @@ Build first: `cmake --build build/Release --config RelWithDebInfo` (exe lands in
 | `BB_SOLVER=0..4` | select solver at startup: 0 PGS, 1 PGS_SOFT, 2 AVBD, 3 TGS_SOFT, 4 RIGID_NGS |
 | `BB_AUTOSTART=1` | start simulating immediately (no Space needed) |
 | `BB_SCENE=N` | load scene N (1..8) at startup instead of the default scene_7 |
+| `BB_SCENE_FILE=path` | load a data-driven scene from a text file (overrides `BB_SCENE`): one cube per line, `px py pz [half_extent] [mass] [restitution] [friction]` (trailing fields optional, `#`/blank lines skipped); a floor + emissive light are auto-added. Iterate on a repro scene with no rebuild. |
+| `BB_SCENE_DUMP=path` | after the scene builds, write its dynamic cubes to `path` in the `BB_SCENE_FILE` format (round-trips any built-in scene into an editable file) |
 | `BB_RUN_SECONDS=N` | auto-exit after N wall-clock seconds (reproducible captures) |
 | `BB_METRICS_CSV=path` | write one ground-truth metrics row per stepped frame: `frame,solver,manifolds,sleeping,pen_mm,maxv_mm,miny_m,deep100,deep200` |
 | `BB_ASSERT_MAX_DEEP200=N` / `BB_ASSERT_MAX_PEN=N` / `BB_ASSERT_MAX_MAXV=N` | **exit code 2** + `[METRICS] ASSERT FAILED:...` if the metric exceeds N after `BB_ASSERT_AFTER` warmup steps (default 60). For scriptable pass/fail. Thresholds are per-scene. |
