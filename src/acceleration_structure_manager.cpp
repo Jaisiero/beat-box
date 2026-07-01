@@ -81,9 +81,12 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
         .name = "proc_tlas_scratch_buffer",
     });
 
-    // Create BLAS instances buffer
+    // Create BLAS instances buffer. +1 slot: the LBVH/BVH path appends one aggregate BLAS
+    // instance at index [current_rigid_body_count] AFTER the per-body instances, so a full-
+    // capacity scene (MAX_RIGID_BODY_COUNT == MAX_ACCELERATION_STRUCTURE_COUNT bodies) would
+    // otherwise write one past the end (and the TLAS build would read total_instances = MAX+1).
     blas_instances_buffer = device.create_buffer({
-        .size = sizeof(daxa_BlasInstanceData) * MAX_ACCELERATION_STRUCTURE_COUNT,
+        .size = sizeof(daxa_BlasInstanceData) * (MAX_ACCELERATION_STRUCTURE_COUNT + 1),
         .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
         .name = "blas_instances_buffer",
     });
