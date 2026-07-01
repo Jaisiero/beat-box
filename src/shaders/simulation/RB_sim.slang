@@ -469,6 +469,8 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   sim_config->dbg_pen = 0u;
   sim_config->dbg_deep100 = 0u;
   sim_config->dbg_deep200 = 0u;
+  sim_config->dbg_contact_overflow = 0u; // saturation counters: reset here (single-thread, BEFORE the NP that increments them)
+  sim_config->dbg_node_overflow = 0u;
 
   DispatchBuffer* dispatch_buffer =
       (DispatchBuffer*)(NPD.task_head.dispatch_buffer);
