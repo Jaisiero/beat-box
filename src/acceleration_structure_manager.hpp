@@ -140,6 +140,21 @@ private:
 
   // Build TLAS info
   daxa::AccelerationStructureBuildSizesInfo tlas_build_sizes = {};
+  // B4: the TLAS and its scratch buffer are fixed at AVERAGE_AS_SIZE; the queried build sizes were
+  // computed then discarded (FIXME). Check them before building so an over-capacity TLAS fails loudly
+  // (like the BLAS offset guards) instead of silently overflowing the GPU buffer -> corruption/device-lost.
+  bool tlas_within_budget(char const *where)
+  {
+    if (tlas_build_sizes.acceleration_structure_size > AVERAGE_AS_SIZE ||
+        tlas_build_sizes.build_scratch_size > AVERAGE_AS_SIZE)
+    {
+      std::cerr << "ERROR: TLAS exceeds the fixed " << AVERAGE_AS_SIZE << "-byte budget at " << where
+                << " (AS=" << tlas_build_sizes.acceleration_structure_size
+                << ", scratch=" << tlas_build_sizes.build_scratch_size << ")" << std::endl;
+      return false;
+    }
+    return true;
+  }
   // Build TLAS info
   daxa::TlasBuildInfo tlas_build_info = {};
   // BLAS instances
