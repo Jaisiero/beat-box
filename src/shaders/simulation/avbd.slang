@@ -1069,11 +1069,21 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     // post-step (reconstructed) relative normal velocity
     daxa_f32vec3 vrel = (r2->velocity + cross(r2->omega, rb)) - (r1->velocity + cross(r1->omega, ra));
     daxa_f32 vn = dot(n, vrel);
-    if (vn <= 1.0e-4f) // not rebounding
+    // E1: restitution. The target post-impact SEPARATING velocity is e*approach = -e*vn_pre
+    // (vn_pre < 0 for a real approach, gated above), so e=0 is fully inelastic (target 0). The
+    // per-pair e is max(r1,r2), clamped to [0,1] (>1 would inject energy). The impulse drives vn to
+    // the target: it TRIMS an over-shoot (dvn>0) and, for e>0, INJECTS the bounce when the solver
+    // under-produced it (dvn<0). For e==0 this reduces EXACTLY to the old code (target 0 -> the gate
+    // becomes `vn <= 1e-4` and the impulse -vn/K), so every restitution=0 body/scene is byte-identical.
+    daxa_f32 e = clamp(max(r1->restitution, r2->restitution), 0.0f, 1.0f);
+    daxa_f32 target = -e * vn_pre; // >= 0
+    daxa_f32 dvn = vn - target;
+    bool fire = (e <= 0.0f) ? (dvn > 1.0e-4f) : (abs(dvn) > 1.0e-4f);
+    if (!fire) // already at the target separating velocity
     {
       continue;
     }
-    // effective mass along n and the impulse that zeroes the rebound (e = 0)
+    // effective mass along n and the impulse that drives vn -> target
     daxa_f32vec3 t1 = dyn1 ? cross(mul(inv_i1, cross(ra, n)), ra) : daxa_f32vec3(0.0f);
     daxa_f32vec3 t2 = dyn2 ? cross(mul(inv_i2, cross(rb, n)), rb) : daxa_f32vec3(0.0f);
     daxa_f32 K = inv_m1 + inv_m2 + dot(n, t1 + t2);
@@ -1081,7 +1091,7 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     {
       continue;
     }
-    m->contacts[j].normal_mass = -vn / K; // attractive: removes exactly the rebound
+    m->contacts[j].normal_mass = -dvn / K; // trims over-rebound (attractive) or injects the bounce (repulsive)
   }
 }
 
