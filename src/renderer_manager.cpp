@@ -217,7 +217,7 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
   return true;
 }
 
-void RendererManager::render()
+int RendererManager::render()
 {
   double _sim_ms_accum = 0.0; daxa_u64 _sim_ms_n = 0;   // [PERF] isolated sim timing
   // Fixed-timestep simulation, decoupled from the render rate: the sim advances TIME_STEP
@@ -255,6 +255,23 @@ void RendererManager::render()
   // real sim step on scene load/switch: it publishes the AS through the render-synced timeline path
   // (the only thing that reliably fixes it). Bodies advance one 1/60s step (~3mm of gravity --
   // imperceptible; the pool is floating mid-air at rest anyway).
+  // C1 HEADLESS METRICS (env-gated). The ground-truth quality metrics (dbg_pen/deep100/deep200/
+  // maxv/min_y) are computed every sim step UNCONDITIONALLY in the narrow phase, so this needs no
+  // extra flag. BB_METRICS_CSV=path writes one clean CSV row per stepped frame; BB_ASSERT_MAX_DEEP200
+  // / BB_ASSERT_MAX_PEN / BB_ASSERT_MAX_MAXV fail the run (exit code 2) if the metric exceeds the
+  // threshold after BB_ASSERT_AFTER warmup steps (default 60). Turns "run and eyeball" into a
+  // scriptable per-solver A/B with a real exit code — pair with BB_SOLVER / BB_AUTOSTART / BB_RUN_SECONDS.
+  std::ofstream metrics_csv;
+  bool metrics_hdr = false;
+  if (const char *e = std::getenv("BB_METRICS_CSV")) metrics_csv.open(e, std::ios::trunc);
+  double assert_max_deep200 = -1.0, assert_max_pen = -1.0, assert_max_maxv = -1.0;
+  if (const char *e = std::getenv("BB_ASSERT_MAX_DEEP200")) assert_max_deep200 = std::atof(e);
+  if (const char *e = std::getenv("BB_ASSERT_MAX_PEN"))     assert_max_pen     = std::atof(e);
+  if (const char *e = std::getenv("BB_ASSERT_MAX_MAXV"))    assert_max_maxv    = std::atof(e);
+  daxa_u64 assert_after = 60u;
+  if (const char *e = std::getenv("BB_ASSERT_AFTER")) assert_after = static_cast<daxa_u64>(std::atoll(e));
+  int metrics_exit_code = 0;
+
   bool force_sim_step = true;
   while (!window.should_close())
   {
@@ -420,6 +437,35 @@ void RendererManager::render()
             << "," << pk.g_c_info.collision_count << "," << pk.sleeping_count << "\n";
         _pk.flush();
       }
+      // C1 headless metrics: one CSV row per stepped frame + threshold asserts (env-gated).
+      if (sim_stepped && (metrics_csv.is_open() || assert_max_deep200 >= 0.0 || assert_max_pen >= 0.0 || assert_max_maxv >= 0.0))
+      {
+        auto const &mc = rigid_body_manager->get_sim_config_reference();
+        double miny = (mc.dbg_min_y == 0xFFFFFFFFu) ? 0.0 : (double)mc.dbg_min_y / 1000.0 - 100.0;
+        if (metrics_csv.is_open())
+        {
+          if (!metrics_hdr) { metrics_csv << "frame,solver,manifolds,sleeping,pen_mm,maxv_mm,miny_m,deep100,deep200\n"; metrics_hdr = true; }
+          metrics_csv << (daxa_u64)mc.frame_count << "," << (daxa_u32)mc.solver_type
+                      << "," << mc.g_c_info.collision_count << "," << mc.sleeping_count
+                      << "," << mc.dbg_pen << "," << mc.dbg_maxv << "," << miny
+                      << "," << mc.dbg_deep100 << "," << mc.dbg_deep200 << "\n";
+          metrics_csv.flush();
+        }
+        if ((daxa_u64)mc.frame_count >= assert_after)
+        {
+          char const *which = nullptr; double val = 0.0, lim = 0.0;
+          if (assert_max_deep200 >= 0.0 && (double)mc.dbg_deep200 > assert_max_deep200) { which = "deep200"; val = mc.dbg_deep200; lim = assert_max_deep200; }
+          else if (assert_max_pen >= 0.0 && (double)mc.dbg_pen > assert_max_pen)         { which = "pen_mm";  val = mc.dbg_pen;     lim = assert_max_pen; }
+          else if (assert_max_maxv >= 0.0 && (double)mc.dbg_maxv > assert_max_maxv)      { which = "maxv_mm"; val = mc.dbg_maxv;    lim = assert_max_maxv; }
+          if (which)
+          {
+            std::cerr << "[METRICS] ASSERT FAILED: " << which << "=" << val << " > " << lim
+                      << " at step " << (daxa_u64)mc.frame_count << " (solver=" << (daxa_u32)mc.solver_type << ")" << std::endl;
+            metrics_exit_code = 2;
+            break;
+          }
+        }
+      }
       { static daxa_u64 _cf = 0; static auto _t0 = std::chrono::high_resolution_clock::now();
         // sample every 31 frames (odd) so the readback alternates between the two double-buffered
         // SimConfigs — each holds an independent dbg_ex latch; an even cadence would only ever show one.
@@ -526,6 +572,8 @@ void RendererManager::render()
   }
   gpu->synchronize();
   gpu->garbage_collector();
+  if (metrics_csv.is_open()) metrics_csv.flush();
+  return metrics_exit_code;
 }
 
 RendererManager::~RendererManager() {}
