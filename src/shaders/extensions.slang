@@ -25,6 +25,7 @@ void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
   dst->velocity = src->velocity;
   dst->omega = src->omega;
   dst->prev_velocity = src->prev_velocity;
+  dst->prev_omega = src->prev_omega; // E2: keep step-entry omega across the row reorder (next to prev_velocity)
   dst->inv_inertia[0][0] = src->inv_inertia[0][0];
   dst->inv_inertia[0][1] = src->inv_inertia[0][1];
   dst->inv_inertia[0][2] = src->inv_inertia[0][2];
