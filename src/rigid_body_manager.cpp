@@ -68,6 +68,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_AVBD_CR = task_manager->create_compute(AvbdColorResetInfo{}.info);
     pipeline_AVBD_CRND = task_manager->create_compute(AvbdColorRoundInfo{}.info);
     pipeline_AVBD_CV = task_manager->create_compute(AvbdColorValidateInfo{}.info);
+    pipeline_AVBD_CDISP = task_manager->create_compute(AvbdColorDispatcherInfo{}.info);
     pipeline_AVBD_CMT = task_manager->create_compute(AvbdColorCommitInfo{}.info);
     pipeline_AVBD_PRE = task_manager->create_compute(AvbdPrepareInfo{}.info);
     pipeline_AVBD_FIN = task_manager->create_compute(AvbdFinalizeInfo{}.info);
@@ -1174,6 +1175,22 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        },
                        user_callback_GCSD);
 
+  // AVBD per-color primal dispatcher (A1): after the AVBD body-color validator, write per-color
+  // workgroup counts (used body colors -> ceil(rigid_body_count/X), empty -> 0). Reuses the same
+  // dispatcher head as GCSD; the AVBD primal sweeps then dispatch_indirect per color (skip empty).
+  auto user_callback_AVBD_CDISP = [this](daxa::TaskInterface ti, auto &)
+  {
+    ti.recorder.set_pipeline(*pipeline_AVBD_CDISP);
+    ti.recorder.push_constant(RigidBodyDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+  using TTask_AVBD_CDISP = TaskTemplate<RigidBodyDispatcherTaskHead::Task, decltype(user_callback_AVBD_CDISP)>;
+  TTask_AVBD_CDISP task_AVBD_CDISP(std::array{
+                           daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                           daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.sim_config, task_sim_config),
+                       },
+                       user_callback_AVBD_CDISP);
+
   // the 5 coloring passes share GraphColorTaskHead bindings and dispatch over graph_color_dispatch
   auto gc_views = std::array{
       daxa::attachment_view(GraphColorTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
@@ -1304,7 +1321,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   auto make_avbd_primal = [this, avbd_dispatch](daxa_u32 c, daxa_f32 stab_alpha, daxa_u32 ps_depth)
   {
-    return [this, avbd_dispatch, c, stab_alpha, ps_depth](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, stab_alpha, RIGID_BODY_DISPATCH_COUNT_OFFSET, ps_depth); };
+    // A1: dispatch_indirect at this color's own workgroup count (0 if the body color is unused) instead
+    // of the full body grid for all 32 colors early-outing 25/32 of them. Written by task_AVBD_CDISP.
+    return [this, avbd_dispatch, c, stab_alpha, ps_depth](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, stab_alpha, AVBD_COLOR_SOLVE_DISPATCH_OFFSET + c, ps_depth); };
   };
   using TTask_AVBD_PRIM = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_primal(0u, 1.0f, MAX_U32))>;
   std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_vec;     // main sweeps: alpha = 1 (delta-only constraint)
@@ -1499,6 +1518,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     G.add_task(task_AVBD_CMT_vec[rd]);  // commit proposed_color -> body_color (barrier between rounds)
   }
   G.add_task(task_AVBD_CV);
+  G.add_task(task_AVBD_CDISP); // A1: per-color primal dispatch args (skip empty body colors) — avbd_color_count now final
   G.add_task(task_AVBD_PRE); // AVBD: save step-start pose + jump to the inertial target
   G.add_task(task_AVBD_WS);  // AVBD: lambda/k warm-start scaling
   // shock propagation: support-depth BFS (statics/sleepers = 0; each pass relaxes

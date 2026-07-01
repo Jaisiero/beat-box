@@ -819,6 +819,7 @@ static const daxa_u32 RADIX_SORT_RIGID_BODY_DISPATCH_COUNT_OFFSET = 5;
 static const daxa_u32 NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET = 6;
 static const daxa_u32 GRAPH_COLOR_DISPATCH_COUNT_OFFSET = 7; // graph-coloring passes over manifolds (ceil(collision_count/X))
 static const daxa_u32 GRAPH_COLOR_SOLVE_DISPATCH_OFFSET = 8; // per-color solve dispatch array starts here (color c at offset 8+c)
+static const daxa_u32 AVBD_COLOR_SOLVE_DISPATCH_OFFSET = GRAPH_COLOR_SOLVE_DISPATCH_OFFSET + 32; // per-color AVBD PRIMAL dispatch array (body color c at offset +c); empty body colors get 0 workgroups
 
 struct DispatchBuffer
 {
@@ -834,6 +835,9 @@ struct DispatchBuffer
                                                           // ceil(coll/X), unused colors get 0 workgroups
                                                           // (a dense pile uses ~6-12 of 32 colors, so the
                                                           // rest cost nothing instead of full-count early-out)
+  daxa_u32vec3 avbd_color_dispatch[32]; // per-color AVBD PRIMAL dispatch (same idea as above but per-BODY):
+                                                    // used body colors (c < avbd_color_count = max(body_color)+1) get
+                                                    // ceil(rigid_body_count/X), the rest get 0 (a pile uses ~7 of 32)
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
