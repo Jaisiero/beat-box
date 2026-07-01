@@ -465,9 +465,12 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
       .scratch_data = device.device_address(proc_tlas_scratch_buffer).value(),
   };
 
-  // Get the build sizes
-  // FIXME: This is not being used right now
+  // Get the build sizes and verify they fit the fixed AVERAGE_AS_SIZE TLAS/scratch buffers (B4)
   tlas_build_sizes = device.tlas_build_sizes(tlas_build_info);
+  if (!tlas_within_budget("build_accel_structs"))
+  {
+    return false;
+  }
 
   // Set the scratch offset
   tlas_build_info.scratch_data = device.device_address(proc_tlas_scratch_buffer).value();
@@ -498,7 +501,11 @@ void AccelerationStructureManager::update_TLAS()
     return;
   }
   update_buffers();
-  update();
+  if (!update()) // B4: was discarded — a failed AS rebuild (size guard / offset overflow) must not proceed
+  {
+    std::cerr << "ERROR: update_TLAS aborted: the TLAS/BLAS rebuild failed (see the error above)." << std::endl;
+    return;
+  }
   TLAS_update_TG.execute();
   device.wait_idle();
   // timeline signal values must be strictly increasing: bump right before the signaling submit
@@ -565,6 +572,9 @@ bool AccelerationStructureManager::update()
 
     if (proc_blas_scratch_offset + scratch_offset > AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT)
     {
+      // B4: mirror the descriptive message the build_accel_structs guard emits (was silent here)
+      std::cerr << "ERROR: Exceeded BLAS scratch offset limit (LBVH build)! Current: " << (proc_blas_scratch_offset + scratch_offset)
+                << ", Limit: " << (AVERAGE_AS_SIZE * MAX_ACCELERATION_STRUCTURE_COUNT) << std::endl;
       clear_build_AS(0);
       return false;
     }
@@ -632,9 +642,12 @@ bool AccelerationStructureManager::update()
       .scratch_data = device.device_address(proc_tlas_scratch_buffer).value(),
   };
 
-  // Get the build sizes
-  // FIXME: This is not being used right now
+  // Get the build sizes and verify they fit the fixed AVERAGE_AS_SIZE TLAS/scratch buffers (B4)
   tlas_build_sizes = device.tlas_build_sizes(tlas_build_info);
+  if (!tlas_within_budget("update"))
+  {
+    return false;
+  }
 
   // Set the scratch offset
   tlas_build_info.scratch_data = device.device_address(proc_tlas_scratch_buffer).value();
