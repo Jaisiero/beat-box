@@ -218,11 +218,21 @@ struct TaskManager
 
   [[nodiscard]] auto create_ray_tracing(daxa::RayTracingPipelineCompileInfo info) -> std::shared_ptr<daxa::RayTracingPipeline>
   {
+    std::cout << "[COMPILE RT] " << std::string_view{info.name.data(), info.name.size()} << std::endl; // D1: progress (see create_compute)
     return pipeline_manager.add_ray_tracing_pipeline2(static_cast<daxa::RayTracingPipelineCompileInfo2>(info)).value();
   }
 
   [[nodiscard]] auto create_compute(daxa::ComputePipelineCompileInfo info) -> std::shared_ptr<daxa::ComputePipeline>
   {
+    // D1: progress logging. The Slang->SPIR-V compile below is eager and single-threaded (~100s cold
+    // across all pipelines, ~2s warm from spirv_cache/). Print the name+count BEFORE each so the wait
+    // is legible — the startup no longer looks like a hang, and a stall points at the exact pipeline.
+    static int _pc = 0;
+    if (++_pc == 1)
+    {
+      std::cout << "[COMPILE] building shader pipelines (cold ~100s Slang->SPIR-V; warm ~2s from spirv_cache/)..." << std::endl;
+    }
+    std::cout << "[COMPILE " << _pc << "] " << std::string_view{info.name.data(), info.name.size()} << std::endl;
     auto result = pipeline_manager.add_compute_pipeline2(static_cast<daxa::ComputePipelineCompileInfo2>(info));
     if (result.is_err())
     {
