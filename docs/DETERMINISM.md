@@ -74,7 +74,7 @@ contact resolution, and is not cross-launch reproducible during settling.
   self-load scene_3, and print a per-step line of pose/state hashes (`ph rh cph cp2 vhf
   vhi …`), auto-exiting at N. Two launches execute a bit-identical step sequence, so any
   divergence appears at its true first occurrence. Harness:
-  `scratch/determinism_det.ps1` (runs two processes, reports per-field first-diverge).
+  `tools/determinism_det.ps1` (runs two processes, reports per-field first-diverge; see docs/TESTING.md).
 - **`BB_DET_INPROC=1`** — run N steps, `reset()` to the identical initial state, run N
   again *in the same process*, and compare. Proves whether divergence is process-specific
   (it is) vs. a kernel race (it isn't).

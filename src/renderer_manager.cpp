@@ -424,8 +424,12 @@ int RendererManager::render()
       // DEEP-POCKET TRACE: one CSV row per stepped frame with the deepest awake contact's
       // {pen,lambda,k,vn,pair,stick} latched by entry_avbd_pocket_trace. Full-rate (every
       // frame) so a 1-frame-period oscillation isn't aliased. Truncates at startup.
-      if (sim_stepped) {
-        static std::ofstream _pk("C:/Projects/beat-box/scratch/pocket_trace.csv", std::ios::trunc);
+      // C3: env-gated + portable. BB_POCKET_TRACE=path enables the trace at that path; OFF by default,
+      // so a normal run pays no per-frame disk I/O and there is no hardcoded C:/ path that fails on
+      // other machines. Read once (static); the ofstream opens lazily only when the trace is enabled.
+      static char const *_pk_path = std::getenv("BB_POCKET_TRACE");
+      if (sim_stepped && _pk_path) {
+        static std::ofstream _pk(_pk_path, std::ios::trunc);
         static bool _pk_hdr = false;
         auto const &pk = rigid_body_manager->get_sim_config_reference();
         if (!_pk_hdr) { _pk << "frame,pk_pen_mm,pk_lambda,pk_k,pk_vn,b1,b2,cc,stick,global_pen_mm,maxv_mm,omega_mrad,manifolds,sleeping\n"; _pk_hdr = true; }
