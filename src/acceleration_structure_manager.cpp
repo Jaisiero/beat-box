@@ -374,7 +374,10 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
     // Create BLAS build info
     blas_build_infos.push_back({
-        .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_BUILD,
+        // review v2 #3: per-body BLAS are built ONCE on scene load then traced every frame for the
+        // whole session, so optimize for trace, not build (Daxa's own default is FAST_TRACE). The
+        // per-frame LBVH/TLAS rebuilds below keep FAST_BUILD (they pay the build cost every frame).
+        .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_TRACE,
         .dst_blas = {},
         .geometries = daxa::Span<const daxa::BlasAabbGeometryInfo>(blas_geometries.at(i).data(), blas_geometries.at(i).size()),
         .scratch_data = {},

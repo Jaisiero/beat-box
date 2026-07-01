@@ -666,7 +666,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     ti.recorder.set_pipeline(*pipeline_CHS);
     ti.recorder.push_constant(NarrowPhasePushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch({.x = (MAX_RIGID_BODY_COUNT + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X, .y = 1, .z = 1});
+    // review v2 #4: CHS was the last per-body pass still launching the fixed MAX_RIGID_BODY_COUNT
+    // grid every frame; drive it off the live per-body count like every sibling (morton/reorder/
+    // broad-phase above). Bitwise-identical (same threads run; only trailing idle workgroups drop).
+    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(NarrowPhaseTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * RIGID_BODY_DISPATCH_COUNT_OFFSET});
   };
   using TTask_CHS = TaskTemplate<NarrowPhaseTaskHead::Task, decltype(user_callback_CHS)>;
   TTask_CHS task_CHS(std::array{
