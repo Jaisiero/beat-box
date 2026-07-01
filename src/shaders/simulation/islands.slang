@@ -311,7 +311,12 @@ private
     daxa_u32 start_index = islands[island_index].start_index;
     daxa_u32 max_count = islands[island_index].max_count;
 
-    if (start_index + max_count >= max_active_bodies)
+    // island occupies [start_index, start_index + max_count); the top valid index is
+    // start_index + max_count - 1, so skip ONLY when it exceeds the buffer (`>`, not `>=`).
+    // `>=` wrongly skipped the sort for an island that fills exactly to the end — i.e. the
+    // common "one big settled island of all active bodies" — leaving its body-link order
+    // uncanonicalized => non-deterministic solve order. Mirrors the manifold path below.
+    if (start_index + max_count > max_active_bodies)
       return;
 
     // Sort body links in island
