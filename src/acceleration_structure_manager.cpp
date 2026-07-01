@@ -164,12 +164,23 @@ void AccelerationStructureManager::destroy()
     device.destroy_buffer(blas_instances_buffer);
     for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
       device.destroy_tlas(tlas[f]);
+    // Destroy the per-frame LBVH BLAS too (only update() freed the previous handle before
+    // overwriting; without this, any LBVH BLAS live at teardown leaks its AS allocation).
+    for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
+      if (!lbvh_blas[f].is_empty())
+        device.destroy_blas(lbvh_blas[f]);
     initialized = false;
   }
 }
 
 void AccelerationStructureManager::free_accel_structs()
 {
+  // WARNING: currently UNUSED / out of sync with the live reload path. It destroys proc_blas
+  // entries without clearing the vector, destroys tlas[] without recreating/nulling them, never
+  // touches lbvh_blas or placeholder_blas, and rewinds a different offset set than
+  // reset_for_reload()/build_accel_structs(). Do NOT wire it up as-is — after it runs, get_tlas()
+  // returns destroyed handles and destroy() would double-free proc_blas. Reconcile with the live
+  // reload path (which clears proc_blas and rewinds offsets) before using.
   // Freeing BLAS
   for (auto blas : proc_blas)
   {

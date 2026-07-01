@@ -1026,7 +1026,11 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     // velocity (saved by FIN); omegas approximate entry values (no prev_omega stored)
     daxa_f32vec3 vrel_pre = (r2->prev_velocity + cross(r2->omega, rb)) - (r1->prev_velocity + cross(r1->omega, ra));
     daxa_f32 vn_pre = dot(n, vrel_pre);
-    if (vn_pre > -2.0f * 9.8f * sim_config->dt) // not a real approach: resting/sliding contact
+    // approach threshold = ~one step's worth of gravity-induced normal velocity. Use the actual sim
+    // gravity (sim_config->gravity, negative) instead of a hardcoded -9.8 so non-default-gravity
+    // scenes classify resting/sliding vs real approaching contacts correctly. (2*gravity*dt is
+    // negative, matching the original -2*9.8*dt; identical at the default g up to 9.8-vs-9.81.)
+    if (vn_pre > 2.0f * sim_config->gravity * sim_config->dt) // not a real approach: resting/sliding contact
     {
       continue;
     }

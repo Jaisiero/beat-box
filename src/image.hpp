@@ -42,8 +42,11 @@ public:
 
     const int bytes_per_pixel = 4; // RGBA format cause the fact that many GPUs doesn't support RGB
     unsigned char *data;
-    int image_width, image_height;
-    int bytes_per_scanline;
+    // default-initialized: the default ctor (BBImage() : data(nullptr)) leaves these unset, and
+    // size() reads them with no data==nullptr guard, so a default-constructed image would return a
+    // garbage size() (and get_size() on a default BBImageTexture would memcpy a garbage-sized block).
+    int image_width = 0, image_height = 0;
+    int bytes_per_scanline = 0;
 
     static int clamp(int x, int low, int high) {
         // Return the value clamped to the range [low, high).
