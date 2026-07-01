@@ -497,7 +497,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
 
     if(all(material->emission <= 0.0f))
     {
-        printf("Light is non-emissive. Instance Index: %u, Light Count: %u, Rigid Body Index: %u emission: %f %f %f\n", instance_index, light_count, rigid_body_index, material->emission.x, material->emission.y, material->emission.z);
+        // printf("Light is non-emissive. Instance Index: %u, Light Count: %u, Rigid Body Index: %u emission: %f %f %f\n", instance_index, light_count, rigid_body_index, material->emission.x, material->emission.y, material->emission.z); // perf: was live on the light-sampling hot path — commented to match the debug siblings above (review v2 #1)
         // Light is non-emissive; skip processing
         pdf_light = 0.0f;
         return daxa_f32vec3(0.0);
@@ -569,7 +569,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     // If the ray is blocked, skip accumulation
     if (shadow_payload.hit)
     {
-        printf("Shadow ray is occluded. Instance Index: %u, Light Count: %u, Rigid Body Index: %u\n", instance_index, light_count, rigid_body_index);
+        // printf("Shadow ray is occluded. Instance Index: %u, Light Count: %u, Rigid Body Index: %u\n", instance_index, light_count, rigid_body_index); // perf: was live on the per-occluded-shadow-ray hot path (fires per shadowed pixel per frame through the host-visible printf ring) — commented to match the debug siblings above (review v2 #1)
         // occluded => no direct light
         // pdf is still valid but the contribution is zero
         return daxa_f32vec3(0.0f);

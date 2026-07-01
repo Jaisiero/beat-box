@@ -39,89 +39,19 @@ void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
   dst->friction = src->friction;
 }
 
-void copy_contact_fields(Contact* dst, Contact* src)
-{
-  dst->position = src->position;
-  dst->penetration = src->penetration;
-  dst->normal_impulse = src->normal_impulse;
-  dst->tangent_impulse[0] = src->tangent_impulse[0];
-  dst->tangent_impulse[1] = src->tangent_impulse[1];
-  dst->bias_factor = src->bias_factor;
-  dst->impulse_coefficient = src->impulse_coefficient;
-  dst->mass_coefficient = src->mass_coefficient;
-  dst->normal_mass = src->normal_mass;
-  dst->tangent_mass[0] = src->tangent_mass[0];
-  dst->tangent_mass[1] = src->tangent_mass[1];
-  dst->anchor_a = src->anchor_a;
-  dst->anchor_b = src->anchor_b;
-  dst->stick = src->stick;
-  dst->fp.in_reference = src->fp.in_reference;
-  dst->fp.out_reference = src->fp.out_reference;
-  dst->fp.in_incident = src->fp.in_incident;
-  dst->fp.out_incident = src->fp.out_incident;
-  dst->warm_start = src->warm_start;
-}
+// review v2 #5: Contact and Manifold are POD, so a whole-struct assignment copies EVERY field
+// (verified: the old field-by-field bodies enumerated all of Contact/Manifold incl. all 4
+// FeaturePair ids and contacts[]). Collapsing to *dst = src removes ~80 lines whose real hazard
+// was DRIFT — a field added to the struct but forgotten here silently drops from the warm-start /
+// pause-flush "previous" buffers (the documented explosion class). Whole-struct copy can never
+// drift. Bitwise-identical, proven via the determinism harness (towers stay bit-for-bit).
+void copy_contact_fields(Contact* dst, Contact* src) { *dst = *src; }
 
-void write_contact_fields_from_value(Contact* dst, Contact src)
-{
-  dst->position = src.position;
-  dst->penetration = src.penetration;
-  dst->normal_impulse = src.normal_impulse;
-  dst->tangent_impulse[0] = src.tangent_impulse[0];
-  dst->tangent_impulse[1] = src.tangent_impulse[1];
-  dst->bias_factor = src.bias_factor;
-  dst->impulse_coefficient = src.impulse_coefficient;
-  dst->mass_coefficient = src.mass_coefficient;
-  dst->normal_mass = src.normal_mass;
-  dst->tangent_mass[0] = src.tangent_mass[0];
-  dst->tangent_mass[1] = src.tangent_mass[1];
-  dst->anchor_a = src.anchor_a;
-  dst->anchor_b = src.anchor_b;
-  dst->stick = src.stick;
-  dst->fp.in_reference = src.fp.in_reference;
-  dst->fp.out_reference = src.fp.out_reference;
-  dst->fp.in_incident = src.fp.in_incident;
-  dst->fp.out_incident = src.fp.out_incident;
-  dst->warm_start = src.warm_start;
-}
+void write_contact_fields_from_value(Contact* dst, Contact src) { *dst = src; }
 
-void copy_manifold_fields(Manifold* dst, Manifold* src)
-{
-  dst->obb1_index = src->obb1_index;
-  dst->obb2_index = src->obb2_index;
-  dst->anchor_a = src->anchor_a;
-  dst->anchor_b = src->anchor_b;
-  dst->key = src->key;
-  dst->error = src->error;
-  dst->frame_count = src->frame_count;
-  dst->normal = src->normal;
-  dst->tangent_vectors[0] = src->tangent_vectors[0];
-  dst->tangent_vectors[1] = src->tangent_vectors[1];
-  dst->contact_count = src->contact_count;
-  for (daxa_u32 i = 0u; i < MAX_CONTACT_POINT_COUNT; ++i)
-  {
-    copy_contact_fields(&dst->contacts[i], &src->contacts[i]);
-  }
-}
+void copy_manifold_fields(Manifold* dst, Manifold* src) { *dst = *src; }
 
-void write_manifold_fields_from_value(Manifold* dst, Manifold src)
-{
-  dst->obb1_index = src.obb1_index;
-  dst->obb2_index = src.obb2_index;
-  dst->anchor_a = src.anchor_a;
-  dst->anchor_b = src.anchor_b;
-  dst->key = src.key;
-  dst->error = src.error;
-  dst->frame_count = src.frame_count;
-  dst->normal = src.normal;
-  dst->tangent_vectors[0] = src.tangent_vectors[0];
-  dst->tangent_vectors[1] = src.tangent_vectors[1];
-  dst->contact_count = src.contact_count;
-  for (daxa_u32 i = 0u; i < MAX_CONTACT_POINT_COUNT; ++i)
-  {
-    write_contact_fields_from_value(&dst->contacts[i], src.contacts[i]);
-  }
-}
+void write_manifold_fields_from_value(Manifold* dst, Manifold src) { *dst = src; }
 
 extension RigidBody
 {
