@@ -1,4 +1,5 @@
 #pragma once
+#include <iostream>
 #include "defines.hpp"
 #include "image.hpp"
 #include "task_manager.hpp"
@@ -175,6 +176,18 @@ struct ImageManager
     {
 
         auto image_size = image->get_size();
+        // Bound-check BEFORE the memcpy: each image slot is sized for a 128x128x4 STBN tile, and
+        // the host buffer is exactly INIT_HOST_BUFFER_SIZE. A wrong-dimension / oversized asset
+        // would otherwise write past its slot (and past the buffer on the last image) = heap
+        // corruption. The post-hoc `offset != INIT_HOST_BUFFER_SIZE` check in upload_images() only
+        // fires AFTER the overwrite already happened, so guard here and skip the bad image.
+        if (offset + image_size > INIT_HOST_BUFFER_SIZE)
+        {
+            std::cerr << "WARNING: upload_image skipped — image size " << image_size
+                      << " at offset " << offset << " would overflow the "
+                      << INIT_HOST_BUFFER_SIZE << "-byte host buffer (asset not 128x128?).\n";
+            return;
+        }
         // Create the texture
         auto stbn_host_address = gpu->device.buffer_host_address(image_host_buffer).value() + offset;
         std::memcpy(stbn_host_address, image->get_data(), image_size);
