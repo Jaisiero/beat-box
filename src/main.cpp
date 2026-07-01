@@ -102,8 +102,17 @@ int main()
       std::cout << "[AUTOSTART] determinism debug hashes ON" << std::endl;
     }
 
-    // Main loop (returns non-zero if a BB_ASSERT_* metric threshold failed — for headless A/B/CI)
-    int const render_rc = renderer->render();
+    // D1-offline: BB_COMPILE_ONLY warms the SPIR-V cache and exits. All pipelines were already compiled
+    // by the create() calls above (the ~100s cold Slang->SPIR-V pass), so spirv_cache/ is now populated
+    // next to the exe — skip the render loop so a build step (the warm_shader_cache CMake target) can
+    // pre-warm the cache and make the FIRST real launch fast (~2s) instead of paying ~100s then.
+    int render_rc = 0;
+    if (std::getenv("BB_COMPILE_ONLY")) {
+      std::cout << "[COMPILE] shader cache warmed; exiting without rendering (BB_COMPILE_ONLY)." << std::endl;
+    } else {
+      // Main loop (returns non-zero if a BB_ASSERT_* metric threshold failed — for headless A/B/CI)
+      render_rc = renderer->render();
+    }
 
     // Cleanup
     scene_manager->destroy();

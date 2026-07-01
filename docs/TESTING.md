@@ -22,6 +22,14 @@ Build first: `cmake --build build/Release --config RelWithDebInfo` (exe lands in
 | `BB_DETERMINISTIC=1` | skip the non-convergent alpha=0 post-stab so runs are cross-launch reproducible (also enables the `dbg_*` hashes) |
 | `BB_DET_STEPS=N` | exactly one sim step per render frame for N steps, then exit — a bit-identical step sequence for determinism checks |
 | `BB_DET_INPROC=1` | after N steps, reset to the identical initial state and run N again in the SAME process, comparing a cumulative path-hash |
+| `BB_COMPILE_ONLY=1` | compile all pipelines (warm `spirv_cache/`) then exit before the render loop — for the `warm_shader_cache` build target |
+
+**Cold start:** the first launch after a `.slang` (or `shared.inl`) edit recompiles the ~69 pipelines
+(~100s, `[COMPILE N]` progress); Daxa caches the SPIR-V in `spirv_cache/`, so later launches are ~2s.
+To pay that once as a build step instead of on the first real launch, run (on a GPU machine):
+```
+cmake --build build/Release --config RelWithDebInfo --target warm_shader_cache
+```
 
 The startup pipeline compile prints `[COMPILE N] <name>` progress (~100s cold, ~2s warm from
 `spirv_cache/`). `[PERF]` lines carry the live diagnostics; the ground-truth quality metrics

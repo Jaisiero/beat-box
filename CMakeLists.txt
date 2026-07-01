@@ -80,3 +80,17 @@ endif()
 
 find_package(glm CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE glm::glm)
+
+# D1-offline: opt-in step to warm the Slang->SPIR-V cache. Building all ~69 pipelines is the ~100s
+# cold-start cost; Daxa caches the SPIR-V in spirv_cache/ next to the exe, so a launch that warms it
+# ahead of time starts in ~2s. This runs the exe with BB_COMPILE_ONLY=1 (compile all pipelines, then
+# exit before the render loop). It is a SEPARATE, MANUAL target (not an automatic POST_BUILD) so it
+# never breaks a GPU-less CI build — run it on a machine with a GPU:
+#     cmake --build build/Release --config RelWithDebInfo --target warm_shader_cache
+add_custom_target(warm_shader_cache
+    COMMAND ${CMAKE_COMMAND} -E env BB_COMPILE_ONLY=1 "$<TARGET_FILE:${PROJECT_NAME}>"
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+    DEPENDS ${PROJECT_NAME}
+    COMMENT "Warming the Slang->SPIR-V cache (spirv_cache/) so the first launch is fast"
+    USES_TERMINAL
+)
