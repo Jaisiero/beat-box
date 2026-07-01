@@ -102,8 +102,8 @@ int main()
       std::cout << "[AUTOSTART] determinism debug hashes ON" << std::endl;
     }
 
-    // Main loop
-    renderer->render();
+    // Main loop (returns non-zero if a BB_ASSERT_* metric threshold failed — for headless A/B/CI)
+    int const render_rc = renderer->render();
 
     // Cleanup
     scene_manager->destroy();
@@ -115,7 +115,7 @@ int main()
     camera_manager->destroy();
     image_manager->destroy();
 
-    return 0;
+    return render_rc;
   }
   catch (const std::exception& e) {
     std::cerr << "\nCRITICAL ERROR (Standard Exception Thrown): " << e.what() << std::endl;

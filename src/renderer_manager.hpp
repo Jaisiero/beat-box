@@ -62,7 +62,7 @@ struct RendererManager
 
   bool update_resources(daxa::ImageId swapchain_image, CameraManager &cam_mngr);
 
-  void render();
+  int render(); // returns process exit code (0 = ok; non-zero when a BB_ASSERT_* metric threshold fails)
   daxa_u32 get_previous_frame_index();
   daxa_u32 get_frame_index();
   daxa_u32 get_next_frame_index();
