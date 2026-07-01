@@ -1175,6 +1175,13 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     daxa_u32 pen_mm = daxa_u32(clamp(-pen * 1000.0f, 0.0f, 1.0e9f));
     daxa_u32 prev;
     InterlockedMax(sim_config->dbg_pk_pen, pen_mm, prev);
+    // KNOWN DIAGNOSTIC-ONLY RACE (intentionally not hardened): dbg_pk_pen itself is the true max
+    // (atomic), but the payload latch below is a non-atomic guarded write — several threads can each
+    // see pen_mm > their sampled `prev` and race, so the latched vn/lambda/k/body/stick may belong to
+    // a different contact than the one that ultimately owns dbg_pk_pen. All dbg_pk_* are readback-only
+    // trace fields, never fed back into the sim, so this cannot affect physics — only the trace row's
+    // secondary fields may be slightly inconsistent with the peak. A race-free fix would need a packed
+    // (pen<<k | payload) 64-bit atomic; not worth it for debug output.
     if (pen_mm > prev) // this contact is (currently) the deepest; latch its full state
     {
       daxa_f32vec3 p = m->contacts[j].position;
