@@ -72,6 +72,29 @@ static const daxa_u32 GC_PROPOSED_BASE = 0x80000000u;
   dispatch_buffer->avbd_color_dispatch[c] = (c < used) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
 }
 
+// A2: per-(layer,color) dispatch args for the post-stab CASCADE. Runs AFTER entry_avbd_max_depth
+// (avbd_max_support_depth final). Combines the empty-color skip (A1) with an empty-LAYER skip: a used
+// color in an active layer (d <= max_support_depth) gets ceil(rigid_body_count/X); everything else 0.
+// A 2-4 layer pile therefore never launches the 8+ empty upper layers (each was a full-grid early-out).
+[shader("compute")]
+[numthreads(BB_MAX_COLORS, 1, 1)] void entry_avbd_cascade_dispatcher(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  daxa_u32 c = compute_i.x;
+  if (c >= BB_MAX_COLORS) return;
+  SimConfig* sim_config = (SimConfig*)(GCD.task_head.sim_config);
+  DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCD.task_head.dispatch_buffer);
+  let bodies = min(sim_config->rigid_body_count, BB_MAX_RIGID_BODY_COUNT);
+  let cnt = (bodies + RIGID_BODY_SIM_COMPUTE_X - 1u) / RIGID_BODY_SIM_COMPUTE_X;
+  let used_colors = min(sim_config->avbd_color_count, BB_MAX_COLORS);
+  let max_layer = min(sim_config->avbd_max_support_depth, BB_AVBD_SHOCK_LAYERS - 1u);
+  let active = (c < used_colors) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
+  [unroll]
+  for (daxa_u32 d = 0u; d < BB_AVBD_SHOCK_LAYERS; ++d)
+  {
+    dispatch_buffer->avbd_cascade_dispatch[d * BB_MAX_COLORS + c] = (d <= max_layer) ? active : daxa_u32vec3(0u, 1u, 1u);
+  }
+}
+
 // A body is static (does not move) when it lacks the DYNAMIC flag (the floor is RigidBodyFlag::NONE).
 // Detect by flag, NOT inv_mass (the floor's inv_mass is 1.0 by a latent scene bug).
 bool gc_is_static(RigidBody* r)

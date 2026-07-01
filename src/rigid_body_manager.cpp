@@ -69,6 +69,8 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_AVBD_CRND = task_manager->create_compute(AvbdColorRoundInfo{}.info);
     pipeline_AVBD_CV = task_manager->create_compute(AvbdColorValidateInfo{}.info);
     pipeline_AVBD_CDISP = task_manager->create_compute(AvbdColorDispatcherInfo{}.info);
+    pipeline_AVBD_MAXD = task_manager->create_compute(AvbdMaxDepthInfo{}.info);
+    pipeline_AVBD_CASCD = task_manager->create_compute(AvbdCascadeDispatcherInfo{}.info);
     pipeline_AVBD_CMT = task_manager->create_compute(AvbdColorCommitInfo{}.info);
     pipeline_AVBD_PRE = task_manager->create_compute(AvbdPrepareInfo{}.info);
     pipeline_AVBD_FIN = task_manager->create_compute(AvbdFinalizeInfo{}.info);
@@ -1191,6 +1193,21 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        },
                        user_callback_AVBD_CDISP);
 
+  // AVBD per-(layer,color) CASCADE dispatcher (A2): after entry_avbd_max_depth (avbd_max_support_depth
+  // final), write per-(layer,color) workgroup counts so the post-stab cascade skips empty upper layers.
+  auto user_callback_AVBD_CASCD = [this](daxa::TaskInterface ti, auto &)
+  {
+    ti.recorder.set_pipeline(*pipeline_AVBD_CASCD);
+    ti.recorder.push_constant(RigidBodyDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+  using TTask_AVBD_CASCD = TaskTemplate<RigidBodyDispatcherTaskHead::Task, decltype(user_callback_AVBD_CASCD)>;
+  TTask_AVBD_CASCD task_AVBD_CASCD(std::array{
+                           daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                           daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.sim_config, task_sim_config),
+                       },
+                       user_callback_AVBD_CASCD);
+
   // the 5 coloring passes share GraphColorTaskHead bindings and dispatch over graph_color_dispatch
   auto gc_views = std::array{
       daxa::attachment_view(GraphColorTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
@@ -1323,7 +1340,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     // A1: dispatch_indirect at this color's own workgroup count (0 if the body color is unused) instead
     // of the full body grid for all 32 colors early-outing 25/32 of them. Written by task_AVBD_CDISP.
-    return [this, avbd_dispatch, c, stab_alpha, ps_depth](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, stab_alpha, AVBD_COLOR_SOLVE_DISPATCH_OFFSET + c, ps_depth); };
+    // A2: for the SHOCK CASCADE (ps_depth != MAX_U32) use the per-(layer,color) count instead, so a
+    // used color in an EMPTY layer (above the pile height) is also skipped. Written by task_AVBD_CASCD.
+    daxa_u32 disp_off = (ps_depth == MAX_U32) ? (AVBD_COLOR_SOLVE_DISPATCH_OFFSET + c)
+                                              : (AVBD_CASCADE_DISPATCH_OFFSET + ps_depth * BB_MAX_COLORS + c);
+    return [this, avbd_dispatch, c, stab_alpha, ps_depth, disp_off](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, stab_alpha, disp_off, ps_depth); };
   };
   using TTask_AVBD_PRIM = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_primal(0u, 1.0f, MAX_U32))>;
   std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_vec;     // main sweeps: alpha = 1 (delta-only constraint)
@@ -1352,6 +1373,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   auto user_callback_AVBD_DRST = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_DRST, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
   using TTask_AVBD_DRST = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_DRST)>;
   TTask_AVBD_DRST task_AVBD_DRST(avbd_views, user_callback_AVBD_DRST);
+  // A2: max support-depth reduction (per body, after the depth BFS). Feeds the cascade dispatcher.
+  auto user_callback_AVBD_MAXD = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_MAXD, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
+  using TTask_AVBD_MAXD = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_MAXD)>;
+  TTask_AVBD_MAXD task_AVBD_MAXD(avbd_views, user_callback_AVBD_MAXD);
   auto user_callback_AVBD_DRLX = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_DRLX, 0u, 1.0f, COLLISION_DISPATCH_COUNT_OFFSET); };
   using TTask_AVBD_DRLX = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_DRLX)>;
   TTask_AVBD_DRLX task_AVBD_DRLX(avbd_views, user_callback_AVBD_DRLX);
@@ -1529,6 +1554,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     G.add_task(task_AVBD_DRLX);
   }
+  G.add_task(task_AVBD_MAXD);  // A2: reduce max support-depth (BFS converged; support_depth not touched after this)
+  G.add_task(task_AVBD_CASCD); // A2: per-(layer,color) cascade dispatch args (skip empty upper layers)
   for (daxa_u32 it = 0u; it < BB_AVBD_ITERATIONS; ++it)
   {
     for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
