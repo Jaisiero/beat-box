@@ -14,6 +14,34 @@ if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/../lib/Daxa/CMakeLists.txt")
         COMMAND_ERROR_IS_FATAL ANY)
 endif()
 
+# lib/Daxa is gitignored and checked out at tag 3.6 above, but this project REQUIRES the local
+# patch (TInlineTask move/copy-assignment + uses() fix, and the bundled-Slang 2025.11 -> 2026.10
+# bump; see patches/daxa-3.6/README.md) or it does not compile. Apply it idempotently on every
+# configure: if it applies cleanly -> apply; if it reverse-applies -> already patched, skip;
+# otherwise the local Daxa tree diverged -> warn (do not hard-fail a working local setup).
+set(BB_DAXA_PATCH "${CMAKE_CURRENT_LIST_DIR}/../patches/daxa-3.6/local-changes.patch")
+if(EXISTS "${BB_DAXA_PATCH}")
+    find_package(Git REQUIRED)
+    execute_process(COMMAND ${GIT_EXECUTABLE} apply --check "${BB_DAXA_PATCH}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../lib/Daxa"
+        RESULT_VARIABLE BB_DAXA_PATCH_NEEDED OUTPUT_QUIET ERROR_QUIET)
+    if(BB_DAXA_PATCH_NEEDED EQUAL 0)
+        execute_process(COMMAND ${GIT_EXECUTABLE} apply "${BB_DAXA_PATCH}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../lib/Daxa"
+            COMMAND_ERROR_IS_FATAL ANY)
+        message(STATUS "beat-box: applied patches/daxa-3.6/local-changes.patch to lib/Daxa")
+    else()
+        execute_process(COMMAND ${GIT_EXECUTABLE} apply --check --reverse "${BB_DAXA_PATCH}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../lib/Daxa"
+            RESULT_VARIABLE BB_DAXA_PATCH_REVERSED OUTPUT_QUIET ERROR_QUIET)
+        if(NOT BB_DAXA_PATCH_REVERSED EQUAL 0)
+            message(WARNING "beat-box: lib/Daxa matches neither a clean 3.6 checkout nor the patched "
+                "state (patches/daxa-3.6/local-changes.patch). The build may fail to compile; see "
+                "patches/daxa-3.6/README.md to reconcile the tree.")
+        endif()
+    endif()
+endif()
+
 # If the user has set a toolchain file, we'll want to chainload it via vcpkg
 if(NOT (CMAKE_TOOLCHAIN_FILE MATCHES "/scripts/buildsystems/vcpkg.cmake") AND DEFINED CMAKE_TOOLCHAIN_FILE)
     set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "${CMAKE_TOOLCHAIN_FILE}" CACHE UNINITIALIZED "")

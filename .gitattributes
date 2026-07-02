@@ -1,0 +1,3 @@
+# Patch files are byte-exact inputs to `git apply` (the configure-time Daxa patch):
+# never convert their line endings, or a CRLF checkout breaks the apply on fresh clones.
+*.patch -text

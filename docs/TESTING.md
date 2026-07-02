@@ -12,7 +12,7 @@ Build first: `cmake --build build/Release --config RelWithDebInfo` (exe lands in
 
 | Var | Effect |
 |-----|--------|
-| `BB_SOLVER=0..4` | select solver at startup: 0 PGS, 1 PGS_SOFT, 2 AVBD, 3 TGS_SOFT, 4 RIGID_NGS |
+| `BB_SOLVER=0..3` | select solver at startup: 0 PGS, 1 PGS_SOFT, 2 AVBD (default), 3 TGS_SOFT |
 | `BB_AUTOSTART=1` | start simulating immediately (no Space needed) |
 | `BB_SCENE=N` | load scene N (1..8) at startup instead of the default scene_7 |
 | `BB_SCENE_FILE=path` | load a data-driven scene from a text file (overrides `BB_SCENE`): one cube per line, `px py pz [half_extent] [mass] [restitution] [friction]` (trailing fields optional, `#`/blank lines skipped); a floor + emissive light are auto-added. Iterate on a repro scene with no rebuild. |

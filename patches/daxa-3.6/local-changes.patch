@@ -58,3 +58,14 @@ index a3b2064a..4222cc33 100644
          }
  
          // task head interface:
+diff --git a/src/impl_core.hpp b/src/impl_core.hpp
+index 66579494..e99f6365 100644
+--- a/src/impl_core.hpp
++++ b/src/impl_core.hpp
+@@ -727,4 +727,4 @@ namespace daxa
+             return ret;
+         }
+     };
+-}
+\ No newline at end of file
++}
