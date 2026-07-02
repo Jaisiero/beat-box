@@ -268,6 +268,12 @@ int RendererManager::render()
   if (const char *e = std::getenv("BB_ASSERT_MAX_DEEP200")) assert_max_deep200 = std::atof(e);
   if (const char *e = std::getenv("BB_ASSERT_MAX_PEN"))     assert_max_pen     = std::atof(e);
   if (const char *e = std::getenv("BB_ASSERT_MAX_MAXV"))    assert_max_maxv    = std::atof(e);
+  // floor-escape / explosion gate: fail when the LOWEST body sinks below this y (meters). miny is
+  // already read back + printed; without this assert an explosion that launches bodies through the
+  // floor passed every MAX_* gate (pen/deep can look fine while a body free-falls at -50m).
+  double assert_min_miny = -1e30;
+  bool assert_min_miny_on = false;
+  if (const char *e = std::getenv("BB_ASSERT_MIN_MINY")) { assert_min_miny = std::atof(e); assert_min_miny_on = true; }
   daxa_u64 assert_after = 60u;
   if (const char *e = std::getenv("BB_ASSERT_AFTER")) assert_after = static_cast<daxa_u64>(std::atoll(e));
   int metrics_exit_code = 0;
@@ -442,7 +448,7 @@ int RendererManager::render()
         _pk.flush();
       }
       // C1 headless metrics: one CSV row per stepped frame + threshold asserts (env-gated).
-      if (sim_stepped && (metrics_csv.is_open() || assert_max_deep200 >= 0.0 || assert_max_pen >= 0.0 || assert_max_maxv >= 0.0))
+      if (sim_stepped && (metrics_csv.is_open() || assert_max_deep200 >= 0.0 || assert_max_pen >= 0.0 || assert_max_maxv >= 0.0 || assert_min_miny_on))
       {
         auto const &mc = rigid_body_manager->get_sim_config_reference();
         double miny = (mc.dbg_min_y == 0xFFFFFFFFu) ? 0.0 : (double)mc.dbg_min_y / 1000.0 - 100.0;
@@ -461,9 +467,10 @@ int RendererManager::render()
           if (assert_max_deep200 >= 0.0 && (double)mc.dbg_deep200 > assert_max_deep200) { which = "deep200"; val = mc.dbg_deep200; lim = assert_max_deep200; }
           else if (assert_max_pen >= 0.0 && (double)mc.dbg_pen > assert_max_pen)         { which = "pen_mm";  val = mc.dbg_pen;     lim = assert_max_pen; }
           else if (assert_max_maxv >= 0.0 && (double)mc.dbg_maxv > assert_max_maxv)      { which = "maxv_mm"; val = mc.dbg_maxv;    lim = assert_max_maxv; }
+          else if (assert_min_miny_on && miny < assert_min_miny)                          { which = "miny_m (floor escape)"; val = miny; lim = assert_min_miny; }
           if (which)
           {
-            std::cerr << "[METRICS] ASSERT FAILED: " << which << "=" << val << " > " << lim
+            std::cerr << "[METRICS] ASSERT FAILED: " << which << "=" << val << " breached limit " << lim
                       << " at step " << (daxa_u64)mc.frame_count << " (solver=" << (daxa_u32)mc.solver_type << ")" << std::endl;
             metrics_exit_code = 2;
             break;

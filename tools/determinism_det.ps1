@@ -41,4 +41,19 @@ foreach($run in 1,2){
 }
 function First($f){ $keys = $Runs[1][$f].Keys | Where-Object { $Runs[2][$f].ContainsKey($_) } | Sort-Object; foreach($s in $keys){ if($Runs[1][$f][$s] -ne $Runs[2][$f][$s]){ return $s } }; return "NONE" }
 Write-Output "run1 steps: $($Runs[1]['ph'].Count)  run2 steps: $($Runs[2]['ph'].Count)"
-foreach($f in $fields){ Write-Output ("  {0,-5} first-diverge = {1}" -f $f, (First $f)) }
+
+# Pass/fail exit code (review v3): an empty/failed run used to false-pass as "NONE" (no steps =>
+# nothing ever diverged). exit 2 = no data (launch/DET failure), exit 1 = divergence, exit 0 = pass.
+if ($Runs[1]['ph'].Count -eq 0 -or $Runs[2]['ph'].Count -eq 0) {
+  Write-Output "RESULT: NO DATA (a run produced zero DET steps — launch failure or BB_DET_STEPS not honored)"
+  exit 2
+}
+$diverged = $false
+foreach($f in $fields){
+  $first = First $f
+  Write-Output ("  {0,-5} first-diverge = {1}" -f $f, $first)
+  if ($first -ne "NONE") { $diverged = $true }
+}
+if ($diverged) { Write-Output "RESULT: DIVERGED"; exit 1 }
+Write-Output "RESULT: DETERMINISTIC (all fields bitwise across both runs)"
+exit 0
