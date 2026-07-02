@@ -8,7 +8,7 @@ bool GUIManager::create(std::shared_ptr<RendererManager> renderer, std::shared_p
     return false;
   }
 
-  renderer_manager = renderer;
+  renderer_manager = renderer.get();
 
   auto ui_pipeline = UIPipeline{};
   ui_pipeline.info.color_attachments.at(0).format = gpu->swapchain.get_format();

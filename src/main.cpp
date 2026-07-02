@@ -54,24 +54,33 @@ int main()
     // Renderer
     auto renderer = std::make_shared<RendererManager>(gpu, task_manager, window, camera_manager, accel_struct_mngr, rigid_body_manager, scene_manager, status_manager, gui_manager, image_manager);
 
+    // Every create() reports failure via its bool return; discarding them let the app continue
+    // into the render loop on half-initialized state (GPU faults later, far from the cause).
+    // Abort with the failing manager's name instead (review v3).
+    auto check_init = [](bool ok, char const *name) {
+      if (!ok) {
+        std::cerr << "CRITICAL ERROR: " << name << "::create() failed! Exiting application." << std::endl;
+        std::exit(-1);
+      }
+    };
     // Create image manager
-    image_manager->create();
+    check_init(image_manager->create(), "ImageManager");
     // Create camera manager
-    camera_manager->create("Camera Manager");
+    check_init(camera_manager->create("Camera Manager"), "CameraManager");
     // Create input manager which depends on camera manager and window
-    input_manager.create(camera_manager, status_manager);
+    check_init(input_manager.create(camera_manager, status_manager), "InputManager");
     // Create GUI manager
-    gui_manager->create(renderer, status_manager);
+    check_init(gui_manager->create(renderer, status_manager), "GUIManager");
     // Create task graph
-    renderer->create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->build_SBT());
+    check_init(renderer->create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->build_SBT()), "RendererManager");
     // Create rigid body simulator
-    rigid_body_manager->create("Rigid Body Manager", renderer, gui_manager);
+    check_init(rigid_body_manager->create("Rigid Body Manager", renderer, gui_manager), "RigidBodyManager");
     // Create acceleration structure manager
-    accel_struct_mngr->create(renderer, rigid_body_manager, gui_manager);
+    check_init(accel_struct_mngr->create(renderer, rigid_body_manager, gui_manager), "AccelerationStructureManager");
     // Create status manager
-    status_manager->create();
+    check_init(status_manager->create(), "StatusManager");
     // Create scene manager
-    scene_manager->create();
+    check_init(scene_manager->create(), "SceneManager");
 
     // Load scene
     if(!scene_manager->load_scene()) {

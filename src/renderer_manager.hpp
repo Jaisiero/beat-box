@@ -5,12 +5,17 @@
 #include "camera_manager.hpp"
 #include "rigid_body_manager.hpp"
 #include "ray_tracing_pipeline.hpp"
-#include "scene_manager.hpp"
 #include "status_manager.hpp"
 #include "gui_manager.hpp"
 #include "image_manager.hpp"
 
 BB_NAMESPACE_BEGIN
+
+// forward-declared on purpose (review v3): scene_manager.hpp is a 1200+-line header-only manager
+// (all scene definitions inline); including it here pulled it into every TU that includes this
+// header (5 of 8), so ANY scene edit rebuilt nearly the whole project. Only the shared_ptr member
+// and three getters (defined in renderer_manager.cpp) need the type.
+struct SceneManager;
 
 struct RayTracingParams
 {
@@ -80,17 +85,12 @@ struct RendererManager
   daxa_u64 get_frame_count() {
     return status_manager->get_frame_count();
   }
-  daxa_u32 get_rigid_body_count() {
-    return scene_manager->get_rigid_body_count();
-  }
-  daxa_u32 get_active_rigid_body_count() {
-    return scene_manager->get_active_rigid_body_count();
-  }
+  // bodies in renderer_manager.cpp (SceneManager is forward-declared here — see the note above)
+  daxa_u32 get_rigid_body_count();
+  daxa_u32 get_active_rigid_body_count();
+  std::vector<ActiveRigidBody> get_active_rigid_bodies();
   SimSolverType get_solver() {
     return status_manager->get_solver();
-  }
-  std::vector<ActiveRigidBody> get_active_rigid_bodies() {
-    return scene_manager->get_active_rigid_bodies();
   }
 
 private:

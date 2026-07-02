@@ -141,8 +141,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     return false;
   }
 
-  renderer_manager = renderer;
-  gui_manager = gui;
+  renderer_manager = renderer.get();
+  gui_manager = gui.get();
   iteration_count = iterations;
 
   for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
