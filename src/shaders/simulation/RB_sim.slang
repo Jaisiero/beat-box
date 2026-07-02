@@ -20,6 +20,7 @@
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] IslandCounterPushConstants IC;
 [[vk::push_constant]] IslandBuilderPushConstants IB;
+[[vk::push_constant]] PickSpringPushConstants PSP;
 [[vk::push_constant]] IslandPrefixSumPushConstants IPS;
 [[vk::push_constant]] IslandBuilderBodyLink2IslandPushConstants BLI;
 [[vk::push_constant]] IslandBuilderSortBodyLinkInIslandPushConstants SBLI;
@@ -1910,4 +1911,114 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
 #if defined(BB_DEBUG)
   // printf("Updating rigid body %d sim frame: %lu c frame: %lu\n", index, r.frame_count, r_copy.frame_count);
 #endif // BB_DEBUG
+}
+
+// MOUSE PICK-AND-DRAG (review v3 feature): one thread, runs at the START of every sim step,
+// before any solver work, so the injected velocity flows naturally through whichever solver is
+// active (AVBD folds velocity into its inertial target; PGS/TGS advect it).
+//
+// PickState is a tiny host-visible bridge: the host writes the ray + button flags each render
+// frame; this pass writes the grab state (picked body, local anchor, grab distance). The two
+// halves have disjoint writers.
+//
+// Grab: ray-cast the CURRENT poses (ray -> each dynamic body's local frame -> slab test on its
+// local AABB, exactly the sandwich the RT intersection shader uses), keep the nearest hit, and
+// remember the hit point in the body's LOCAL frame + the hit distance along the ray.
+// Drag: the target is the CURRENT ray at the ORIGINAL grab distance; a critically-damped-ish
+// velocity spring pulls the grabbed anchor toward it. Gain < 1 because the impulse is applied at
+// a point (the effective mass there is lower than the body mass); the per-step repetition at
+// 60 Hz converges smoothly instead of overshooting.
+[shader("compute")]
+    [numthreads(1, 1, 1)] void entry_pick_spring(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(PSP.task_head.sim_config);
+  RigidBody* rigid_bodies = (RigidBody*)(PSP.task_head.rigid_bodies);
+  PickState* pick = (PickState*)(PSP.task_head.pick_state);
+
+  daxa_u32 flags = pick->flags;
+
+  // --- grab: pick button pressed this frame -> ray-cast the live scene ---
+  if ((flags & BB_PICK_REQUEST) != 0u)
+  {
+    pick->grab_count += 1u; // diagnostic: counts EXECUTED raycasts (should be ~1 per click)
+    daxa_f32 best_t = 1e30f;
+    daxa_u32 best_i = MAX_U32;
+    bool best_dynamic = false;
+    daxa_f32vec3 best_anchor = daxa_f32vec3(0.0f);
+    // ALL bodies compete for the nearest hit — statics too. Statics are OCCLUDERS: without them,
+    // a click on the floor or a pool wall sailed straight through and grabbed some unrelated cube
+    // BEHIND it ("the drag force affects other boxes"). Only a nearest hit that is dynamic grabs.
+    for (daxa_u32 i = 0u; i < sim_config->rigid_body_count; ++i)
+    {
+      RigidBody* r = &rigid_bodies[i];
+      Ray ray;
+      ray.origin = r->world_to_object(pick->ray_origin);
+      ray.direction = r->rotate_vector_inverse(pick->ray_dir); // rotation preserves |d| -> same t scale
+      Aabb aabb = {r->minimum, r->maximum};
+      daxa_f32 t = hitAabb(aabb, ray);
+      if (t > 0.0f && t < best_t)
+      {
+        best_t = t;
+        best_i = i;
+        best_dynamic = (r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE;
+        best_anchor = ray.origin + ray.direction * t; // hit point in the body's LOCAL frame
+      }
+    }
+    // store the PERSISTENT id, not the row: the morton reorder re-sorts the rows every step,
+    // so a row index would silently drift onto a different body ("the drag loses its box")
+    pick->picked_id = (best_i != MAX_U32 && best_dynamic) ? rigid_bodies[best_i].id : MAX_U32;
+    pick->grab_t = best_t;
+    pick->anchor_local = best_anchor;
+  }
+
+  // --- drag: middle button held -> velocity spring toward the ray point at the grab distance ---
+  if ((flags & BB_PICK_DRAGGING) != 0u && pick->picked_id != MAX_U32)
+  {
+    // Resolve the persistent id to THIS step's row by SEARCHING (1 thread x N bodies: trivial).
+    // Deliberately NOT via rigid_body_map: this pass runs FIRST in the step, BEFORE the reorder,
+    // and the map is one layout out of phase at that point. Because the sort is by MORTON code
+    // (spatial locality), a stale map[id] resolved to a row now occupied by a spatially NEARBY
+    // box — the spring sprayed impulses across the grabbed box's neighbourhood, which read as
+    // "boxes near the anchor get attracted like gravity" (user-reported, trace-confirmed:
+    // one picked_id, many affected bodies).
+    daxa_u32 row = MAX_U32;
+    for (daxa_u32 i = 0u; i < sim_config->rigid_body_count; ++i)
+    {
+      if (rigid_bodies[i].id == pick->picked_id) { row = i; break; }
+    }
+    if (row == MAX_U32) { return; }
+    RigidBody* r = &rigid_bodies[row];
+    if ((r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE)
+    {
+      daxa_f32 PULL_RATE = 10.0f;      // 1/s: desired closing speed per meter of separation
+      daxa_f32 MAX_PULL_SPEED = 12.0f; // m/s: match the terminal clamp. Note: a fast cursor
+                                       // sweep carries the box through the pile at this speed,
+                                       // shoving what it TOUCHES (real collisions); the spring
+                                       // itself only ever writes the grabbed body
+      daxa_f32 GAIN = 0.5f;            // velocity under-relaxation (smooth convergence at 60 Hz)
+      daxa_f32 OMEGA_DAMP = 0.85f;     // per-step spin damping while held
+
+      daxa_f32vec3 target = pick->ray_origin + pick->ray_dir * pick->grab_t;
+      daxa_f32vec3 anchor_w = r->object_to_world(pick->anchor_local);
+      daxa_f32vec3 dx = target - anchor_w;
+
+      daxa_f32vec3 desired_v = dx * PULL_RATE;
+      daxa_f32 dv_len = length(desired_v);
+      if (dv_len > MAX_PULL_SPEED) { desired_v *= MAX_PULL_SPEED / dv_len; }
+
+      // Pull from the CENTER of mass (no torque) and damp any spin while held. The v1 spring
+      // applied the full-mass impulse AT the anchor point: the effective mass at an off-center
+      // point is lower, so every step over-corrected rotationally, the spin displaced the anchor,
+      // the spring chased it, and the box whirled endlessly instead of gliding to the cursor
+      // (the classic mouse-joint instability). dx is still measured at the grabbed point, so the
+      // grabbed CORNER aims at the cursor; the pull itself is torque-free and the damping brings
+      // the box to a calm carry within a few steps.
+      r->velocity += (desired_v - r->velocity) * GAIN;
+      r->omega *= OMEGA_DAMP;
+    }
+  }
+  else if ((flags & BB_PICK_DRAGGING) == 0u)
+  {
+    pick->picked_id = MAX_U32; // released -> drop the grab
+  }
 }

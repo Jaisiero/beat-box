@@ -31,6 +31,7 @@ BB_DAXA_TASK_ALIAS(ResetBodyLinkTaskHead)
 BB_DAXA_TASK_ALIAS(BroadPhaseTaskHead)
 BB_DAXA_TASK_ALIAS(NarrowPhaseDispatcherTaskHead)
 BB_DAXA_TASK_ALIAS(NarrowPhaseTaskHead)
+BB_DAXA_TASK_ALIAS(PickSpringTaskHead)
 BB_DAXA_TASK_ALIAS(CollisionSolverDispatcherTaskHead)
 BB_DAXA_TASK_ALIAS(RigidBodySimTaskHead)
 BB_DAXA_TASK_ALIAS(IslandCounterTaskHead)
@@ -543,6 +544,10 @@ const auto narrow_phase_sim_pipeline_name = "narrow phase Simulation";
 const auto entry_chain_sort_sim = "entry_chain_sort";
 const auto chain_sort_pipeline_name = "Canonical chain sort";
 
+// mouse pick-and-drag spring
+const auto entry_pick_spring_sim = "entry_pick_spring";
+const auto pick_spring_pipeline_name = "Mouse pick spring";
+
 // collision solver dispatcher
 const auto entry_collision_solver_dispatcher = "entry_collision_solver_dispatcher";
 const auto collision_solver_dispatcher_pipeline_name = "Collision Solver Dispatcher";
@@ -967,6 +972,21 @@ struct ChainSortInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(NarrowPhasePushConstants),
       .name = chain_sort_pipeline_name,
+  };
+};
+
+struct PickSpringInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_pick_spring_sim
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(PickSpringPushConstants),
+      .name = pick_spring_pipeline_name,
   };
 };
 

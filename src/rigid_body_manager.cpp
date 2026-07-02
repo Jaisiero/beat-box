@@ -29,6 +29,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_NPD = task_manager->create_compute(NarrowPhaseDispatcherInfo{}.info);
     pipeline_NP = task_manager->create_compute(NarrowPhaseInfo{}.info);
     pipeline_CHS = task_manager->create_compute(ChainSortInfo{}.info);
+    pipeline_PS = task_manager->create_compute(PickSpringInfo{}.info);
     pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
     pipeline_IC = task_manager->create_compute(IslandCounterInfo{}.info);
     pipeline_CS_dispatcher = task_manager->create_compute(CollisionSolverDispatcherInfo{}.info);
@@ -144,6 +145,20 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   renderer_manager = renderer.get();
   gui_manager = gui.get();
   iteration_count = iterations;
+
+  // mouse pick-and-drag bridge: host writes the ray/buttons, the GPU pick pass writes the grab
+  // state (disjoint halves). HOST_ACCESS_RANDOM = host-writable + device-readable/writable.
+  pick_state_buffer = create_owned({
+      .size = sizeof(PickState),
+      .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+      .name = "pick_state",
+  });
+  {
+    auto *ps = device.buffer_host_address_as<PickState>(pick_state_buffer).value();
+    *ps = PickState{};
+    ps->picked_id = MAX_U32;
+  }
+  task_pick_state.set_buffer(pick_state_buffer);
 
   for (auto i = 0u; i < DOUBLE_BUFFERING; ++i)
   {
@@ -691,6 +706,23 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      },
                      user_callback_CHS);
 
+  // mouse pick-and-drag spring: one thread at the START of every sim step (before any solver
+  // pass) so the injected velocity flows through whichever solver is active
+  auto user_callback_PS = [this](daxa::TaskInterface ti, auto &)
+  {
+    ti.recorder.set_pipeline(*pipeline_PS);
+    ti.recorder.push_constant(PickSpringPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+  using TTask_PS = TaskTemplate<PickSpringTaskHead::Task, decltype(user_callback_PS)>;
+  TTask_PS task_PS(std::array{
+                       daxa::attachment_view(PickSpringTaskHead::AT.sim_config, task_sim_config),
+                       daxa::attachment_view(PickSpringTaskHead::AT.rigid_body_map, task_rigid_body_entries),
+                       daxa::attachment_view(PickSpringTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                       daxa::attachment_view(PickSpringTaskHead::AT.pick_state, task_pick_state),
+                   },
+                   user_callback_PS);
+
   auto user_callback_advect = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_advect);
@@ -1100,7 +1132,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 38> buffers = {
+  std::array<daxa::TaskBuffer, 39> buffers = {
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -1139,6 +1171,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       task_color_count,
       task_avbd_state,
       task_avbd_body_color,
+      task_pick_state,
   };
 
   // the whole sim runs on the async compute queue; the render graph waits the sim timeline.
@@ -1471,6 +1504,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   // dispatches/frame (the cross-solver overhead that made them slow since AVBD landed).
   auto record_solve = [&](TaskGraph &G, SimSolverType solver)
   {
+  G.add_task(task_PS); // mouse pick-and-drag spring (velocity injection BEFORE the step)
   G.add_task(task_RC);
   G.add_task(task_CRB);
   G.add_task(task_RBD);

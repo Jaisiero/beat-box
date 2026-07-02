@@ -14,10 +14,12 @@ void InputManager::on_mouse_move(f32 x, f32 y)
 
 void InputManager::on_mouse_button(i32 button, i32 action, f32 x, f32 y)
 {
-  if (button == GLFW_MOUSE_BUTTON_1)
+  // Camera orbit lives on the RIGHT button (the LEFT button is the pick-and-drag grab,
+  // read directly via glfwGetMouseButton in the render loop). The camera's flag is still
+  // called mouse_left_press internally; it now just means "orbit drag active".
+  if (button == GLFW_MOUSE_BUTTON_RIGHT)
   {
     camera_set_last_mouse_pos(camera_mngr->camera, glm::vec2(x, y));
-    // Click right button store the current mouse position
     if (action == GLFW_PRESS)
     {
       camera_set_mouse_left_press(camera_mngr->camera, true);

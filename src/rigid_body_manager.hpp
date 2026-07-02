@@ -109,6 +109,34 @@ struct RigidBodyManager{
   // AVBD
   daxa::TaskBuffer task_avbd_state{{.buffer = {}, .name = "RB_avbd_state_task"}};
   daxa::TaskBuffer task_avbd_body_color{{.buffer = {}, .name = "RB_avbd_body_color_task"}};
+  // mouse pick-and-drag bridge (host-visible; input half host-written, state half GPU-written)
+  daxa::TaskBuffer task_pick_state{{.buffer = {}, .name = "RB_pick_state_task"}};
+
+  // Mouse pick input, called once per render frame from the render loop: the camera ray under the
+  // cursor + button edges. `request` grabs (ray-cast) on the middle-press edge; `dragging` keeps
+  // the spring alive while held. Writes ONLY the host half of PickState (GPU owns the other half).
+  void set_pick_input(daxa_f32vec3 ray_origin, daxa_f32vec3 ray_dir, bool request, bool dragging)
+  {
+    if (!initialized) { return; }
+    auto *ps = device.buffer_host_address_as<PickState>(pick_state_buffer).value();
+    ps->ray_origin = ray_origin;
+    ps->ray_dir = ray_dir;
+    ps->flags = (request ? BB_PICK_REQUEST : 0u) | (dragging ? BB_PICK_DRAGGING : 0u);
+  }
+
+  // The currently grabbed body's persistent id (MAX_U32 = none) — a host read of the GPU-written
+  // half of the pick bridge (single u32: tear-free). Lets the render loop suppress camera rotation
+  // while the left button is dragging a body instead of orbiting.
+  daxa_u32 get_picked_body()
+  {
+    if (!initialized) { return MAX_U32; }
+    return device.buffer_host_address_as<PickState>(pick_state_buffer).value()->picked_id;
+  }
+  daxa_u32 get_grab_count() // diagnostic (BB_PICK_TRACE)
+  {
+    if (!initialized) { return 0u; }
+    return device.buffer_host_address_as<PickState>(pick_state_buffer).value()->grab_count;
+  }
   // voxel collision shape pools (static after scene load; host-writable, filled by the
   // SceneManager and addressed through SimConfig - no task-graph attachments needed)
   daxa::BufferId get_voxel_shapes_buffer() const { return voxel_shapes; }
@@ -181,6 +209,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_NPD;
   std::shared_ptr<daxa::ComputePipeline> pipeline_NP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CHS; // canonical chain sort (determinism)
+  std::shared_ptr<daxa::ComputePipeline> pipeline_PS;  // mouse pick-and-drag spring
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;
   std::shared_ptr<daxa::ComputePipeline> pipeline_ID;
   std::shared_ptr<daxa::ComputePipeline> pipeline_IC;
@@ -254,6 +283,7 @@ private:
 
   daxa::BufferId sim_config_host_buffer[DOUBLE_BUFFERING] = {};
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
+  daxa::BufferId pick_state_buffer = {}; // host-visible bridge (see task_pick_state)
   daxa::BufferId morton_codes = {};
   daxa::BufferId tmp_morton_codes = {};
   daxa::BufferId lbvh_nodes[DOUBLE_BUFFERING] = {};

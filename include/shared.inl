@@ -1289,6 +1289,45 @@ struct RigidBodyEntry
 };
 DAXA_DECL_BUFFER_PTR(RigidBodyEntry)
 
+// Mouse pick-and-drag (review v3 feature): a tiny host-visible bridge buffer.
+// The HOST writes the input half every render frame (camera ray + button flags);
+// the GPU pick/spring pass writes the state half (picked body + grab anchor).
+// The two halves have disjoint writers, so no copy/sync beyond submission order is needed.
+#define BB_PICK_REQUEST 1u  // pick button pressed this frame -> ray-cast and grab
+#define BB_PICK_DRAGGING 2u // pick button held -> keep applying the drag spring
+struct PickState
+{
+  // host-written input (every render frame)
+  daxa_f32vec3 ray_origin;
+  daxa_u32 flags; // BB_PICK_* bits
+  daxa_f32vec3 ray_dir;
+  daxa_f32 _pad0;
+  // GPU-written state (entry_pick_spring)
+  daxa_f32vec3 anchor_local; // grabbed point in the body's LOCAL frame (stays glued while dragging)
+  daxa_u32 picked_id;        // PERSISTENT body id (RigidBody.id), MAX_U32 = none. NOT a row index:
+                             // the sim re-sorts the rigid_bodies rows every step (morton reorder),
+                             // so a row index would silently point at a DIFFERENT body next step —
+                             // resolve id -> current row through rigid_body_map each step instead.
+  daxa_f32 grab_t;           // distance along the ray at grab time (the drag target rides the ray)
+  daxa_u32 grab_count;       // diagnostic: how many grab raycasts the GPU has executed (BB_PICK_TRACE)
+  daxa_f32 _pad2;
+  daxa_f32 _pad3;
+};
+DAXA_DECL_BUFFER_PTR(PickState)
+
+DAXA_DECL_TASK_HEAD_BEGIN(PickSpringTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBodyEntry), rigid_body_map)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(PickState), pick_state)
+DAXA_DECL_TASK_HEAD_END
+
+struct PickSpringPushConstants
+{
+  DAXA_TH_BLOB(PickSpringTaskHead, task_head)
+};
+
+
 // REORDER RIGID BODIES
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyReorderingTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)

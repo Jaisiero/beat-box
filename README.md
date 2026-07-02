@@ -61,6 +61,8 @@ build/Release/RelWithDebInfo/beat-box.exe
 | `R` | reset the current scene |
 | `F1`–`F8` | switch scene (resets + pauses) |
 | `1` / `2` / `3` / `4` | solver: PGS / PGS soft / **AVBD** / TGS soft |
+| **Left mouse** | **pick & drag a body** (hold and move — a spring pulls it to the cursor) |
+| Right mouse | orbit the camera |
 | `W A S D` / arrows | move camera (hold `Shift` for precision) |
 | `X` / `Z` | camera up / down |
 | `Tab` | toggle the ImGui overlay |
