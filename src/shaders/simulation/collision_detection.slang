@@ -1491,30 +1491,42 @@ daxa_b32 voxel_axis_collision_detection(SimConfig* sim_config, RigidBody* rA, Ri
   VoxelManifoldReducer red;
   red.init();
   voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red, daxa_f32vec3(0.0f, 1.0f, 0.0f), 16u + code);
+  if (code == 0u && red.interior_hits > 0u)
+  {
+    // embedding latch: interior samples mean part of this body sits INSIDE the other body's
+    // solid — depth that dbg_pen structurally cannot see (scene_5 "invisible interpenetration")
+    InterlockedMax(sim_config->dbg_vox_interior, red.interior_hits);
+  }
+  // Deep-interpenetration rescue (code 0 owns it — interior cells are counted in EVERY pass).
+  // Fires for PARTIAL embedding too (interior_hits >= 2 even with rim samples present), not just
+  // the fully-swallowed case: a body sunk >1 cell into another's solid gets NO contacts from its
+  // interior samples, and the rim contacts measure CELL-LOCAL depth (~1 cell), so the solver held
+  // the body like a cork — a STABLE embedded rest state (user-confirmed in scene_5) that dbg_pen
+  // reported as ~10 mm. The center-to-center rescue provides the missing extraction force and is
+  // self-limiting: once interior_hits drops to 0, code 0 reverts to its normal axis manifold.
+  // Natural settles never produce interior hits (7-run probe: dbg_vox_interior == 0 throughout),
+  // so this is a no-op outside genuine embedding.
+  if (code == 0u && (red.interior_hits >= 2u || (red.sample_count == 0u && red.interior_hits > 0u)))
+  {
+    daxa_f32vec3 d = r1->position - r2->position;
+    daxa_f32vec3 n_res = dot(d, d) > 1e-8f ? normalize(d) : daxa_f32vec3(0.0f, 1.0f, 0.0f);
+    manifold.normal = flip ? n_res : -n_res;
+    manifold.contacts[0].position = (r1->position + r2->position) * 0.5f;
+    manifold.contacts[0].penetration = -0.5f * s1->voxel_size;
+    manifold.contacts[0].normal_impulse = 0.0f;
+    manifold.contacts[0].tangent_impulse[0] = 0.0f;
+    manifold.contacts[0].tangent_impulse[1] = 0.0f;
+    manifold.contacts[0].warm_start = 0u;
+    manifold.contacts[0].stick = 0u;
+    manifold.contacts[0].fp.in_reference = 0xFFFFFFu;
+    manifold.contacts[0].fp.out_reference = 0xFFFFFFu;
+    manifold.contacts[0].fp.in_incident = 0xFFFFFFu;
+    manifold.contacts[0].fp.out_incident = 0xFFFFFFu;
+    manifold.contact_count = 1;
+    return true;
+  }
   if (red.sample_count == 0u)
   {
-    if (code == 0u && red.interior_hits > 0u)
-    {
-      // deep-interpenetration rescue (interior cells have no outward-feasible axis, so
-      // they are counted in EVERY pass - code 0 owns the rescue): one center-to-center
-      // contact so the bodies separate along a sane direction instead of sinking
-      daxa_f32vec3 d = r1->position - r2->position;
-      daxa_f32vec3 n_res = dot(d, d) > 1e-8f ? normalize(d) : daxa_f32vec3(0.0f, 1.0f, 0.0f);
-      manifold.normal = flip ? n_res : -n_res;
-      manifold.contacts[0].position = (r1->position + r2->position) * 0.5f;
-      manifold.contacts[0].penetration = -0.5f * s1->voxel_size;
-      manifold.contacts[0].normal_impulse = 0.0f;
-      manifold.contacts[0].tangent_impulse[0] = 0.0f;
-      manifold.contacts[0].tangent_impulse[1] = 0.0f;
-      manifold.contacts[0].warm_start = 0u;
-      manifold.contacts[0].stick = 0u;
-      manifold.contacts[0].fp.in_reference = 0xFFFFFFu;
-      manifold.contacts[0].fp.out_reference = 0xFFFFFFu;
-      manifold.contacts[0].fp.in_incident = 0xFFFFFFu;
-      manifold.contacts[0].fp.out_incident = 0xFFFFFFu;
-      manifold.contact_count = 1;
-      return true;
-    }
     return false;
   }
 
