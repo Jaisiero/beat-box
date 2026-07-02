@@ -123,6 +123,15 @@ struct RigidBodyManager{
     ps->ray_dir = ray_dir;
     ps->flags = (request ? BB_PICK_REQUEST : 0u) | (dragging ? BB_PICK_DRAGGING : 0u);
   }
+
+  // The currently grabbed body's persistent id (MAX_U32 = none) — a host read of the GPU-written
+  // half of the pick bridge (single u32: tear-free). Lets the render loop suppress camera rotation
+  // while the left button is dragging a body instead of orbiting.
+  daxa_u32 get_picked_body()
+  {
+    if (!initialized) { return MAX_U32; }
+    return device.buffer_host_address_as<PickState>(pick_state_buffer).value()->picked_id;
+  }
   // voxel collision shape pools (static after scene load; host-writable, filled by the
   // SceneManager and addressed through SimConfig - no task-graph attachments needed)
   daxa::BufferId get_voxel_shapes_buffer() const { return voxel_shapes; }

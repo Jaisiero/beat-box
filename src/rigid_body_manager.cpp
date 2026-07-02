@@ -156,7 +156,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     auto *ps = device.buffer_host_address_as<PickState>(pick_state_buffer).value();
     *ps = PickState{};
-    ps->picked_index = MAX_U32;
+    ps->picked_id = MAX_U32;
   }
   task_pick_state.set_buffer(pick_state_buffer);
 
@@ -717,6 +717,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_PS = TaskTemplate<PickSpringTaskHead::Task, decltype(user_callback_PS)>;
   TTask_PS task_PS(std::array{
                        daxa::attachment_view(PickSpringTaskHead::AT.sim_config, task_sim_config),
+                       daxa::attachment_view(PickSpringTaskHead::AT.rigid_body_map, task_rigid_body_entries),
                        daxa::attachment_view(PickSpringTaskHead::AT.rigid_bodies, task_rigid_bodies),
                        daxa::attachment_view(PickSpringTaskHead::AT.pick_state, task_pick_state),
                    },

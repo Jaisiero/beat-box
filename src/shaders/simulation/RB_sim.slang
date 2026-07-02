@@ -1932,6 +1932,7 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     [numthreads(1, 1, 1)] void entry_pick_spring(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config = (SimConfig*)(PSP.task_head.sim_config);
+  RigidBodyEntry* rigid_body_map = (RigidBodyEntry*)(PSP.task_head.rigid_body_map);
   RigidBody* rigid_bodies = (RigidBody*)(PSP.task_head.rigid_bodies);
   PickState* pick = (PickState*)(PSP.task_head.pick_state);
 
@@ -1959,15 +1960,18 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
         best_anchor = ray.origin + ray.direction * t; // hit point in the body's LOCAL frame
       }
     }
-    pick->picked_index = best_i;
+    // store the PERSISTENT id, not the row: the morton reorder re-sorts the rows every step,
+    // so a row index would silently drift onto a different body ("the drag loses its box")
+    pick->picked_id = (best_i != MAX_U32) ? rigid_bodies[best_i].id : MAX_U32;
     pick->grab_t = best_t;
     pick->anchor_local = best_anchor;
   }
 
   // --- drag: middle button held -> velocity spring toward the ray point at the grab distance ---
-  if ((flags & BB_PICK_DRAGGING) != 0u && pick->picked_index != MAX_U32)
+  if ((flags & BB_PICK_DRAGGING) != 0u && pick->picked_id != MAX_U32)
   {
-    RigidBody* r = &rigid_bodies[pick->picked_index];
+    // resolve the persistent id to THIS step's row (the rows were re-sorted since the grab)
+    RigidBody* r = &rigid_bodies[rigid_body_map[pick->picked_id].index];
     if ((r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE)
     {
       daxa_f32 PULL_RATE = 10.0f;      // 1/s: desired closing speed per meter of separation
@@ -1992,6 +1996,6 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   }
   else if ((flags & BB_PICK_DRAGGING) == 0u)
   {
-    pick->picked_index = MAX_U32; // released -> drop the grab
+    pick->picked_id = MAX_U32; // released -> drop the grab
   }
 }
