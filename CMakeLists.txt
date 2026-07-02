@@ -81,6 +81,20 @@ endif()
 find_package(glm CONFIG REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE glm::glm)
 
+# Host-side unit tests for the C++/Slang-shared math (include/math.hpp). Pure CPU — no GPU,
+# no window — so they run anywhere (incl. CI). Run with: ctest --test-dir build/Release -C RelWithDebInfo
+enable_testing()
+add_executable(math_tests tests/math_tests.cpp)
+target_include_directories(math_tests PRIVATE include)
+target_link_libraries(math_tests PRIVATE daxa::daxa glm::glm)
+if (MSVC)
+    target_compile_options(math_tests PRIVATE
+        "/external:I${PROJECT_SOURCE_DIR}/lib/Daxa/include"
+        /external:W0
+    )
+endif()
+add_test(NAME math_tests COMMAND math_tests)
+
 # D1-offline: opt-in step to warm the Slang->SPIR-V cache. Building all ~69 pipelines is the ~100s
 # cold-start cost; Daxa caches the SPIR-V in spirv_cache/ next to the exe, so a launch that warms it
 # ahead of time starts in ~2s. This runs the exe with BB_COMPILE_ONLY=1 (compile all pipelines, then

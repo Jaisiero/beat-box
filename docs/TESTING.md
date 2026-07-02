@@ -20,6 +20,7 @@ Build first: `cmake --build build/Release --config RelWithDebInfo` (exe lands in
 | `BB_RUN_SECONDS=N` | auto-exit after N wall-clock seconds (reproducible captures) |
 | `BB_METRICS_CSV=path` | write one ground-truth metrics row per stepped frame: `frame,solver,manifolds,sleeping,pen_mm,maxv_mm,miny_m,deep100,deep200` |
 | `BB_ASSERT_MAX_DEEP200=N` / `BB_ASSERT_MAX_PEN=N` / `BB_ASSERT_MAX_MAXV=N` | **exit code 2** + `[METRICS] ASSERT FAILED:...` if the metric exceeds N after `BB_ASSERT_AFTER` warmup steps (default 60). For scriptable pass/fail. Thresholds are per-scene. |
+| `BB_ASSERT_MIN_MINY=Y` | **exit code 2** if the LOWEST body sinks below `Y` meters (floor escape / explosion gate — pen/deep can look fine while a body free-falls through the floor) |
 | `BB_POCKET_TRACE=path` | write the deep-pocket oscillator trace CSV (off by default; per-frame disk I/O) |
 | `BB_DETERMINISTIC=1` | skip the non-convergent alpha=0 post-stab so runs are cross-launch reproducible (also enables the `dbg_*` hashes) |
 | `BB_DET_STEPS=N` | exactly one sim step per render frame for N steps, then exit — a bit-identical step sequence for determinism checks |
@@ -55,9 +56,26 @@ Per-scene metrics (e.g. the ramp/slider, scene_4):
 BB_SOLVER=2 BB_SCENE=4 BB_AUTOSTART=1 BB_RUN_SECONDS=10 BB_METRICS_CSV=scene4.csv ./beat-box.exe
 ```
 
-Determinism check (two runs, per-field first-diverge; `NONE` everywhere == bitwise-deterministic):
+Determinism check (two runs, per-field first-diverge; `NONE` everywhere == bitwise-deterministic;
+exit 0 = deterministic, 1 = diverged, 2 = no data):
 ```
 pwsh tools/determinism_det.ps1
+```
+
+**Full regression gauntlet** — scenes 1-8 with calibrated per-scene thresholds, one command
+(exit 0 = all pass; non-zero = the number of failing scenes):
+```
+pwsh tools/gauntlet.ps1
+```
+
+Text-scene parser round-trip self-test (dump == dump(load(dump)); exit 0 = identical):
+```
+pwsh tools/scene_roundtrip_test.ps1
+```
+
+Host-side math unit tests (Quaternion — CPU only, no GPU needed):
+```
+ctest --test-dir build/Release -C RelWithDebInfo --output-on-failure
 ```
 
 ## `tools/` vs `scratch/`
