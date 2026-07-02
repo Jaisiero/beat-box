@@ -390,6 +390,29 @@ int RendererManager::render()
       auto const sim_clock_now = std::chrono::steady_clock::now();
       double const elapsed_s = std::chrono::duration<double>(sim_clock_now - sim_clock_prev).count();
       sim_clock_prev = sim_clock_now;
+      // MOUSE PICK-AND-DRAG input (once per render frame, BEFORE the sim steps consume it):
+      // build the camera ray under the cursor — the same math as create_ray() in the raygen
+      // shader (shared.inl) — and hand it to the GPU pick/spring pass with the button edges.
+      {
+        auto &cam = camera_manager->camera;
+        bool const middle = camera_get_mouse_middle_pressed(cam);
+        static bool prev_middle = false;
+        f64 cx = 0.0, cy = 0.0;
+        glfwGetCursorPos(window.glfw_window_ptr, &cx, &cy);
+        glm::vec2 const pixel_center = glm::vec2(static_cast<f32>(cx), static_cast<f32>(cy)) + 0.5f;
+        glm::vec2 const inv_uv = pixel_center / glm::vec2(static_cast<f32>(window.width), static_cast<f32>(window.height));
+        glm::vec2 const d = inv_uv * 2.0f - 1.0f;
+        glm::mat4 const inv_view = _get_inverse_view_matrix(cam);
+        glm::mat4 const inv_proj = _get_inverse_projection_matrix(cam, true);
+        glm::vec4 const origin = inv_view * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        glm::vec4 const target = inv_proj * glm::vec4(d.x, d.y, 1.0f, 1.0f);
+        glm::vec4 const direction = inv_view * glm::vec4(glm::normalize(glm::vec3(target)), 0.0f);
+        rigid_body_manager->set_pick_input(
+            daxa_f32vec3(origin.x, origin.y, origin.z),
+            daxa_f32vec3(direction.x, direction.y, direction.z),
+            middle && !prev_middle, middle);
+        prev_middle = middle;
+      }
       // ONE forced step after a scene load/switch to publish the async AS through the render-synced
       // timeline path (cures the at-rest "dented/rounded cubes"). At rest is_simulating() is false, so
       // only this runs; sim_steps_this_frame=1 makes the AS-update block below rebuild + signal.

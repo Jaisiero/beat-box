@@ -20,6 +20,7 @@
 [[vk::push_constant]] RigidBodySimPushConstants RB_sim;
 [[vk::push_constant]] IslandCounterPushConstants IC;
 [[vk::push_constant]] IslandBuilderPushConstants IB;
+[[vk::push_constant]] PickSpringPushConstants PSP;
 [[vk::push_constant]] IslandPrefixSumPushConstants IPS;
 [[vk::push_constant]] IslandBuilderBodyLink2IslandPushConstants BLI;
 [[vk::push_constant]] IslandBuilderSortBodyLinkInIslandPushConstants SBLI;
@@ -1910,4 +1911,87 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
 #if defined(BB_DEBUG)
   // printf("Updating rigid body %d sim frame: %lu c frame: %lu\n", index, r.frame_count, r_copy.frame_count);
 #endif // BB_DEBUG
+}
+
+// MOUSE PICK-AND-DRAG (review v3 feature): one thread, runs at the START of every sim step,
+// before any solver work, so the injected velocity flows naturally through whichever solver is
+// active (AVBD folds velocity into its inertial target; PGS/TGS advect it).
+//
+// PickState is a tiny host-visible bridge: the host writes the ray + button flags each render
+// frame; this pass writes the grab state (picked body, local anchor, grab distance). The two
+// halves have disjoint writers.
+//
+// Grab: ray-cast the CURRENT poses (ray -> each dynamic body's local frame -> slab test on its
+// local AABB, exactly the sandwich the RT intersection shader uses), keep the nearest hit, and
+// remember the hit point in the body's LOCAL frame + the hit distance along the ray.
+// Drag: the target is the CURRENT ray at the ORIGINAL grab distance; a critically-damped-ish
+// velocity spring pulls the grabbed anchor toward it. Gain < 1 because the impulse is applied at
+// a point (the effective mass there is lower than the body mass); the per-step repetition at
+// 60 Hz converges smoothly instead of overshooting.
+[shader("compute")]
+    [numthreads(1, 1, 1)] void entry_pick_spring(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(PSP.task_head.sim_config);
+  RigidBody* rigid_bodies = (RigidBody*)(PSP.task_head.rigid_bodies);
+  PickState* pick = (PickState*)(PSP.task_head.pick_state);
+
+  daxa_u32 flags = pick->flags;
+
+  // --- grab: middle button pressed this frame -> ray-cast the live scene ---
+  if ((flags & BB_PICK_REQUEST) != 0u)
+  {
+    daxa_f32 best_t = 1e30f;
+    daxa_u32 best_i = MAX_U32;
+    daxa_f32vec3 best_anchor = daxa_f32vec3(0.0f);
+    for (daxa_u32 i = 0u; i < sim_config->rigid_body_count; ++i)
+    {
+      RigidBody* r = &rigid_bodies[i];
+      if ((r->flags & RigidBodyFlag::DYNAMIC) == RigidBodyFlag::NONE) { continue; }
+      Ray ray;
+      ray.origin = r->world_to_object(pick->ray_origin);
+      ray.direction = r->rotate_vector_inverse(pick->ray_dir); // rotation preserves |d| -> same t scale
+      Aabb aabb = {r->minimum, r->maximum};
+      daxa_f32 t = hitAabb(aabb, ray);
+      if (t > 0.0f && t < best_t)
+      {
+        best_t = t;
+        best_i = i;
+        best_anchor = ray.origin + ray.direction * t; // hit point in the body's LOCAL frame
+      }
+    }
+    pick->picked_index = best_i;
+    pick->grab_t = best_t;
+    pick->anchor_local = best_anchor;
+  }
+
+  // --- drag: middle button held -> velocity spring toward the ray point at the grab distance ---
+  if ((flags & BB_PICK_DRAGGING) != 0u && pick->picked_index != MAX_U32)
+  {
+    RigidBody* r = &rigid_bodies[pick->picked_index];
+    if ((r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE)
+    {
+      daxa_f32 PULL_RATE = 10.0f;      // 1/s: desired closing speed per meter of separation
+      daxa_f32 MAX_PULL_SPEED = 12.0f; // m/s: match the terminal clamp (no tunneling ammo)
+      daxa_f32 GAIN = 0.4f;            // point-impulse under-relaxation (stability)
+
+      daxa_f32vec3 target = pick->ray_origin + pick->ray_dir * pick->grab_t;
+      daxa_f32vec3 anchor_w = r->object_to_world(pick->anchor_local);
+      daxa_f32vec3 dx = target - anchor_w;
+
+      daxa_f32vec3 desired_v = dx * PULL_RATE;
+      daxa_f32 dv_len = length(desired_v);
+      if (dv_len > MAX_PULL_SPEED) { desired_v *= MAX_PULL_SPEED / dv_len; }
+
+      daxa_f32vec3 dv = desired_v - r->get_velocity_at(anchor_w);
+      if (r->inv_mass > 0.0f)
+      {
+        daxa_f32vec3 impulse = dv * (GAIN / r->inv_mass);
+        r->apply_impulse(impulse, anchor_w);
+      }
+    }
+  }
+  else if ((flags & BB_PICK_DRAGGING) == 0u)
+  {
+    pick->picked_index = MAX_U32; // released -> drop the grab
+  }
 }
