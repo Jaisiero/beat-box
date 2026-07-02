@@ -1621,7 +1621,9 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       axis_n[pi] = manifold.normal;
       overlap = max(overlap, daxa_u32(max(manifold.error, 0)));
     }
-    if (overlap >= 4u) // >= ~0.5 wu^3 of true interpenetration volume
+    if (overlap >= 2u) // edge/sliver wedges (a frame edge sunk into an arm) overlap only a few
+                       // voxel centers despite being visually deep — 2 centers ~ 0.25 wu^3 is
+                       // already far above anything a resting/threading contact produces (0)
     {
       daxa_f32vec3 d12 = r2->position - r->position;
       if (dot(d12, d12) > 1e-8f)
