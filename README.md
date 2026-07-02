@@ -97,6 +97,10 @@ deep-contact counts) to CSV, and fail with a non-zero exit code when a threshold
 See [docs/TESTING.md](docs/TESTING.md) for the `BB_*` environment hooks, A/B measurement recipes,
 and the determinism harness (`tools/determinism_det.ps1`).
 
+## License
+
+[MIT](LICENSE)
+
 ## Acknowledgements
 
 - [Daxa](https://github.com/Ipotrick/Daxa) — Vulkan abstraction + task graph (vendored at tag 3.6
