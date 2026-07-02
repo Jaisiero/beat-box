@@ -686,6 +686,15 @@ struct SimConfig
   daxa_u32 dbg_min_y;             // per-frame LOWEST dynamic-body y, encoded (y+100)*1000 (reset MAX_U32); floor top=0, cube rests at y=0.5
   daxa_u32 dbg_deep100;           // per-frame count of contacts penetrating > 100 mm
   daxa_u32 dbg_deep200;           // per-frame count of contacts penetrating > 200 mm
+  daxa_u32 dbg_vox_wedge;         // per-frame count of thin-feature PASS-THROUGH WEDGES resolved:
+                                  // an axis pair whose +/- manifolds BOTH ran deep (opposing forces
+                                  // cancelling = stable invisible interpenetration); the deeper side
+                                  // is suppressed so the shallower one extracts. scene_5 wedge fix.
+  daxa_u32 dbg_vox_interior;      // per-frame MAX of a voxel manifold's interior_hits: samples fully
+                                  // surrounded by the OTHER body's solid = a body is EMBEDDED inside
+                                  // another. Deep voxel-voxel overlap is otherwise INVISIBLE to
+                                  // dbg_pen (interior samples emit no contact; boundary samples
+                                  // measure cell-local depth <= 1 cell). scene_5 investigation.
   daxa_f32 dt;
   daxa_f32 gravity;
   SimFlag flags;
@@ -701,6 +710,7 @@ struct SimConfig
   daxa_u64 voxel_shapes_addr;
   daxa_u64 voxel_occupancy_addr;
   daxa_u64 voxel_surface_addr;
+  daxa_u64 voxel_sdf_addr;
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
   [mutating] bool has_flag(SimFlag flag)
   {
@@ -863,6 +873,8 @@ static const daxa_u32 BB_MAX_RIGID_BODY_COUNT = 1024;
 static const daxa_u32 BB_MAX_VOXEL_SHAPE_COUNT = 64;
 static const daxa_u32 BB_MAX_VOXEL_OCC_U32S = 16384;   // shared occupancy bit pool (u32s)
 static const daxa_u32 BB_MAX_VOXEL_SURF_COUNT = 16384; // shared surface-voxel pool (packed u32)
+static const daxa_u32 BB_MAX_VOXEL_SDF_F32S = 65536;   // shared NODE signed-distance pool (f32,
+                                                        // (dims+1)^3 nodes per shape)
 static const daxa_u32 BB_MAX_COLLISION_COUNT = BB_MAX_RIGID_BODY_COUNT * (BB_MAX_RIGID_BODY_COUNT - 1) / 2;
 static const daxa_u32 BB_MAX_MANIFOLD_NODE_COUNT = BB_MAX_COLLISION_COUNT * 2;
 // Graph-coloring solver: a contact gets one of BB_MAX_COLORS colors (bit per color in a u32 body mask);
@@ -1096,6 +1108,12 @@ struct VoxelShape
   daxa_u32 occ_offset;  // first u32 of this shape's occupancy bits in the shared pool
   daxa_u32 surf_offset; // first entry of this shape's surface list in the shared pool
   daxa_u32 surf_count;
+  daxa_u32 sdf_offset;  // first f32 of this shape's NODE signed-distance grid in the shared
+                        // pool: (dims+1) nodes per axis at the voxel CORNERS, exact Euclidean
+                        // distance to the solid surface, negative inside. Node-based (not
+                        // cell-centered) so a 2-voxel-thick feature keeps its midplane "tent"
+                        // (0, -vs, 0) and the trilinear gradient never flattens to zero across
+                        // thin features - the failure mode of every cell-local depth heuristic.
 };
 DAXA_DECL_BUFFER_PTR(VoxelShape)
 

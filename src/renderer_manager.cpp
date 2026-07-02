@@ -564,6 +564,7 @@ int RendererManager::render()
                     << " cph=" << sc.dbg_cp_poshash << " crh=" << sc.dbg_cp_rothash
                     << " c2ph=" << sc.dbg_cp2_poshash << " c2rh=" << sc.dbg_cp2_rothash
                     << " vhf=" << sc.dbg_vh_fin << " vhi=" << sc.dbg_vh_imp << std::dec
+                    << " vox=" << sc.dbg_vox_interior << " wedge=" << sc.dbg_vox_wedge
                     << " pen=" << sc.dbg_pen
                     << " miny=" << (sc.dbg_min_y == 0xFFFFFFFFu ? 0.0 : (double)sc.dbg_min_y / 1000.0 - 100.0)
                     << " deep100=" << sc.dbg_deep100 << " deep200=" << sc.dbg_deep200

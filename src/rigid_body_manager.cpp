@@ -246,6 +246,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
           .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
           .name = "voxel_surface",
       });
+      voxel_sdf = device.create_buffer({
+          .size = sizeof(daxa_f32) * BB_MAX_VOXEL_SDF_F32S,
+          .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+          .name = "voxel_sdf",
+      });
     }
     *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[i]).value() = SimConfig{
         .solver_type = renderer_manager->get_solver(),
@@ -265,6 +270,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .voxel_shapes_addr = device.device_address(voxel_shapes).value(),
         .voxel_occupancy_addr = device.device_address(voxel_occupancy).value(),
         .voxel_surface_addr = device.device_address(voxel_surface).value(),
+        .voxel_sdf_addr = device.device_address(voxel_sdf).value(),
     };
   }
   tmp_morton_codes = create_owned({
@@ -1841,6 +1847,7 @@ void RigidBodyManager::destroy()
   if (!voxel_shapes.is_empty())    { device.destroy_buffer(voxel_shapes);    voxel_shapes = {}; }
   if (!voxel_occupancy.is_empty()) { device.destroy_buffer(voxel_occupancy); voxel_occupancy = {}; }
   if (!voxel_surface.is_empty())   { device.destroy_buffer(voxel_surface);   voxel_surface = {}; }
+  if (!voxel_sdf.is_empty())       { device.destroy_buffer(voxel_sdf);       voxel_sdf = {}; }
 
   initialized = false;
 }
@@ -1932,6 +1939,7 @@ bool RigidBodyManager::update_sim()
         .voxel_shapes_addr = device.device_address(voxel_shapes).value(),
         .voxel_occupancy_addr = device.device_address(voxel_occupancy).value(),
         .voxel_surface_addr = device.device_address(voxel_surface).value(),
+        .voxel_sdf_addr = device.device_address(voxel_sdf).value(),
     };
 
     update_buffers(f);

@@ -557,8 +557,42 @@ public:
           }
         }
 
+    // NODE signed-distance field: exact Euclidean distance from each voxel CORNER to the
+    // solid's surface, negative inside. Nodes (not cell centers) so 2-voxel features keep
+    // their midplane fold. Distance to a region = min point-to-box distance over its cells;
+    // the "empty region" additionally includes everything outside the grid box. Brute force
+    // over <=(33^3) nodes x cells is microseconds at these sizes.
+    u32 const sdf_offset = (u32)voxel_sdf_cpu.size();
+    glm::uvec3 const ndims = dims + glm::uvec3(1);
+    voxel_sdf_cpu.resize(sdf_offset + ndims.x * ndims.y * ndims.z, 0.0f);
+    auto point_to_cell = [&](glm::vec3 p, u32 cx, u32 cy, u32 cz) -> f32 {
+      glm::vec3 const lo((f32)cx, (f32)cy, (f32)cz);
+      glm::vec3 const d = glm::max(glm::max(lo - p, p - (lo + glm::vec3(1.0f))), glm::vec3(0.0f));
+      return glm::length(d);
+    };
+    for (u32 nz = 0; nz < ndims.z; ++nz)
+      for (u32 ny = 0; ny < ndims.y; ++ny)
+        for (u32 nx_ = 0; nx_ < ndims.x; ++nx_)
+        {
+          glm::vec3 const p((f32)nx_, (f32)ny, (f32)nz); // grid units
+          f32 d_solid = 1e30f, d_empty = 1e30f;
+          for (u32 z = 0; z < dims.z; ++z)
+            for (u32 y = 0; y < dims.y; ++y)
+              for (u32 x = 0; x < dims.x; ++x)
+              {
+                f32 const dc = point_to_cell(p, x, y, z);
+                if (solid(x, y, z)) { d_solid = std::min(d_solid, dc); }
+                else                { d_empty = std::min(d_empty, dc); }
+              }
+          // outside the grid box is all empty: distance from an interior point to the box hull
+          f32 const d_out = std::min({p.x, p.y, p.z, (f32)dims.x - p.x, (f32)dims.y - p.y, (f32)dims.z - p.z});
+          d_empty = std::min(d_empty, std::max(d_out, 0.0f));
+          f32 const sd = d_solid > 0.0f ? d_solid : -d_empty; // on-surface nodes: both 0
+          voxel_sdf_cpu[sdf_offset + nx_ + ny * ndims.x + nz * ndims.x * ndims.y] = sd * vs;
+        }
+
     if (voxel_occ_cpu.size() > BB_MAX_VOXEL_OCC_U32S || voxel_surf_cpu.size() > BB_MAX_VOXEL_SURF_COUNT ||
-        voxel_shape_cpu.size() >= BB_MAX_VOXEL_SHAPE_COUNT)
+        voxel_sdf_cpu.size() > BB_MAX_VOXEL_SDF_F32S || voxel_shape_cpu.size() >= BB_MAX_VOXEL_SHAPE_COUNT)
     {
       std::cerr << "ERROR: voxel shape pools exceeded!" << std::endl;
     }
@@ -570,6 +604,7 @@ public:
         .occ_offset = occ_offset,
         .surf_offset = surf_offset,
         .surf_count = (u32)voxel_surf_cpu.size() - surf_offset,
+        .sdf_offset = sdf_offset,
     });
     voxel_shape_prims.push_back(std::move(prims));
 
@@ -892,6 +927,21 @@ public:
     // dynamic cubes from the file
     std::ifstream in(path);
     if (!in) { std::cerr << "BB_SCENE_FILE: cannot open '" << path << "'" << std::endl; return; }
+    // Second line format (the thin-feature wedge investigation — voxel repros as text files):
+    //   vox <l|cross|frame> px py pz [qx qy qz qw]   -> a concave voxel piece (scene_5 shape set)
+    bool shapes_built = false;
+    VoxelShapeBuild vox_l{}, vox_cross{}, vox_frame{};
+    auto ensure_shapes = [&]() {
+      if (shapes_built) { return; }
+      f32 const vvs = 0.5f; f32 const vdensity = 2.0f;
+      vox_l = build_voxel_shape(glm::uvec3(6, 6, 2), vvs, vdensity,
+          [](u32 x, u32 y, u32) { return y < 2 || x < 2; });
+      vox_cross = build_voxel_shape(glm::uvec3(6, 6, 2), vvs, vdensity,
+          [](u32 x, u32 y, u32) { return (x >= 2 && x < 4) || (y >= 2 && y < 4); });
+      vox_frame = build_voxel_shape(glm::uvec3(8, 8, 2), vvs, vdensity,
+          [](u32 x, u32 y, u32) { return !(x >= 2 && x < 6 && y >= 2 && y < 6); });
+      shapes_built = true;
+    };
     daxa_u32 n = 0u;
     std::string line;
     while (std::getline(in, line))
@@ -899,6 +949,24 @@ public:
       auto const s = line.find_first_not_of(" \t\r\n");
       if (s == std::string::npos || line[s] == '#') { continue; }
       std::istringstream ss(line);
+      if (line.compare(s, 4, "vox ") == 0)
+      {
+        std::string kw, shape;
+        float px, py, pz, qx = 0.0f, qy = 0.0f, qz = 0.0f, qw = 1.0f, qt;
+        ss >> kw >> shape;
+        if (!(ss >> px >> py >> pz)) { continue; }
+        if (ss >> qt) { qx = qt; if (ss >> qt) qy = qt; if (ss >> qt) qz = qt; if (ss >> qt) qw = qt; }
+        Quaternion q = Quaternion(qx, qy, qz, qw).normalize(); // hand-typed quats: keep |q|==1
+        ensure_shapes();
+        VoxelShapeBuild const *vsb = shape == "l" ? &vox_l : shape == "cross" ? &vox_cross
+                                   : shape == "frame" ? &vox_frame : nullptr;
+        if (vsb == nullptr) { std::cerr << "BB_SCENE_FILE: unknown vox shape '" << shape << "'" << std::endl; continue; }
+        // palette above: 3=green (l), 5=yellow (cross), 7=magenta (frame) — the scene_5 look
+        daxa_u32 const vmat = shape == "l" ? 3u : shape == "cross" ? 5u : 7u;
+        push_voxel_body(*vsb, daxa_f32vec3(px, py, pz), q, vmat, 0.6f);
+        ++n;
+        continue;
+      }
       float px, py, pz; float h = 0.5f, m = 5.0f, e = 0.0f, fr = 0.6f, tmp;
       if (!(ss >> px >> py >> pz)) { continue; }
       if (ss >> tmp) h = tmp;  if (ss >> tmp) m = tmp;  if (ss >> tmp) e = tmp;  if (ss >> tmp) fr = tmp;
@@ -1054,6 +1122,8 @@ public:
                   voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
       std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_surface_buffer()).value(),
                   voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
+      std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
+                  voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
     }
 
     // TODO: Handle error
@@ -1143,6 +1213,7 @@ public:
     voxel_shape_cpu.clear();
     voxel_occ_cpu.clear();
     voxel_surf_cpu.clear();
+    voxel_sdf_cpu.clear();
     voxel_shape_prims.clear();
     id_generator = 0;
     rigid_body_count = 0;
@@ -1213,6 +1284,7 @@ private:
   std::vector<VoxelShape> voxel_shape_cpu;
   std::vector<daxa_u32> voxel_occ_cpu;
   std::vector<daxa_u32> voxel_surf_cpu;
+  std::vector<daxa_f32> voxel_sdf_cpu; // node SDF, (dims+1)^3 f32s per shape
   std::vector<std::vector<Aabb>> voxel_shape_prims; // BLAS primitives per shape (body frame)
 
   // Active rigid body buffer
