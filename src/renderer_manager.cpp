@@ -413,6 +413,16 @@ int RendererManager::render()
             daxa_f32vec3(origin.x, origin.y, origin.z),
             daxa_f32vec3(direction.x, direction.y, direction.z),
             left_held && !prev_left, left_held);
+        // BB_PICK_TRACE: one stderr line per frame while the button is involved — which body id is
+        // grabbed, and whether the request edge fired. Diagnostic for "the drag touches other boxes".
+        static bool const _pick_trace = std::getenv("BB_PICK_TRACE") != nullptr;
+        if (_pick_trace && (left_held || prev_left))
+        {
+          std::cerr << "[PICK] held=" << left_held << " edge=" << (left_held && !prev_left)
+                    << " picked_id=" << rigid_body_manager->get_picked_body()
+                    << " grabs=" << rigid_body_manager->get_grab_count()
+                    << " cursor=" << cx << "," << cy << std::endl;
+        }
         prev_left = left_held;
       }
       // ONE forced step after a scene load/switch to publish the async AS through the render-synced

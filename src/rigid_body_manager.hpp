@@ -132,6 +132,11 @@ struct RigidBodyManager{
     if (!initialized) { return MAX_U32; }
     return device.buffer_host_address_as<PickState>(pick_state_buffer).value()->picked_id;
   }
+  daxa_u32 get_grab_count() // diagnostic (BB_PICK_TRACE)
+  {
+    if (!initialized) { return 0u; }
+    return device.buffer_host_address_as<PickState>(pick_state_buffer).value()->grab_count;
+  }
   // voxel collision shape pools (static after scene load; host-writable, filled by the
   // SceneManager and addressed through SimConfig - no task-graph attachments needed)
   daxa::BufferId get_voxel_shapes_buffer() const { return voxel_shapes; }

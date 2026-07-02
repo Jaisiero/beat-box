@@ -1932,15 +1932,15 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     [numthreads(1, 1, 1)] void entry_pick_spring(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config = (SimConfig*)(PSP.task_head.sim_config);
-  RigidBodyEntry* rigid_body_map = (RigidBodyEntry*)(PSP.task_head.rigid_body_map);
   RigidBody* rigid_bodies = (RigidBody*)(PSP.task_head.rigid_bodies);
   PickState* pick = (PickState*)(PSP.task_head.pick_state);
 
   daxa_u32 flags = pick->flags;
 
-  // --- grab: middle button pressed this frame -> ray-cast the live scene ---
+  // --- grab: pick button pressed this frame -> ray-cast the live scene ---
   if ((flags & BB_PICK_REQUEST) != 0u)
   {
+    pick->grab_count += 1u; // diagnostic: counts EXECUTED raycasts (should be ~1 per click)
     daxa_f32 best_t = 1e30f;
     daxa_u32 best_i = MAX_U32;
     bool best_dynamic = false;
@@ -1974,8 +1974,20 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   // --- drag: middle button held -> velocity spring toward the ray point at the grab distance ---
   if ((flags & BB_PICK_DRAGGING) != 0u && pick->picked_id != MAX_U32)
   {
-    // resolve the persistent id to THIS step's row (the rows were re-sorted since the grab)
-    RigidBody* r = &rigid_bodies[rigid_body_map[pick->picked_id].index];
+    // Resolve the persistent id to THIS step's row by SEARCHING (1 thread x N bodies: trivial).
+    // Deliberately NOT via rigid_body_map: this pass runs FIRST in the step, BEFORE the reorder,
+    // and the map is one layout out of phase at that point. Because the sort is by MORTON code
+    // (spatial locality), a stale map[id] resolved to a row now occupied by a spatially NEARBY
+    // box — the spring sprayed impulses across the grabbed box's neighbourhood, which read as
+    // "boxes near the anchor get attracted like gravity" (user-reported, trace-confirmed:
+    // one picked_id, many affected bodies).
+    daxa_u32 row = MAX_U32;
+    for (daxa_u32 i = 0u; i < sim_config->rigid_body_count; ++i)
+    {
+      if (rigid_bodies[i].id == pick->picked_id) { row = i; break; }
+    }
+    if (row == MAX_U32) { return; }
+    RigidBody* r = &rigid_bodies[row];
     if ((r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE)
     {
       daxa_f32 PULL_RATE = 10.0f;      // 1/s: desired closing speed per meter of separation

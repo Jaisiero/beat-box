@@ -1309,7 +1309,7 @@ struct PickState
                              // so a row index would silently point at a DIFFERENT body next step —
                              // resolve id -> current row through rigid_body_map each step instead.
   daxa_f32 grab_t;           // distance along the ray at grab time (the drag target rides the ray)
-  daxa_f32 _pad1;
+  daxa_u32 grab_count;       // diagnostic: how many grab raycasts the GPU has executed (BB_PICK_TRACE)
   daxa_f32 _pad2;
   daxa_f32 _pad3;
 };
