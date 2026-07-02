@@ -6,3 +6,4 @@ shaders_debug/*
 assets/*
 scratch/
 spirv_cache/
+imgui.ini
