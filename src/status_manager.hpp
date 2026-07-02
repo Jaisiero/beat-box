@@ -59,8 +59,13 @@ struct StatusManager
         .narrow_phase_dispatch       = daxa_u32vec3(1u, 1u, 1u),
     };
 
-    // Link resources
-    accel_struct_mngr->update_TLAS_resources(dispatch_buffer);
+    // Link resources — fail create() loudly if the AS manager wasn't ready (init-order bug),
+    // instead of continuing with an unbound dispatch buffer
+    if (!accel_struct_mngr->update_TLAS_resources(dispatch_buffer))
+    {
+      std::cerr << "ERROR: StatusManager::create() before AccelerationStructureManager::create() — dispatch buffer not linked" << std::endl;
+      return false;
+    }
 
     rigid_body_manager->update_resources();
 

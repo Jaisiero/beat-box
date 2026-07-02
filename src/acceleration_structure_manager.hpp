@@ -36,7 +36,6 @@ struct AccelerationStructureManager
 
   bool create(std::shared_ptr<RendererManager> renderer, std::shared_ptr<RigidBodyManager> rigid_body, std::shared_ptr<GUIManager> gui);
   void destroy();
-  void free_accel_structs();
 
   daxa::TlasId get_tlas();
   daxa::BufferId get_previous_rigid_body_buffer();
@@ -82,12 +81,14 @@ private:
   bool initialized = false;
   // Task manager reference
   std::shared_ptr<TaskManager> task_manager;
-  // Renderer manager reference
-  std::shared_ptr<RendererManager> renderer_manager;
-  // Rigid body manager reference
-  std::shared_ptr<RigidBodyManager> rigid_body_manager;
-  // GUI manager reference
-  std::shared_ptr<GUIManager> gui_manager;
+  // Back-references wired in create() — RAW pointers on purpose (review v3): RendererManager owns
+  // shared_ptrs to this manager while this manager pointed back with shared_ptrs, so the reference
+  // cycle kept EVERY manager's use-count above zero and no destructor ever ran (destroy() has
+  // explicit call sites in main(), but the objects themselves leaked). All managers are constructed
+  // and torn down strictly within main()'s scope, so non-owning pointers are safe here.
+  RendererManager *renderer_manager = nullptr;
+  RigidBodyManager *rigid_body_manager = nullptr;
+  GUIManager *gui_manager = nullptr;
   // Compute pipeline for updating acceleration structures
   std::shared_ptr<daxa::ComputePipeline> update_pipeline;
   // Alignment of the scratch buffer

@@ -141,10 +141,11 @@ private:
   daxa_u32 iteration_count = DEFAULT_ITERATION_COUNT;
   // Task manager reference
   std::shared_ptr<TaskManager> task_manager;
-  // Renderer manager reference
-  std::shared_ptr<RendererManager> renderer_manager;
-  // GUI manager reference
-  std::shared_ptr<GUIManager> gui_manager;
+  // Back-references wired in create() — RAW on purpose (review v3): shared_ptr back-refs formed
+  // reference cycles with RendererManager (which owns this manager), so no destructor ever ran.
+  // All managers live strictly within main()'s scope; non-owning pointers are safe.
+  RendererManager *renderer_manager = nullptr;
+  GUIManager *gui_manager = nullptr;
   // Acceleration Structure manager reference
   std::shared_ptr<AccelerationStructureManager> accel_struct_mngr;
   // Simulation flags

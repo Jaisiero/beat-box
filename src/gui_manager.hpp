@@ -167,8 +167,9 @@ struct GUIManager
   bool initialized = false;
   // Task manager reference
   std::shared_ptr<TaskManager> task_manager;
-  // Renderer manager reference
-  std::shared_ptr<RendererManager> renderer_manager;
+  // Back-reference wired in create() — RAW on purpose (review v3): a shared_ptr back-ref formed a
+  // reference cycle with RendererManager (which owns this manager), so no destructor ever ran.
+  RendererManager *renderer_manager = nullptr;
   // Rigid body manager reference
   std::shared_ptr<RigidBodyManager> rigid_body_manager;
 

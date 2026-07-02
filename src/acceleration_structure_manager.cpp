@@ -26,9 +26,9 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
 {
   if (device.is_valid() && !initialized)
   {
-    renderer_manager = renderer;
-    rigid_body_manager = rigid_body;
-    gui_manager = gui;
+    renderer_manager = renderer.get();
+    rigid_body_manager = rigid_body.get();
+    gui_manager = gui.get();
 
     // Create buffer for RigidBodies
     rigid_body_scratch_buffer = device.create_buffer({
@@ -173,34 +173,10 @@ void AccelerationStructureManager::destroy()
   }
 }
 
-void AccelerationStructureManager::free_accel_structs()
-{
-  // WARNING: currently UNUSED / out of sync with the live reload path. It destroys proc_blas
-  // entries without clearing the vector, destroys tlas[] without recreating/nulling them, never
-  // touches lbvh_blas or placeholder_blas, and rewinds a different offset set than
-  // reset_for_reload()/build_accel_structs(). Do NOT wire it up as-is — after it runs, get_tlas()
-  // returns destroyed handles and destroy() would double-free proc_blas. Reconcile with the live
-  // reload path (which clears proc_blas and rewinds offsets) before using.
-  // Freeing BLAS
-  for (auto blas : proc_blas)
-  {
-    device.destroy_blas(blas);
-  }
-
-  // Freeing TLAS
-
-  for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
-    device.destroy_tlas(tlas[f]);
-
-  // Resetting the offsets
-  current_rigid_body_count = 0;
-  previous_rigid_body_count = 0;
-  current_primitive_count = 0;
-  primitive_scratch_offset = 0;
-  previous_primitive_count = 0;
-  proc_blas_buffer_offset = 0;
-  proc_blas_scratch_offset = 0;
-}
+// free_accel_structs() was DELETED here (review v3): it was unused (zero call sites), documented
+// as out of sync with the live reload path, and a double-free landmine if ever wired up (destroyed
+// proc_blas without clearing the vector; destroy() would then free the same handles again).
+// reset_for_reload() (header) is the live, correct reload path.
 
 daxa::TlasId AccelerationStructureManager::get_tlas()
 {
@@ -668,12 +644,14 @@ bool AccelerationStructureManager::update_TLAS_resources(daxa::BufferId dispatch
 {
   if (!initialized)
   {
-    return !initialized;
+    // was `return !initialized` — i.e. TRUE (success) precisely when the manager was NOT ready,
+    // so a caller running before create() silently "succeeded" with an unbound dispatch buffer
+    return false;
   }
 
   task_dispatch_buffer.set_buffer(dispatch_buffer);
 
-  return initialized;
+  return true;
 }
 
 void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)

@@ -1,5 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS // std::getenv (BB_RUN_SECONDS) on MSVC
 #include "renderer_manager.hpp"
+#include "scene_manager.hpp" // forward-declared in the header (rebuild-cascade cut, review v3)
 #include <iostream>
 #include <fstream> // deep-pocket trace CSV (diagnostic)
 #include <cstdlib> // std::getenv / std::atof (BB_RUN_SECONDS auto-exit)
@@ -8,6 +9,12 @@ BB_NAMESPACE_BEGIN
 
 RendererManager::RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager &window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<GUIManager> gui_manager, std::shared_ptr<ImageManager> image_manager)
     : gpu(gpu), task_manager(task_manager), window(window), camera_manager(camera_manager), accel_struct_mngr(accel_struct_mngr), rigid_body_manager(rigid_body_manager), scene_manager(scene_manager), status_manager(status_manager), gui_manager(gui_manager), image_manager(image_manager) {}
+
+// SceneManager getters live here (not inline in the header) so the 1200+-line scene_manager.hpp
+// stays out of every TU that includes renderer_manager.hpp (rebuild-cascade cut, review v3)
+daxa_u32 RendererManager::get_rigid_body_count() { return scene_manager->get_rigid_body_count(); }
+daxa_u32 RendererManager::get_active_rigid_body_count() { return scene_manager->get_active_rigid_body_count(); }
+std::vector<ActiveRigidBody> RendererManager::get_active_rigid_bodies() { return scene_manager->get_active_rigid_bodies(); }
 
 bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingPipeline> pipeline, daxa::RayTracingShaderBindingTable SBT)
 {
