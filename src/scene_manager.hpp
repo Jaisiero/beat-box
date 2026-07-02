@@ -557,8 +557,42 @@ public:
           }
         }
 
+    // NODE signed-distance field: exact Euclidean distance from each voxel CORNER to the
+    // solid's surface, negative inside. Nodes (not cell centers) so 2-voxel features keep
+    // their midplane fold. Distance to a region = min point-to-box distance over its cells;
+    // the "empty region" additionally includes everything outside the grid box. Brute force
+    // over <=(33^3) nodes x cells is microseconds at these sizes.
+    u32 const sdf_offset = (u32)voxel_sdf_cpu.size();
+    glm::uvec3 const ndims = dims + glm::uvec3(1);
+    voxel_sdf_cpu.resize(sdf_offset + ndims.x * ndims.y * ndims.z, 0.0f);
+    auto point_to_cell = [&](glm::vec3 p, u32 cx, u32 cy, u32 cz) -> f32 {
+      glm::vec3 const lo((f32)cx, (f32)cy, (f32)cz);
+      glm::vec3 const d = glm::max(glm::max(lo - p, p - (lo + glm::vec3(1.0f))), glm::vec3(0.0f));
+      return glm::length(d);
+    };
+    for (u32 nz = 0; nz < ndims.z; ++nz)
+      for (u32 ny = 0; ny < ndims.y; ++ny)
+        for (u32 nx_ = 0; nx_ < ndims.x; ++nx_)
+        {
+          glm::vec3 const p((f32)nx_, (f32)ny, (f32)nz); // grid units
+          f32 d_solid = 1e30f, d_empty = 1e30f;
+          for (u32 z = 0; z < dims.z; ++z)
+            for (u32 y = 0; y < dims.y; ++y)
+              for (u32 x = 0; x < dims.x; ++x)
+              {
+                f32 const dc = point_to_cell(p, x, y, z);
+                if (solid(x, y, z)) { d_solid = std::min(d_solid, dc); }
+                else                { d_empty = std::min(d_empty, dc); }
+              }
+          // outside the grid box is all empty: distance from an interior point to the box hull
+          f32 const d_out = std::min({p.x, p.y, p.z, (f32)dims.x - p.x, (f32)dims.y - p.y, (f32)dims.z - p.z});
+          d_empty = std::min(d_empty, std::max(d_out, 0.0f));
+          f32 const sd = d_solid > 0.0f ? d_solid : -d_empty; // on-surface nodes: both 0
+          voxel_sdf_cpu[sdf_offset + nx_ + ny * ndims.x + nz * ndims.x * ndims.y] = sd * vs;
+        }
+
     if (voxel_occ_cpu.size() > BB_MAX_VOXEL_OCC_U32S || voxel_surf_cpu.size() > BB_MAX_VOXEL_SURF_COUNT ||
-        voxel_shape_cpu.size() >= BB_MAX_VOXEL_SHAPE_COUNT)
+        voxel_sdf_cpu.size() > BB_MAX_VOXEL_SDF_F32S || voxel_shape_cpu.size() >= BB_MAX_VOXEL_SHAPE_COUNT)
     {
       std::cerr << "ERROR: voxel shape pools exceeded!" << std::endl;
     }
@@ -570,6 +604,7 @@ public:
         .occ_offset = occ_offset,
         .surf_offset = surf_offset,
         .surf_count = (u32)voxel_surf_cpu.size() - surf_offset,
+        .sdf_offset = sdf_offset,
     });
     voxel_shape_prims.push_back(std::move(prims));
 
@@ -1087,6 +1122,8 @@ public:
                   voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
       std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_surface_buffer()).value(),
                   voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
+      std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
+                  voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
     }
 
     // TODO: Handle error
@@ -1176,6 +1213,7 @@ public:
     voxel_shape_cpu.clear();
     voxel_occ_cpu.clear();
     voxel_surf_cpu.clear();
+    voxel_sdf_cpu.clear();
     voxel_shape_prims.clear();
     id_generator = 0;
     rigid_body_count = 0;
@@ -1246,6 +1284,7 @@ private:
   std::vector<VoxelShape> voxel_shape_cpu;
   std::vector<daxa_u32> voxel_occ_cpu;
   std::vector<daxa_u32> voxel_surf_cpu;
+  std::vector<daxa_f32> voxel_sdf_cpu; // node SDF, (dims+1)^3 f32s per shape
   std::vector<std::vector<Aabb>> voxel_shape_prims; // BLAS primitives per shape (body frame)
 
   // Active rigid body buffer

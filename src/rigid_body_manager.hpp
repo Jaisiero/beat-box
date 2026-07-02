@@ -142,6 +142,7 @@ struct RigidBodyManager{
   daxa::BufferId get_voxel_shapes_buffer() const { return voxel_shapes; }
   daxa::BufferId get_voxel_occupancy_buffer() const { return voxel_occupancy; }
   daxa::BufferId get_voxel_surface_buffer() const { return voxel_surface; }
+  daxa::BufferId get_voxel_sdf_buffer() const { return voxel_sdf; }
 
 private:
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
@@ -314,6 +315,7 @@ private:
   daxa::BufferId voxel_shapes = {};
   daxa::BufferId voxel_occupancy = {};
   daxa::BufferId voxel_surface = {};
+  daxa::BufferId voxel_sdf = {};
 
   // Simulation configuration. AVBD is the default solver (user decision after the A/B
   // campaign: rests flush at pen~0 vs 13mm Baumgarte sink, true zero residual velocity,

@@ -710,6 +710,7 @@ struct SimConfig
   daxa_u64 voxel_shapes_addr;
   daxa_u64 voxel_occupancy_addr;
   daxa_u64 voxel_surface_addr;
+  daxa_u64 voxel_sdf_addr;
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
   [mutating] bool has_flag(SimFlag flag)
   {
@@ -872,6 +873,8 @@ static const daxa_u32 BB_MAX_RIGID_BODY_COUNT = 1024;
 static const daxa_u32 BB_MAX_VOXEL_SHAPE_COUNT = 64;
 static const daxa_u32 BB_MAX_VOXEL_OCC_U32S = 16384;   // shared occupancy bit pool (u32s)
 static const daxa_u32 BB_MAX_VOXEL_SURF_COUNT = 16384; // shared surface-voxel pool (packed u32)
+static const daxa_u32 BB_MAX_VOXEL_SDF_F32S = 65536;   // shared NODE signed-distance pool (f32,
+                                                        // (dims+1)^3 nodes per shape)
 static const daxa_u32 BB_MAX_COLLISION_COUNT = BB_MAX_RIGID_BODY_COUNT * (BB_MAX_RIGID_BODY_COUNT - 1) / 2;
 static const daxa_u32 BB_MAX_MANIFOLD_NODE_COUNT = BB_MAX_COLLISION_COUNT * 2;
 // Graph-coloring solver: a contact gets one of BB_MAX_COLORS colors (bit per color in a u32 body mask);
@@ -1105,6 +1108,12 @@ struct VoxelShape
   daxa_u32 occ_offset;  // first u32 of this shape's occupancy bits in the shared pool
   daxa_u32 surf_offset; // first entry of this shape's surface list in the shared pool
   daxa_u32 surf_count;
+  daxa_u32 sdf_offset;  // first f32 of this shape's NODE signed-distance grid in the shared
+                        // pool: (dims+1) nodes per axis at the voxel CORNERS, exact Euclidean
+                        // distance to the solid surface, negative inside. Node-based (not
+                        // cell-centered) so a 2-voxel-thick feature keeps its midplane "tent"
+                        // (0, -vs, 0) and the trilinear gradient never flattens to zero across
+                        // thin features - the failure mode of every cell-local depth heuristic.
 };
 DAXA_DECL_BUFFER_PTR(VoxelShape)
 

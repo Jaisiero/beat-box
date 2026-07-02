@@ -1046,6 +1046,54 @@ daxa_f32vec3 voxel_occ_gradient(daxa_u32* occ, VoxelShape* s, daxa_i32vec3 c)
   return daxa_f32vec3(-gx, -gy, -gz); // solid-on-the-left convention -> flip to outward
 }
 
+// node-SDF fetch: node coords clamped into the (dims+1)^3 node grid; outside it the true
+// field can only be LARGER than the border value, so extend by the clamped node distance
+// (far samples read safely positive instead of a flat border copy)
+daxa_f32 voxel_sdf_node(daxa_f32* sdf, VoxelShape* s, daxa_i32vec3 n)
+{
+  daxa_i32vec3 nc = daxa_i32vec3(clamp(n.x, 0, daxa_i32(s->dims.x)),
+                                 clamp(n.y, 0, daxa_i32(s->dims.y)),
+                                 clamp(n.z, 0, daxa_i32(s->dims.z)));
+  daxa_u32 nx = s->dims.x + 1u;
+  daxa_u32 nxy = nx * (s->dims.y + 1u);
+  daxa_f32 v = sdf[s->sdf_offset + daxa_u32(nc.x) + daxa_u32(nc.y) * nx + daxa_u32(nc.z) * nxy];
+  daxa_f32vec3 ext = daxa_f32vec3(daxa_f32(n.x - nc.x), daxa_f32(n.y - nc.y), daxa_f32(n.z - nc.z));
+  return v + length(ext) * s->voxel_size;
+}
+
+// trilinear node-SDF sample at a body2-LOCAL point: TRUE signed distance to the shape's
+// surface (world units, negative inside) plus the analytic trilinear gradient (body2-local,
+// ~unit for planar surfaces). The field lives at voxel CORNERS, so a 2-voxel-thick feature
+// keeps its midplane fold (0, -vs, 0) and the gradient points at the real nearest exit even
+// deep inside thin features - exactly the information every cell-local depth heuristic
+// (hover band / exit feasibility / dominance band) structurally lacked.
+daxa_f32 voxel_sdf_sample(daxa_f32* sdf, VoxelShape* s, daxa_f32vec3 l2, out daxa_f32vec3 grad)
+{
+  daxa_f32 vs = s->voxel_size;
+  daxa_f32vec3 gs = (l2 - s->grid_origin) / vs; // node space: node (i,j,k) at integer coords
+  daxa_f32vec3 fl = floor(gs);
+  daxa_i32vec3 b = daxa_i32vec3(daxa_i32(fl.x), daxa_i32(fl.y), daxa_i32(fl.z));
+  daxa_f32vec3 f = gs - fl;
+  daxa_f32 v000 = voxel_sdf_node(sdf, s, b);
+  daxa_f32 v100 = voxel_sdf_node(sdf, s, b + daxa_i32vec3(1, 0, 0));
+  daxa_f32 v010 = voxel_sdf_node(sdf, s, b + daxa_i32vec3(0, 1, 0));
+  daxa_f32 v110 = voxel_sdf_node(sdf, s, b + daxa_i32vec3(1, 1, 0));
+  daxa_f32 v001 = voxel_sdf_node(sdf, s, b + daxa_i32vec3(0, 0, 1));
+  daxa_f32 v101 = voxel_sdf_node(sdf, s, b + daxa_i32vec3(1, 0, 1));
+  daxa_f32 v011 = voxel_sdf_node(sdf, s, b + daxa_i32vec3(0, 1, 1));
+  daxa_f32 v111 = voxel_sdf_node(sdf, s, b + daxa_i32vec3(1, 1, 1));
+  daxa_f32 v00 = lerp(v000, v100, f.x);
+  daxa_f32 v10 = lerp(v010, v110, f.x);
+  daxa_f32 v01 = lerp(v001, v101, f.x);
+  daxa_f32 v11 = lerp(v011, v111, f.x);
+  daxa_f32 v0 = lerp(v00, v10, f.y);
+  daxa_f32 v1 = lerp(v01, v11, f.y);
+  daxa_f32 gx = lerp(lerp(v100 - v000, v110 - v010, f.y), lerp(v101 - v001, v111 - v011, f.y), f.z);
+  daxa_f32 gy = lerp(v10 - v00, v11 - v01, f.z);
+  grad = daxa_f32vec3(gx, gy, v1 - v0) / vs;
+  return lerp(v0, v1, f.z);
+}
+
 // reduction state: the 4 DIAGONAL-EXTREME samples of the contact patch (qu3e keeps 4)
 struct VoxelManifoldReducer
 {
@@ -1116,7 +1164,7 @@ struct VoxelManifoldReducer
 // (modes 1/2 split opposing-normal contact sets - e.g. both walls of a hole - into two
 // manifolds, because averaging opposing normals cancels to a degenerate direction)
 daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelShape* s2, bool s2_is_voxel,
-                           daxa_u32* occ, daxa_u32* surf, inout VoxelManifoldReducer red,
+                           daxa_u32* occ, daxa_u32* surf, daxa_f32* sdf, inout VoxelManifoldReducer red,
                            daxa_f32vec3 ref_n, daxa_u32 mode)
 {
   daxa_f32 vs1 = s1->voxel_size;
@@ -1148,94 +1196,43 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
     daxa_f32 sv = 0.0f;
     if (s2_is_voxel)
     {
+      // SDF narrow phase: TRUE signed distance + exit gradient from body2's node field.
+      // Replaces the occupied/hover/exit-feasibility/dominance heuristics wholesale: those
+      // all measured CELL-LOCAL depth (<= 1 cell), so a body sunk past a thin feature's
+      // midplane read ~10 mm while visually overlapping ~500 mm, and its opposing-exit
+      // manifolds cancelled into a stable wedge (the scene_5 persistent interpenetration).
+      // The node SDF is exact everywhere: depth keeps growing to the midplane and the
+      // gradient always points at the real nearest exit.
       daxa_f32 vs2 = s2->voxel_size;
       daxa_f32vec3 l2 = r2->rotate_vector_inverse(pw - r2->position);
       su = axk == 0u ? l2.y : l2.x;
       sv = axk == 2u ? l2.y : l2.z;
+      // wedge-detector volume probe (unchanged semantics: sample center inside B's solid)
       daxa_f32vec3 g = (l2 - s2->grid_origin) / vs2;
       daxa_i32vec3 c = daxa_i32vec3(daxa_i32(floor(g.x)), daxa_i32(floor(g.y)), daxa_i32(floor(g.z)));
-      if (!voxel_occ_bit(occ, s2, c))
+      if (voxel_occ_bit(occ, s2, c)) { red.overlap_hits += 1u; }
+      daxa_f32vec3 grad;
+      daxa_f32 sd = voxel_sdf_sample(sdf, s2, l2, grad);
+      daxa_f32 gl2 = dot(grad, grad);
+      if (gl2 < 1e-6f)
       {
-        // HOVER band: the center sits in an EMPTY cell - check the cell just behind it
-        // along this pass's axis. Gating contacts on center-in-occupied-cell gave the
-        // voxel-voxel branch a HALF-VOXEL dead zone (the OBB/floor branch is continuous
-        // from the surface): real overlaps up to 0.5*vs generated NO contacts at all,
-        // so stacked pieces froze visibly interpenetrated with nothing to extract them,
-        // and extraction past the cell boundary dropped the contact in a 0.25 jump
-        // (stacks never reached total rest). Measuring from the occupied neighbor makes
-        // the depth cross 0 exactly at true surface contact.
-        daxa_i32vec3 c_in = c;
-        if (axk == 0u) { c_in.x -= daxa_i32(sgn_pass); }
-        else if (axk == 1u) { c_in.y -= daxa_i32(sgn_pass); }
-        else { c_in.z -= daxa_i32(sgn_pass); }
-        if (!voxel_occ_bit(occ, s2, c_in)) { continue; }
-        daxa_f32 go_a = axk == 0u ? s2->grid_origin.x : (axk == 1u ? s2->grid_origin.y : s2->grid_origin.z);
-        daxa_f32 ci_a = daxa_f32(axk == 0u ? c_in.x : (axk == 1u ? c_in.y : c_in.z));
-        daxa_f32 l2_a = axk == 0u ? l2.x : (axk == 1u ? l2.y : l2.z);
-        daxa_f32 sup_h = axk == 0u ? sup.x : (axk == 1u ? sup.y : sup.z);
-        daxa_f32 dh = l2_a - (go_a + (ci_a + 0.5f) * vs2);
-        daxa_f32 ovh = (0.5f * vs2 + sup_h) - sgn_pass * dh; // continuous with the
-                                                             // occupied-cell formula at
-                                                             // the boundary (both = sup)
-        n_out2 = r2->rotate_vector(daxa_f32vec3(axk == 0u ? sgn_pass : 0.0f,
-                                                axk == 1u ? sgn_pass : 0.0f,
-                                                axk == 2u ? sgn_pass : 0.0f));
-        pe = -ovh;
-        fb = daxa_u32(c_in.x & 0xFF) | (daxa_u32(c_in.y & 0xFF) << 8u) | (daxa_u32(c_in.z & 0xFF) << 16u);
-      }
-      else
-      {
-      red.overlap_hits += 1u; // center cell is INSIDE B's solid: true volume overlap
-      // CELL-FACE contact in B's grid. The smallest feasible exit (outward-feasible =
-      // EMPTY neighbor that way) is only a REFERENCE for the dominance band below - it
-      // no longer picks the axis, so its flips between near-equal exits are harmless.
-      daxa_f32vec3 cc_l = s2->grid_origin + (daxa_f32vec3(daxa_f32(c.x), daxa_f32(c.y), daxa_f32(c.z)) + daxa_f32vec3(0.5f, 0.5f, 0.5f)) * vs2;
-      daxa_f32vec3 dl = l2 - cc_l;
-
-      daxa_f32 best = 1e9f;
-      [unroll]
-      for (daxa_u32 ax = 0u; ax < 3u; ++ax)
-      {
-        daxa_f32 di = ax == 0u ? dl.x : (ax == 1u ? dl.y : dl.z);
-        daxa_f32 sgn = di >= 0.0f ? 1.0f : -1.0f;
-        daxa_i32vec3 nb = c;
-        if (ax == 0u) { nb.x += daxa_i32(sgn); }
-        else if (ax == 1u) { nb.y += daxa_i32(sgn); }
-        else { nb.z += daxa_i32(sgn); }
-        if (voxel_occ_bit(occ, s2, nb)) { continue; } // that way is more solid: not an exit
-        daxa_f32 sup_ax = ax == 0u ? sup.x : (ax == 1u ? sup.y : sup.z);
-        daxa_f32 ov = (0.5f * vs2 + sup_ax) - abs(di);
-        if (ov < best) { best = ov; }
-      }
-      if (best > 0.5e9f)
-      {
-        // surrounded on all near sides: deep interior, no reliable direction
+        // perfectly symmetric interior point: exit direction undefined (vanishingly rare
+        // with node fields - needs mirror symmetry in every axis). Counted for the code-0
+        // center-to-center rescue, which is exactly the right tool for "no direction".
         red.interior_hits += 1u;
         continue;
       }
-      // PER-AXIS membership: the sample joins THIS pass's (axis, sign) manifold iff that
-      // exit is feasible and within a dominance band of the smallest exit, with its OWN
-      // exact depth along that axis. The previous per-sample argmin DEFECTED samples
-      // between axis manifolds whenever two overlaps crossed inside a 0.05vs tie band -
-      // recomposing both manifolds, hopping their winners and resetting lambdas (the
-      // measured n4 churn behind the stacked-pair jitter). With a wide band, edge
-      // samples live in BOTH manifolds stably: the wedge is real and constant.
-      daxa_f32 dla = axk == 0u ? dl.x : (axk == 1u ? dl.y : dl.z);
-      daxa_i32vec3 pnb = c;
-      if (axk == 0u) { pnb.x += daxa_i32(sgn_pass); }
-      else if (axk == 1u) { pnb.y += daxa_i32(sgn_pass); }
-      else { pnb.z += daxa_i32(sgn_pass); }
-      if (voxel_occ_bit(occ, s2, pnb)) { continue; } // pass axis not an exit here
-      daxa_f32 sup_pa = axk == 0u ? sup.x : (axk == 1u ? sup.y : sup.z);
-      daxa_f32 ovp = (0.5f * vs2 + sup_pa) - sgn_pass * dla;
-      if (ovp > best + 0.15f * vs2) { continue; } // dominated: not a credible exit
-      daxa_f32vec3 n_local = daxa_f32vec3(axk == 0u ? sgn_pass : 0.0f,
-                                          axk == 1u ? sgn_pass : 0.0f,
-                                          axk == 2u ? sgn_pass : 0.0f);
-      n_out2 = r2->rotate_vector(n_local);
-      pe = -ovp;
+      daxa_f32vec3 gn = grad / sqrt(gl2);
+      // pass membership: the exit direction must have a significant component along this
+      // pass's (axis, sign); diagonal exits join both their axes' manifolds (the stable
+      // two-row edge wedge the old dominance band existed for)
+      daxa_f32 ga = axk == 0u ? gn.x : (axk == 1u ? gn.y : gn.z);
+      if (sgn_pass * ga < 0.45f) { continue; }
+      // support radius of the (rotated) sample voxel along the exit direction
+      daxa_f32 sup_n = 0.5f * vs1 * (abs(dot(gn, a0)) + abs(dot(gn, a1)) + abs(dot(gn, a2)));
+      pe = sd - sup_n;
+      n_out2 = r2->rotate_vector(gn);
       fb = daxa_u32(c.x & 0xFF) | (daxa_u32(c.y & 0xFF) << 8u) | (daxa_u32(c.z & 0xFF) << 16u);
-      }
     }
     else
     {
@@ -1476,6 +1473,7 @@ daxa_b32 voxel_axis_collision_detection(SimConfig* sim_config, RigidBody* rA, Ri
   VoxelShape* shapes = (VoxelShape*)(sim_config->voxel_shapes_addr);
   daxa_u32* occ = (daxa_u32*)(sim_config->voxel_occupancy_addr);
   daxa_u32* surf = (daxa_u32*)(sim_config->voxel_surface_addr);
+  daxa_f32* sdf = (daxa_f32*)(sim_config->voxel_sdf_addr);
 
   bool a_vox = rA->shape_index != 0u;
   bool b_vox = rB->shape_index != 0u;
@@ -1495,7 +1493,7 @@ daxa_b32 voxel_axis_collision_detection(SimConfig* sim_config, RigidBody* rA, Ri
 
   VoxelManifoldReducer red;
   red.init();
-  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red, daxa_f32vec3(0.0f, 1.0f, 0.0f), 16u + code);
+  voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, sdf, red, daxa_f32vec3(0.0f, 1.0f, 0.0f), 16u + code);
   // probe channel: true volume overlap (narrow_phase's wedge probe reads it; the emission path
   // overwrites error with the extraction-trend sentinel right before emitting)
   manifold.error = daxa_i32(red.overlap_hits);
