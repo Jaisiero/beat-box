@@ -1059,6 +1059,9 @@ struct VoxelManifoldReducer
   daxa_f32 weight_sum; // sum of |pen| weights (detects opposing-normal cancellation)
   daxa_u32 sample_count;
   daxa_u32 interior_hits; // samples landing in zero-gradient interior cells (deep overlap)
+  daxa_u32 overlap_hits;  // samples whose CENTER cell is inside the other body's solid = true
+                          // volume overlap (independent of exit feasibility/depth caps) — the
+                          // thin-feature wedge signature: large while per-contact depths read ~mm
 
   [mutating] void init()
   {
@@ -1068,6 +1071,7 @@ struct VoxelManifoldReducer
     weight_sum = 0.0f;
     sample_count = 0u;
     interior_hits = 0u;
+    overlap_hits = 0u;
   }
 
   // Winner per EXTREME DIRECTION: the 4 diagonal directions of the contact-face plane
@@ -1181,6 +1185,7 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       }
       else
       {
+      red.overlap_hits += 1u; // center cell is INSIDE B's solid: true volume overlap
       // CELL-FACE contact in B's grid. The smallest feasible exit (outward-feasible =
       // EMPTY neighbor that way) is only a REFERENCE for the dominance band below - it
       // no longer picks the axis, so its flips between near-equal exits are harmless.
@@ -1491,6 +1496,9 @@ daxa_b32 voxel_axis_collision_detection(SimConfig* sim_config, RigidBody* rA, Ri
   VoxelManifoldReducer red;
   red.init();
   voxel_sample_body(r1, s1, r2, s2, s2_is_voxel, occ, surf, red, daxa_f32vec3(0.0f, 1.0f, 0.0f), 16u + code);
+  // probe channel: true volume overlap (narrow_phase's wedge probe reads it; the emission path
+  // overwrites error with the extraction-trend sentinel right before emitting)
+  manifold.error = daxa_i32(red.overlap_hits);
   if (code == 0u && red.interior_hits > 0u)
   {
     // embedding latch: interior samples mean part of this body sits INSIDE the other body's
@@ -1596,27 +1604,37 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   for (daxa_u32 pi = 0u; pi < 6u; ++pi) { axis_have[pi] = true; }
   if (voxel_pair)
   {
-    daxa_f32 axis_depth[6];
+    // volume + separation criterion (v2 — the v1 same-axis-pair depth rule was blind to the
+    // user's TILTED wedge, whose per-contact cell-local depths read only ~10 mm): the probe's
+    // overlap_hits counts samples truly INSIDE the other body's solid. A resting or threading
+    // contact keeps sample centers OUTSIDE the solid (hover band), so overlap stays ~0; a
+    // pass-through wedge has a large overlap volume regardless of its shallow contact depths.
+    // When embedded, SUPPRESS every manifold whose normal opposes the pair's separation
+    // direction (emitted-normal convention: separation === normalize(rB - rA), both flip cases)
+    // so the surviving contacts push the bodies APART instead of cancelling.
+    daxa_f32vec3 axis_n[6];
+    daxa_u32 overlap = 0u;
     for (daxa_u32 pi = 0u; pi < 6u; ++pi)
     {
       bool ph = voxel_axis_collision_detection(sim_config, r, r2, pi, manifold);
-      daxa_f32 d = 0.0f;
-      if (ph)
-      {
-        for (daxa_i32 ci = 0; ci < manifold.contact_count; ++ci) { d = max(d, -manifold.contacts[ci].penetration); }
-      }
       axis_have[pi] = ph;
-      axis_depth[pi] = d;
+      axis_n[pi] = manifold.normal;
+      overlap = max(overlap, daxa_u32(max(manifold.error, 0)));
     }
-    daxa_f32 WEDGE_DEPTH = 0.08f; // 80 mm: resting/threading clearance contacts sit at ~mm
-    for (daxa_u32 k = 0u; k < 3u; ++k)
+    if (overlap >= 4u) // >= ~0.5 wu^3 of true interpenetration volume
     {
-      if (axis_have[2u * k] && axis_have[2u * k + 1u] &&
-          axis_depth[2u * k] > WEDGE_DEPTH && axis_depth[2u * k + 1u] > WEDGE_DEPTH)
+      daxa_f32vec3 d12 = r2->position - r->position;
+      if (dot(d12, d12) > 1e-8f)
       {
-        daxa_u32 deeper = axis_depth[2u * k] >= axis_depth[2u * k + 1u] ? 2u * k : 2u * k + 1u;
-        axis_have[deeper] = false;
-        daxa_u32 _w; InterlockedAdd(sim_config->dbg_vox_wedge, 1u, _w);
+        daxa_f32vec3 sep = normalize(d12);
+        for (daxa_u32 pi = 0u; pi < 6u; ++pi)
+        {
+          if (axis_have[pi] && dot(axis_n[pi], sep) < -0.2f)
+          {
+            axis_have[pi] = false;
+            daxa_u32 _w; InterlockedAdd(sim_config->dbg_vox_wedge, 1u, _w);
+          }
+        }
       }
     }
   }
