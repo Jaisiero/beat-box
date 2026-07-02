@@ -686,6 +686,10 @@ struct SimConfig
   daxa_u32 dbg_min_y;             // per-frame LOWEST dynamic-body y, encoded (y+100)*1000 (reset MAX_U32); floor top=0, cube rests at y=0.5
   daxa_u32 dbg_deep100;           // per-frame count of contacts penetrating > 100 mm
   daxa_u32 dbg_deep200;           // per-frame count of contacts penetrating > 200 mm
+  daxa_u32 dbg_vox_wedge;         // per-frame count of thin-feature PASS-THROUGH WEDGES resolved:
+                                  // an axis pair whose +/- manifolds BOTH ran deep (opposing forces
+                                  // cancelling = stable invisible interpenetration); the deeper side
+                                  // is suppressed so the shallower one extracts. scene_5 wedge fix.
   daxa_u32 dbg_vox_interior;      // per-frame MAX of a voxel manifold's interior_hits: samples fully
                                   // surrounded by the OTHER body's solid = a body is EMBEDDED inside
                                   // another. Deep voxel-voxel overlap is otherwise INVISIBLE to

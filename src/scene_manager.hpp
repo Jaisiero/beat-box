@@ -892,6 +892,21 @@ public:
     // dynamic cubes from the file
     std::ifstream in(path);
     if (!in) { std::cerr << "BB_SCENE_FILE: cannot open '" << path << "'" << std::endl; return; }
+    // Second line format (the thin-feature wedge investigation — voxel repros as text files):
+    //   vox <l|cross|frame> px py pz [qx qy qz qw]   -> a concave voxel piece (scene_5 shape set)
+    bool shapes_built = false;
+    VoxelShapeBuild vox_l{}, vox_cross{}, vox_frame{};
+    auto ensure_shapes = [&]() {
+      if (shapes_built) { return; }
+      f32 const vvs = 0.5f; f32 const vdensity = 2.0f;
+      vox_l = build_voxel_shape(glm::uvec3(6, 6, 2), vvs, vdensity,
+          [](u32 x, u32 y, u32) { return y < 2 || x < 2; });
+      vox_cross = build_voxel_shape(glm::uvec3(6, 6, 2), vvs, vdensity,
+          [](u32 x, u32 y, u32) { return (x >= 2 && x < 4) || (y >= 2 && y < 4); });
+      vox_frame = build_voxel_shape(glm::uvec3(8, 8, 2), vvs, vdensity,
+          [](u32 x, u32 y, u32) { return !(x >= 2 && x < 6 && y >= 2 && y < 6); });
+      shapes_built = true;
+    };
     daxa_u32 n = 0u;
     std::string line;
     while (std::getline(in, line))
@@ -899,6 +914,24 @@ public:
       auto const s = line.find_first_not_of(" \t\r\n");
       if (s == std::string::npos || line[s] == '#') { continue; }
       std::istringstream ss(line);
+      if (line.compare(s, 4, "vox ") == 0)
+      {
+        std::string kw, shape;
+        float px, py, pz, qx = 0.0f, qy = 0.0f, qz = 0.0f, qw = 1.0f, qt;
+        ss >> kw >> shape;
+        if (!(ss >> px >> py >> pz)) { continue; }
+        if (ss >> qt) { qx = qt; if (ss >> qt) qy = qt; if (ss >> qt) qz = qt; if (ss >> qt) qw = qt; }
+        Quaternion q = Quaternion(qx, qy, qz, qw).normalize(); // hand-typed quats: keep |q|==1
+        ensure_shapes();
+        VoxelShapeBuild const *vsb = shape == "l" ? &vox_l : shape == "cross" ? &vox_cross
+                                   : shape == "frame" ? &vox_frame : nullptr;
+        if (vsb == nullptr) { std::cerr << "BB_SCENE_FILE: unknown vox shape '" << shape << "'" << std::endl; continue; }
+        // palette above: 3=green (l), 5=yellow (cross), 7=magenta (frame) — the scene_5 look
+        daxa_u32 const vmat = shape == "l" ? 3u : shape == "cross" ? 5u : 7u;
+        push_voxel_body(*vsb, daxa_f32vec3(px, py, pz), q, vmat, 0.6f);
+        ++n;
+        continue;
+      }
       float px, py, pz; float h = 0.5f, m = 5.0f, e = 0.0f, fr = 0.6f, tmp;
       if (!(ss >> px >> py >> pz)) { continue; }
       if (ss >> tmp) h = tmp;  if (ss >> tmp) m = tmp;  if (ss >> tmp) e = tmp;  if (ss >> tmp) fr = tmp;

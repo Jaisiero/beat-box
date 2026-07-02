@@ -1582,11 +1582,51 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     InterlockedOr(sim_config->dbg_dm_mon, 1u, _m);
   }
 
+  // THIN-FEATURE PASS-THROUGH WEDGE resolution (the scene_5 stable-interpenetration report):
+  // when a thin feature (2-cell slab/arm) penetrates PAST another thin feature's midplane, its
+  // overlap samples split between the two opposing exits of the SAME axis — the +axis and -axis
+  // manifolds both emit with significant depth and their forces CANCEL: a stable interpenetration
+  // that dbg_pen reads as ~10 mm (cell-local depths) and dbg_vox_interior cannot see (2-cell
+  // features have no interior cells). Resolution: probe the six passes first; when an axis pair
+  // has BOTH sides deeper than the wedge threshold, SUPPRESS the deeper side so the shallower one
+  // (least displacement = the entry side before the midplane) extracts the piece. Legitimate
+  // hole-threading keeps both walls: resting clearance contacts stay far under the threshold.
+  // Cost: detection runs twice for voxel pairs — a cold path (tens of pairs, scene_5-class).
+  bool axis_have[6];
+  for (daxa_u32 pi = 0u; pi < 6u; ++pi) { axis_have[pi] = true; }
+  if (voxel_pair)
+  {
+    daxa_f32 axis_depth[6];
+    for (daxa_u32 pi = 0u; pi < 6u; ++pi)
+    {
+      bool ph = voxel_axis_collision_detection(sim_config, r, r2, pi, manifold);
+      daxa_f32 d = 0.0f;
+      if (ph)
+      {
+        for (daxa_i32 ci = 0; ci < manifold.contact_count; ++ci) { d = max(d, -manifold.contacts[ci].penetration); }
+      }
+      axis_have[pi] = ph;
+      axis_depth[pi] = d;
+    }
+    daxa_f32 WEDGE_DEPTH = 0.08f; // 80 mm: resting/threading clearance contacts sit at ~mm
+    for (daxa_u32 k = 0u; k < 3u; ++k)
+    {
+      if (axis_have[2u * k] && axis_have[2u * k + 1u] &&
+          axis_depth[2u * k] > WEDGE_DEPTH && axis_depth[2u * k + 1u] > WEDGE_DEPTH)
+      {
+        daxa_u32 deeper = axis_depth[2u * k] >= axis_depth[2u * k + 1u] ? 2u * k : 2u * k + 1u;
+        axis_have[deeper] = false;
+        daxa_u32 _w; InterlockedAdd(sim_config->dbg_vox_wedge, 1u, _w);
+      }
+    }
+  }
+
   for (daxa_u32 emit_i = 0u; emit_i < 6u; ++emit_i)
   {
   var have = false;
   if (voxel_pair)
   {
+    if (!axis_have[emit_i]) { continue; }
     have = voxel_axis_collision_detection(sim_config, r, r2, emit_i, manifold);
   }
   else
