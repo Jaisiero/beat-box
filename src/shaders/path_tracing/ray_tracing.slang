@@ -3,6 +3,16 @@
 
 [[vk::push_constant]] RTPushConstants p;
 
+// PT-correctness (review v3): tone-map HDR radiance into [0,1] BEFORE gamma + the UNORM swapchain
+// write. Lights emit ~100, so linear radiance routinely exceeds 1.0; without an operator the
+// swapchain hard-clips per channel — everything near an emissive blew out to flat white with
+// hue-shifted fringes. ACES filmic fit (Narkowicz), branch-free.
+daxa::f32vec3 tonemap_aces(daxa::f32vec3 x)
+{
+  const daxa::f32 a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), daxa::f32vec3(0.0f), daxa::f32vec3(1.0f));
+}
+
 [shader("raygeneration")] void ray_generation()
 {
   const daxa::u32vec2 thread_idx = DispatchRaysIndex().xy;
@@ -57,6 +67,13 @@
     
   HitPayload payload = {daxa::f32vec3(0), daxa::f32vec3(0), MAX_U32, MAX_U32, daxa::f32vec3(1.0), daxa::f32vec3(0.0)};
 
+  // PT-correctness (review v3): BRDF-sampling half of the MIS balance heuristic. The previous
+  // bounce's BRDF pdf + origin let an emissive hit be weighted pdf_brdf/(pdf_brdf+pdf_light),
+  // pairing with the NEE's pdf_light/(pdf_light+pdf_brdf) — without this, direct light from
+  // emissive cubes was counted twice (once by NEE, once at full weight on the BRDF hit).
+  daxa::f32 prev_pdf_brdf = 0.0f;          // 0 = camera vertex: emission keeps weight 1
+  daxa::f32vec3 prev_position = ray.Origin;
+
   // **Path Tracing Loop**
   while (depth < max_bounces)
   {
@@ -85,10 +102,18 @@
     daxa::f32vec3 emission = material->emission;
     daxa_u32 instance_index = payload.instance_index;
 
-    // **Accumulate Emission**
+    // **Accumulate Emission** (MIS-weighted against the NEE that already sampled this light)
     if (length(emission) > 0.0f)
     {
-      payload.radiance += payload.throughput * emission;
+      daxa::f32 emission_weight = 1.0f; // camera hit: NEE hasn't sampled this vertex's light yet
+      if (prev_pdf_brdf > 0.0f)
+      {
+        // BRDF-sampled hit on a light: the previous vertex's NEE covered this light with
+        // pdf_light, so weight this half of the estimator by pdf_brdf/(pdf_brdf+pdf_light).
+        daxa::f32 pdf_light_here = cube_light_pdf_omega(r, prev_position, position, normal, light_count);
+        emission_weight = prev_pdf_brdf / (prev_pdf_brdf + pdf_light_here);
+      }
+      payload.radiance += payload.throughput * emission * emission_weight;
     }
 
     // **Next Event Estimation with MIS**
@@ -126,6 +151,10 @@
     // Update throughput for indirect lighting
     daxa::f32 cos_theta = max(0.0f, dot(normal, new_direction));
     payload.throughput *= (brdf * cos_theta) / pdf_brdf;
+
+    // remember this vertex for the next bounce's emission MIS weight
+    prev_pdf_brdf = pdf_brdf;
+    prev_position = position;
 
     // Prepare the next ray
     ray.Origin = position + normal * 0.001f; // Offset to avoid self-intersection
@@ -168,16 +197,16 @@
     // Write the averaged color to the accumulation buffer
     accumulation_buffer[thread_idx.xy] = daxa::f32vec4(average_radiance, 1.0);
 
-    // Apply gamma correction to the average radiance
-    daxa::f32vec3 gamma_corrected_average = pow(average_radiance, daxa::f32vec3(1.0 / 2.2));
+    // Tone-map (HDR -> [0,1]) then gamma; accumulation stays LINEAR (average first, map after)
+    daxa::f32vec3 gamma_corrected_average = pow(tonemap_aces(average_radiance), daxa::f32vec3(1.0 / 2.2));
 
     // Write the averaged color to the output texture (swapchain)
     swapchain[thread_idx.xy] = daxa::f32vec4(gamma_corrected_average, 1.0);
   }
   else
   {
-    // Apply gamma correction
-    daxa::f32vec3 gamma_corrected_radiance = pow(payload.radiance, daxa::f32vec3(1.0 / 2.2));
+    // Tone-map (HDR -> [0,1]) then gamma
+    daxa::f32vec3 gamma_corrected_radiance = pow(tonemap_aces(payload.radiance), daxa::f32vec3(1.0 / 2.2));
 
     // For real-time rendering without accumulation
     swapchain[thread_idx.xy] = daxa::f32vec4(gamma_corrected_radiance, 1.0);

@@ -274,30 +274,23 @@ daxa_f32vec3 compute_direct_lighting_point(
     return light_radiance;
 }
 
-// Function to select a random light from the light buffer, try to get a light that is not the current instance
-daxa_u32 select_random_light(inout daxa_u32 seed, daxa_u32 light_count, daxa_u32 instance_index)
+// Select a light uniformly from the light buffer (pdf = 1/light_count, matching the NEE pdf).
+// PT-correctness fixes (review v3):
+// - was `floor(u * (light_count-1))`, which lands in [0, N-2] for u in [0,1) — the LAST light was
+//   (almost) never sampled while the pdf still assumed uniform 1/N. `min(u*N, N-1)` is uniform.
+// - the self-exclusion compared a LIGHTS-buffer index against a TLAS instance id (different id
+//   spaces); compare the light's rigid_body_id (the same rigid_body_map key instance_index is).
+// - when we ARE standing on the selected emissive body, skip NEE for this vertex (return MAX_U32:
+//   hit-emission already accounts for it) instead of remapping to a neighbour light — the remap
+//   doubled the neighbour's selection probability while the pdf still claimed uniform 1/N (bias).
+daxa_u32 select_random_light(inout daxa_u32 seed, daxa_u32 light_count, daxa_u32 instance_index, Ptr<Light> lights)
 {
     daxa_f32 u = random_float(seed);
-    daxa_f32 index_f = u * daxa_f32(light_count-1);
-
-    // Try to get a light that is not the current instance
-    daxa_u32 index = daxa_u32(floor(index_f));
-    if (index == instance_index && light_count > 1)
+    daxa_u32 index = min(daxa_u32(u * daxa_f32(light_count)), light_count - 1u);
+    if (lights[index].rigid_body_id == instance_index)
     {
-        if(index < light_count - 1)
-        {
-            index++;
-        }
-        else
-        {
-            index--;
-        }
+        return MAX_U32;
     }
-
-    if(index == instance_index) {
-        index = MAX_U32;
-    }
-
     return index;
 }
 
@@ -309,7 +302,11 @@ daxa_f32vec3 cosine_weighted_sample_on_cube(
     RigidBody* r,
     daxa_f32vec3 shading_position,
     out daxa_f32vec3 light_normal,
-    daxa_f32 half_size)
+    daxa_f32 half_size,
+    // PT-correctness (review v3): the sampler's TRUE area-measure pdf for the returned point:
+    // P(face) * uniform-on-face = (w_chosen / total_weight) / face_area. The old caller assumed
+    // uniform sampling of the whole cube (1 / (6*side^2)), which does not match this sampler.
+    out daxa_f32 pdf_area)
 {
     // 1) Define the 6 faces of the unit cube in local space
     const daxa_u32 FACE_COUNT = 6u;
@@ -376,6 +373,7 @@ daxa_f32vec3 cosine_weighted_sample_on_cube(
     if(total_weight < 1e-12f)
     {
         light_normal = daxa_f32vec3(0.0f);
+        pdf_area = 0.0f;
         return daxa_f32vec3(0.0f);
     }
 
@@ -451,7 +449,61 @@ daxa_f32vec3 cosine_weighted_sample_on_cube(
     light_normal = normalize(r->rotate_vector(normal_local));
     daxa_f32vec3 sample_point = r->object_to_world(sample_local);
 
+    // the pdf of THIS sampler at the returned point (area measure)
+    pdf_area = (weights[chosen_index] / total_weight) / face_area;
+
     return sample_point;
+}
+
+// The solid-angle pdf that the NEE above (uniform light pick * cosine_weighted_sample_on_cube)
+// assigns to a direction that arrives at `hit_position` on the emissive body `r`, as seen from
+// `from_position`. Used to MIS-weight emission picked up by BRDF-sampled bounce rays (the other
+// half of the balance heuristic — without it, direct light from emissive cubes is double-counted).
+// MUST mirror the face-weight computation in cosine_weighted_sample_on_cube exactly.
+daxa_f32 cube_light_pdf_omega(
+    RigidBody* r,
+    daxa_f32vec3 from_position,
+    daxa_f32vec3 hit_position,
+    daxa_f32vec3 hit_face_normal, // world-space normal of the face that was hit
+    daxa_u32 light_count)
+{
+    daxa_f32 half_size = r->get_half_size(0);
+    const daxa_f32 face_area = 4.0f * (half_size * half_size);
+
+    const daxa_f32vec3 face_normals_local[6] = {
+        daxa_f32vec3(+1.0f, 0.0f, 0.0f), daxa_f32vec3(-1.0f, 0.0f, 0.0f),
+        daxa_f32vec3(0.0f, +1.0f, 0.0f), daxa_f32vec3(0.0f, -1.0f, 0.0f),
+        daxa_f32vec3(0.0f, 0.0f, +1.0f), daxa_f32vec3(0.0f, 0.0f, -1.0f),
+    };
+
+    daxa_f32 total_weight = 0.0f;
+    daxa_f32 hit_face_weight = 0.0f;
+    for (daxa_u32 i = 0; i < 6; i++)
+    {
+        daxa_f32vec3 normal_w = normalize(r->rotate_vector(face_normals_local[i]));
+        daxa_f32vec3 center_w = r->object_to_world(face_normals_local[i] * half_size);
+        daxa_f32vec3 to_shading = from_position - center_w;
+        daxa_f32 len = length(to_shading);
+        if (len < 1e-9f) { continue; }
+        daxa_f32 w = max(0.0f, dot(normal_w, to_shading / len)) * face_area;
+        total_weight += w;
+        if (dot(normal_w, hit_face_normal) > 0.9f) { hit_face_weight = w; }
+    }
+    if (total_weight < 1e-12f || hit_face_weight <= 0.0f || light_count == 0)
+    {
+        return 0.0f;
+    }
+
+    daxa_f32vec3 d = hit_position - from_position;
+    daxa_f32 distance_squared = dot(d, d);
+    daxa_f32 cos_theta_light = max(0.0f, dot(-normalize(d), hit_face_normal));
+    if (cos_theta_light < EPSILON || distance_squared < 1e-12f)
+    {
+        return 0.0f;
+    }
+
+    daxa_f32 pdf_area = (hit_face_weight / total_weight) / face_area / daxa_f32(light_count);
+    return pdf_area * distance_squared / cos_theta_light; // area -> solid angle
 }
 
 // Function to compute direct lighting with MIS for multiple Cube Lights using cosine-weighted sampling
@@ -480,7 +532,7 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     }
     
     // Select a random light
-    daxa_u32 selected_light_index = select_random_light(seed, light_count, instance_index);
+    daxa_u32 selected_light_index = select_random_light(seed, light_count, instance_index, lights);
     if(selected_light_index == MAX_U32)
     {
         // printf("No valid light found. Instance Index: %u, Light Count: %u\n", instance_index, light_count);
@@ -508,8 +560,9 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     
     // Sample a point on the cube's surface with cosine-weighted distribution & compute the light's normal at the sampled point
     daxa_f32vec3 light_normal = daxa_f32vec3(0.0f);
+    daxa_f32 pdf_sample_area = 0.0f; // the sampler's TRUE area pdf (per-face weighted, not uniform)
     daxa_f32vec3 light_sample_position =
-        cosine_weighted_sample_on_cube(seed, r, position, light_normal, half_size);
+        cosine_weighted_sample_on_cube(seed, r, position, light_normal, half_size, pdf_sample_area);
 
     // If uniform_sample_on_cube() found no forward-facing face, skip
     if (all(light_normal == 0.0f))
@@ -537,14 +590,17 @@ daxa_f32vec3 compute_direct_lighting_cubes(
         return daxa_f32vec3(0.0f);
     }
 
-    // Compute area & PDF
-    // The total surface area of the cube is 6 * side^2, with side=2*half_size
-    daxa_f32 side    = 2.0f * half_size;
-    daxa_f32 area    = 6.0f * (side * side);
-    // We are sampling exactly one light among 'light_count' lights
-    // AND sampling the cube’s surface uniformly. The usual area-lights formula gives:
-    // PDF = (1 / light_count) * (distance^2 / (area * cos_theta_light))
-    pdf_light = (1.0f / daxa_f32(light_count)) * (distance_squared / (area * cos_theta_light));
+    // PT-correctness (review v3): the pdf must match the ACTUAL sampler. Selection is uniform
+    // (1/light_count) and cosine_weighted_sample_on_cube reports its own per-face area pdf —
+    // the old formula assumed uniform sampling over all 6 faces (1/(6*side^2)), which is not
+    // what the sampler does. Convert area measure -> solid angle for MIS against the BRDF pdf.
+    daxa_f32 pdf_area = pdf_sample_area / daxa_f32(light_count);
+    pdf_light = pdf_area * distance_squared / cos_theta_light;
+    if (pdf_light < 1e-8f)
+    {
+        pdf_light = 0.0f;
+        return daxa_f32vec3(0.0f);
+    }
 
     // Shadow test (ray from shading point to the light sample)
     RayDesc shadow_ray;
@@ -581,11 +637,13 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     daxa_f32vec3 brdf     = albedo / PI;
     daxa_f32vec3 emission = material->emission;
 
-    // geometry factor = (N_dot_L * cos_theta_light) / distance^2
-    daxa_f32 geometry_factor = (N_dot_L * cos_theta_light) / distance_squared;
-
-    // final contribution
-    daxa_f32vec3 contribution = emission * brdf * geometry_factor;
+    // PT-correctness (review v3): the one-sample estimator MUST divide by the sampling pdf:
+    // L = f * L_e * cos_theta / pdf_omega  (solid-angle form; the cos_theta_light/d^2 geometry
+    // factor is already inside pdf_omega's area->solid-angle conversion, so it cancels out).
+    // The old code returned the raw f*G*L_e with NO pdf division — off by a full pdf factor,
+    // making direct light fall off like ~1/d^4 instead of 1/d^2. The caller then applies the
+    // light-side MIS weight pdf_light/(pdf_light+pdf_brdf), completing the balance heuristic.
+    daxa_f32vec3 contribution = emission * brdf * N_dot_L / pdf_light;
 
     return contribution;
 }
