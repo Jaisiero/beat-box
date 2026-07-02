@@ -1230,7 +1230,14 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       if (sgn_pass * ga < 0.45f) { continue; }
       // support radius of the (rotated) sample voxel along the exit direction
       daxa_f32 sup_n = 0.5f * vs1 * (abs(dot(gn, a0)) + abs(dot(gn, a1)) + abs(dot(gn, a2)));
-      pe = sd - sup_n;
+      // contact SKIN: solve toward a small positive separation instead of exact surface
+      // contact. Absorbs the two irreducible rest residuals - penalty-solver compliance
+      // (a resting contact carries load only while slightly penetrated) and trilinear
+      // OVERestimation of the SDF near convex edges (distance-to-a-convex-set is convex,
+      // so interpolating exact node values reads far by up to ~0.2*vs at a 90-degree
+      // edge). Faces rest with an invisible ~2%-of-a-voxel gap instead of a visible
+      // overlap; scales with resolution.
+      pe = sd - sup_n - 0.025f * vs2;
       n_out2 = r2->rotate_vector(gn);
       fb = daxa_u32(c.x & 0xFF) | (daxa_u32(c.y & 0xFF) << 8u) | (daxa_u32(c.z & 0xFF) << 16u);
     }
