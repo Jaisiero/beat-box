@@ -1943,11 +1943,14 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   {
     daxa_f32 best_t = 1e30f;
     daxa_u32 best_i = MAX_U32;
+    bool best_dynamic = false;
     daxa_f32vec3 best_anchor = daxa_f32vec3(0.0f);
+    // ALL bodies compete for the nearest hit — statics too. Statics are OCCLUDERS: without them,
+    // a click on the floor or a pool wall sailed straight through and grabbed some unrelated cube
+    // BEHIND it ("the drag force affects other boxes"). Only a nearest hit that is dynamic grabs.
     for (daxa_u32 i = 0u; i < sim_config->rigid_body_count; ++i)
     {
       RigidBody* r = &rigid_bodies[i];
-      if ((r->flags & RigidBodyFlag::DYNAMIC) == RigidBodyFlag::NONE) { continue; }
       Ray ray;
       ray.origin = r->world_to_object(pick->ray_origin);
       ray.direction = r->rotate_vector_inverse(pick->ray_dir); // rotation preserves |d| -> same t scale
@@ -1957,12 +1960,13 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
       {
         best_t = t;
         best_i = i;
+        best_dynamic = (r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE;
         best_anchor = ray.origin + ray.direction * t; // hit point in the body's LOCAL frame
       }
     }
     // store the PERSISTENT id, not the row: the morton reorder re-sorts the rows every step,
     // so a row index would silently drift onto a different body ("the drag loses its box")
-    pick->picked_id = (best_i != MAX_U32) ? rigid_bodies[best_i].id : MAX_U32;
+    pick->picked_id = (best_i != MAX_U32 && best_dynamic) ? rigid_bodies[best_i].id : MAX_U32;
     pick->grab_t = best_t;
     pick->anchor_local = best_anchor;
   }
@@ -1974,8 +1978,11 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     RigidBody* r = &rigid_bodies[rigid_body_map[pick->picked_id].index];
     if ((r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE)
     {
-      daxa_f32 PULL_RATE = 10.0f;      // 1/s: desired closing speed per meter of separation
-      daxa_f32 MAX_PULL_SPEED = 12.0f; // m/s: match the terminal clamp (no tunneling ammo)
+      daxa_f32 PULL_RATE = 8.0f;      // 1/s: desired closing speed per meter of separation
+      daxa_f32 MAX_PULL_SPEED = 6.0f; // m/s: gentle carry — at 12 the dragged box RAMMED every
+                                      // box along a fast cursor sweep (mass 5 x 12 m/s), which
+                                      // read as "the mouse influences other boxes"; the spring
+                                      // itself only ever writes the grabbed body
       daxa_f32 GAIN = 0.5f;            // velocity under-relaxation (smooth convergence at 60 Hz)
       daxa_f32 OMEGA_DAMP = 0.85f;     // per-step spin damping while held
 
