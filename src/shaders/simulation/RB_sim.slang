@@ -1976,7 +1976,8 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     {
       daxa_f32 PULL_RATE = 10.0f;      // 1/s: desired closing speed per meter of separation
       daxa_f32 MAX_PULL_SPEED = 12.0f; // m/s: match the terminal clamp (no tunneling ammo)
-      daxa_f32 GAIN = 0.4f;            // point-impulse under-relaxation (stability)
+      daxa_f32 GAIN = 0.5f;            // velocity under-relaxation (smooth convergence at 60 Hz)
+      daxa_f32 OMEGA_DAMP = 0.85f;     // per-step spin damping while held
 
       daxa_f32vec3 target = pick->ray_origin + pick->ray_dir * pick->grab_t;
       daxa_f32vec3 anchor_w = r->object_to_world(pick->anchor_local);
@@ -1986,12 +1987,15 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
       daxa_f32 dv_len = length(desired_v);
       if (dv_len > MAX_PULL_SPEED) { desired_v *= MAX_PULL_SPEED / dv_len; }
 
-      daxa_f32vec3 dv = desired_v - r->get_velocity_at(anchor_w);
-      if (r->inv_mass > 0.0f)
-      {
-        daxa_f32vec3 impulse = dv * (GAIN / r->inv_mass);
-        r->apply_impulse(impulse, anchor_w);
-      }
+      // Pull from the CENTER of mass (no torque) and damp any spin while held. The v1 spring
+      // applied the full-mass impulse AT the anchor point: the effective mass at an off-center
+      // point is lower, so every step over-corrected rotationally, the spin displaced the anchor,
+      // the spring chased it, and the box whirled endlessly instead of gliding to the cursor
+      // (the classic mouse-joint instability). dx is still measured at the grabbed point, so the
+      // grabbed CORNER aims at the cursor; the pull itself is torque-free and the damping brings
+      // the box to a calm carry within a few steps.
+      r->velocity += (desired_v - r->velocity) * GAIN;
+      r->omega *= OMEGA_DAMP;
     }
   }
   else if ((flags & BB_PICK_DRAGGING) == 0u)
