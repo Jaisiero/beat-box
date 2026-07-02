@@ -1978,11 +1978,11 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     RigidBody* r = &rigid_bodies[rigid_body_map[pick->picked_id].index];
     if ((r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE)
     {
-      daxa_f32 PULL_RATE = 8.0f;      // 1/s: desired closing speed per meter of separation
-      daxa_f32 MAX_PULL_SPEED = 6.0f; // m/s: gentle carry — at 12 the dragged box RAMMED every
-                                      // box along a fast cursor sweep (mass 5 x 12 m/s), which
-                                      // read as "the mouse influences other boxes"; the spring
-                                      // itself only ever writes the grabbed body
+      daxa_f32 PULL_RATE = 10.0f;      // 1/s: desired closing speed per meter of separation
+      daxa_f32 MAX_PULL_SPEED = 12.0f; // m/s: match the terminal clamp. Note: a fast cursor
+                                       // sweep carries the box through the pile at this speed,
+                                       // shoving what it TOUCHES (real collisions); the spring
+                                       // itself only ever writes the grabbed body
       daxa_f32 GAIN = 0.5f;            // velocity under-relaxation (smooth convergence at 60 Hz)
       daxa_f32 OMEGA_DAMP = 0.85f;     // per-step spin damping while held
 

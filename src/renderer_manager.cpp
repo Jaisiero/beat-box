@@ -393,10 +393,8 @@ int RendererManager::render()
       // MOUSE PICK-AND-DRAG input (once per render frame, BEFORE the sim steps consume it):
       // build the camera ray under the cursor — the same math as create_ray() in the raygen
       // shader (shared.inl) — and hand it to the GPU pick/spring pass with the button edges.
-      // LEFT button: press on a body -> grab + drag it (camera rotation is suppressed while a
-      // body is grabbed); press on empty space -> nothing grabbed, camera orbits as always.
-      // The PHYSICAL button state comes from glfwGetMouseButton (not the camera's flag, which
-      // we deliberately clear below to stop the orbit while dragging).
+      // LEFT button: grab + drag a body (statics occlude the ray; empty space grabs nothing).
+      // Camera orbit lives on the RIGHT button (input_manager), so there is no conflict.
       {
         auto &cam = camera_manager->camera;
         bool const left_held = glfwGetMouseButton(window.glfw_window_ptr, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
@@ -416,12 +414,6 @@ int RendererManager::render()
             daxa_f32vec3(direction.x, direction.y, direction.z),
             left_held && !prev_left, left_held);
         prev_left = left_held;
-        // while a body is grabbed, kill the camera's left-drag orbit (the grab lands on the
-        // first sim step after the press, so at most one frame of orbit leaks through)
-        if (rigid_body_manager->get_picked_body() != MAX_U32)
-        {
-          camera_set_mouse_left_press(cam, false);
-        }
       }
       // ONE forced step after a scene load/switch to publish the async AS through the render-synced
       // timeline path (cures the at-rest "dented/rounded cubes"). At rest is_simulating() is false, so
