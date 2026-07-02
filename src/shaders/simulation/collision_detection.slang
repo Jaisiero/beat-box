@@ -1182,6 +1182,38 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
   // in body2's LOCAL frame drive the extreme-direction winner selection in the reducer
   daxa_u32 axk = (mode - 16u) / 2u;
   daxa_f32 sgn_pass = ((mode - 16u) & 1u) != 0u ? 1.0f : -1.0f;
+  // FULL 15-axis SAT table for sample-cube (OBB) vs B-cell (AABB), in body2's frame.
+  // The per-B-axis pass design only ever REPRESENTED body2's 3 face directions; A-face
+  // and edge-cross separating axes (the true MTV of every leaning-piece contact) were
+  // unrepresentable, so two ~45-degree rows shared the job and could equilibrate
+  // penetrated - the persistent standing interpenetration of rotated pieces. Axes and
+  // projection sums depend only on the pair's relative rotation: hoisted out of the loop.
+  daxa_f32 h1 = 0.5f * vs1;
+  daxa_f32vec3 sat_axis[15];
+  daxa_f32 sat_proj[15];
+  daxa_u32 sat_n = 0u;
+  if (s2_is_voxel)
+  {
+    daxa_f32 h2 = 0.5f * s2->voxel_size;
+    daxa_f32vec3 cand[15];
+    cand[0] = daxa_f32vec3(1.0f, 0.0f, 0.0f);
+    cand[1] = daxa_f32vec3(0.0f, 1.0f, 0.0f);
+    cand[2] = daxa_f32vec3(0.0f, 0.0f, 1.0f);
+    cand[3] = a0; cand[4] = a1; cand[5] = a2;
+    cand[6] = cross(a0, cand[0]); cand[7] = cross(a0, cand[1]); cand[8] = cross(a0, cand[2]);
+    cand[9] = cross(a1, cand[0]); cand[10] = cross(a1, cand[1]); cand[11] = cross(a1, cand[2]);
+    cand[12] = cross(a2, cand[0]); cand[13] = cross(a2, cand[1]); cand[14] = cross(a2, cand[2]);
+    for (daxa_u32 k = 0u; k < 15u; ++k)
+    {
+      daxa_f32 len2 = dot(cand[k], cand[k]);
+      if (len2 < 1e-6f) { continue; } // parallel edge pair: its face axes cover this direction
+      daxa_f32vec3 L = cand[k] / sqrt(len2);
+      sat_axis[sat_n] = L;
+      sat_proj[sat_n] = h1 * (abs(dot(a0, L)) + abs(dot(a1, L)) + abs(dot(a2, L))) +
+                        h2 * (abs(L.x) + abs(L.y) + abs(L.z));
+      ++sat_n;
+    }
+  }
   for (daxa_u32 i = 0u; i < s1->surf_count; ++i)
   {
     daxa_u32 e = surf[s1->surf_offset + i];
@@ -1226,49 +1258,98 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       // pass membership: the exit direction must have a significant component along this
       // pass's (axis, sign); diagonal exits join both their axes' manifolds (the stable
       // two-row edge wedge the old dominance band existed for)
-      daxa_f32 ga = axk == 0u ? gn.x : (axk == 1u ? gn.y : gn.z);
-      if (sgn_pass * ga < 0.45f) { continue; }
-      if (sd >= -0.35f * vs2)
-      {
-        // NEAR-SURFACE band: EXACT depth by support projection of the rotated sample cube
-        // (an OBB in body2's frame) against the actual occupied CELL from the bitmask - no
-        // interpolation, zero error. This is where resting contacts live; the trilinear
-        // SDF's convex-edge rounding (distance to a convex set is convex, so interpolating
-        // exact node values reads FAR by up to ~0.2*vs at a 90-degree edge) was the visible
-        // standing interpenetration at edge-on-face rests. The SDF still owns membership
-        // (gradient direction, above), so the old exit-feasibility/dominance heuristics and
-        // their churn stay gone: occupancy answers "how deep exactly", the field answers
-        // "which way out".
-        daxa_i32vec3 cref = c;
-        if (!voxel_occ_bit(occ, s2, cref))
-        {
-          // sample center in an empty cell (resting hover): measure against the occupied
-          // cell just behind it along this pass's axis - continuous across the boundary
-          if (axk == 0u) { cref.x -= daxa_i32(sgn_pass); }
-          else if (axk == 1u) { cref.y -= daxa_i32(sgn_pass); }
-          else { cref.z -= daxa_i32(sgn_pass); }
-          if (!voxel_occ_bit(occ, s2, cref)) { continue; }
-        }
-        daxa_f32 go_a = axk == 0u ? s2->grid_origin.x : (axk == 1u ? s2->grid_origin.y : s2->grid_origin.z);
-        daxa_f32 cr_a = daxa_f32(axk == 0u ? cref.x : (axk == 1u ? cref.y : cref.z));
-        daxa_f32 l2_a = axk == 0u ? l2.x : (axk == 1u ? l2.y : l2.z);
-        daxa_f32 sup_pa = axk == 0u ? sup.x : (axk == 1u ? sup.y : sup.z);
-        daxa_f32 dh = l2_a - (go_a + (cr_a + 0.5f) * vs2);
-        pe = sgn_pass * dh - (0.5f * vs2 + sup_pa);
-        n_out2 = r2->rotate_vector(daxa_f32vec3(axk == 0u ? sgn_pass : 0.0f,
-                                                axk == 1u ? sgn_pass : 0.0f,
-                                                axk == 2u ? sgn_pass : 0.0f));
-        fb = daxa_u32(cref.x & 0xFF) | (daxa_u32(cref.y & 0xFF) << 8u) | (daxa_u32(cref.z & 0xFF) << 16u);
-      }
-      else
+      if (sd < -0.35f * vs2)
       {
         // DEEP band: only the field knows the global depth and the real nearest exit
-        // (cell-local measurements are structurally blind past one cell - the wedge bug)
+        // (cell-local/pairwise measurements are structurally blind past one cell - the
+        // wedge bug). Membership by gradient direction, as one direction per sample.
+        daxa_f32 ga = axk == 0u ? gn.x : (axk == 1u ? gn.y : gn.z);
+        if (sgn_pass * ga < 0.45f) { continue; }
         daxa_f32 sup_n = 0.5f * vs1 * (abs(dot(gn, a0)) + abs(dot(gn, a1)) + abs(dot(gn, a2)));
         pe = sd - sup_n;
+        if (pe >= 0.02f) { continue; }
+        pe = max(pe, -0.5f * vs1);
         n_out2 = r2->rotate_vector(gn);
         fb = daxa_u32(c.x & 0xFF) | (daxa_u32(c.y & 0xFF) << 8u) | (daxa_u32(c.z & 0xFF) << 16u);
+        red.add(pw, pe, n_out2, e & 0xFFFFFFu, fb, su, sv, 0.5f * vs1);
+        ++found;
+        continue;
       }
+      // NEAR-SURFACE band (where every resting contact lives): EXACT contact by full
+      // 15-axis SAT of the rotated sample cube against each occupied neighboring CELL
+      // from the bitmask. The MTV gives the exact depth AND the exact direction for ANY
+      // relative orientation - A-face and edge-cross contacts included, which the B-axis
+      // formulas could only approximate with fighting diagonal rows. Union internal
+      // faces are rejected by SIGN checks against both bodies' SDF gradients (no
+      // thresholds): the MTV must point out of B's solid and against A's outward.
+      if (sd > 0.867f * vs1 + 0.02f) { continue; } // support-sphere bound: cannot reach
+      daxa_f32vec3 gA_l1;
+      voxel_sdf_sample(sdf, s1, local, gA_l1); // A's own outward at this sample
+      daxa_f32vec3 gA = r2->rotate_vector_inverse(r1->rotate_vector(gA_l1));
+      daxa_f32 gA2 = dot(gA, gA);
+      if (gA2 > 1e-6f) { gA = gA / sqrt(gA2); } else { gA = daxa_f32vec3(0.0f); }
+      daxa_i32vec3 clo = daxa_i32vec3(daxa_i32(floor((l2.x - sup.x - s2->grid_origin.x) / vs2)),
+                                      daxa_i32(floor((l2.y - sup.y - s2->grid_origin.y) / vs2)),
+                                      daxa_i32(floor((l2.z - sup.z - s2->grid_origin.z) / vs2)));
+      daxa_i32vec3 chi = daxa_i32vec3(daxa_i32(floor((l2.x + sup.x - s2->grid_origin.x) / vs2)),
+                                      daxa_i32(floor((l2.y + sup.y - s2->grid_origin.y) / vs2)),
+                                      daxa_i32(floor((l2.z + sup.z - s2->grid_origin.z) / vs2)));
+      for (daxa_i32 cz = clo.z; cz <= chi.z; ++cz)
+      {
+        for (daxa_i32 cy = clo.y; cy <= chi.y; ++cy)
+        {
+          for (daxa_i32 cx = clo.x; cx <= chi.x; ++cx)
+          {
+            daxa_i32vec3 cb = daxa_i32vec3(cx, cy, cz);
+            if (!voxel_occ_bit(occ, s2, cb)) { continue; }
+            daxa_f32vec3 cc = s2->grid_origin + (daxa_f32vec3(daxa_f32(cx), daxa_f32(cy), daxa_f32(cz)) + daxa_f32vec3(0.5f, 0.5f, 0.5f)) * vs2;
+            daxa_f32vec3 d = l2 - cc;
+            daxa_f32 best_ov = 1e9f;
+            daxa_f32 best_raw = 1e9f;
+            daxa_f32vec3 best_mtv = daxa_f32vec3(0.0f);
+            bool separated = false;
+            for (daxa_u32 k = 0u; k < sat_n; ++k)
+            {
+              daxa_f32 dl = dot(d, sat_axis[k]);
+              daxa_f32 ov = sat_proj[k] - abs(dl);
+              if (ov < 0.0f) { separated = true; break; }
+              if (ov < best_raw) { best_raw = ov; }
+              daxa_f32vec3 mtv = dl >= 0.0f ? sat_axis[k] : -sat_axis[k];
+              // union filtering by sign only: a real exit points out of B's solid and
+              // against A's own outward (the touching A-face must be true A surface)
+              if (dot(mtv, gn) <= 0.0f) { continue; }
+              if (dot(mtv, gA) >= 0.0f) { continue; }
+              if (ov < best_ov) { best_ov = ov; best_mtv = mtv; }
+            }
+            if (separated) { continue; }
+            if (best_ov > 0.5e9f)
+            {
+              // SILENT-DROP DETECTOR: the pair truly overlaps but every axis was
+              // filtered out - the one remaining route to invisible interpenetration.
+              // Latched into interior_hits ("overlap with no usable direction"), which
+              // feeds both the vox= PERF gauge and the code-0 center rescue.
+              if (best_raw > 0.05f * vs2) { red.interior_hits += 1u; }
+              continue;
+            }
+            pe = -best_ov;
+            if (pe >= 0.02f) { continue; }
+            // pass membership: dominant MTV component in body2's frame buckets the
+            // contact into one of the six manifolds (deterministic index-order ties)
+            daxa_f32 mx = abs(best_mtv.x);
+            daxa_f32 my = abs(best_mtv.y);
+            daxa_f32 mz = abs(best_mtv.z);
+            daxa_u32 dom = mx >= my ? (mx >= mz ? 0u : 2u) : (my >= mz ? 1u : 2u);
+            daxa_f32 dsgn = (dom == 0u ? best_mtv.x : (dom == 1u ? best_mtv.y : best_mtv.z)) >= 0.0f ? 1.0f : -1.0f;
+            if (dom != axk || dsgn != sgn_pass) { continue; }
+            pe = max(pe, -0.5f * vs1);
+            n_out2 = r2->rotate_vector(best_mtv);
+            fb = daxa_u32(cx & 0xFF) | (daxa_u32(cy & 0xFF) << 8u) | (daxa_u32(cz & 0xFF) << 16u);
+            red.add(pw, pe, n_out2, e & 0xFFFFFFu, fb, su, sv, 0.5f * vs1);
+            ++found;
+          }
+        }
+      }
+      continue;
     }
     else
     {
@@ -1573,11 +1654,17 @@ daxa_b32 voxel_axis_collision_detection(SimConfig* sim_config, RigidBody* rA, Ri
   }
 
   // the manifold normal is the exact contact axis in world space (outward of body2 =
-  // separation direction for the sampled body r1)
+  // separation direction for the sampled body r1). The bucket's |pen|-weighted TRUE MTV
+  // average replaces the raw B axis when samples exist: an A-face or edge-cross contact
+  // then resolves along its REAL direction instead of two fighting diagonal axis rows.
+  // At rest the winning MTV axis identity is constant and bodies do not rotate, so the
+  // normal is as constant as the old axis was (the property the SAT cubes sleep on).
   daxa_u32 ax = code / 2u;
   daxa_f32 sgn = (code & 1u) != 0u ? 1.0f : -1.0f;
   daxa_f32vec3 n_local = daxa_f32vec3(ax == 0u ? sgn : 0.0f, ax == 1u ? sgn : 0.0f, ax == 2u ? sgn : 0.0f);
   daxa_f32vec3 n_world = r2->rotate_vector(n_local);
+  daxa_f32 ns2 = dot(red.normal_sum, red.normal_sum);
+  if (ns2 > 1e-8f) { n_world = red.normal_sum / sqrt(ns2); }
   return voxel_emit_manifold(red, flip, daxa_i32(90u + code), n_world, s1->voxel_size,
                              r2, s2, s2_is_voxel, occ, ax, manifold);
 }
