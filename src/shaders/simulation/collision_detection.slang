@@ -1228,18 +1228,47 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       // two-row edge wedge the old dominance band existed for)
       daxa_f32 ga = axk == 0u ? gn.x : (axk == 1u ? gn.y : gn.z);
       if (sgn_pass * ga < 0.45f) { continue; }
-      // support radius of the (rotated) sample voxel along the exit direction
-      daxa_f32 sup_n = 0.5f * vs1 * (abs(dot(gn, a0)) + abs(dot(gn, a1)) + abs(dot(gn, a2)));
-      // contact SKIN: solve toward a small positive separation instead of exact surface
-      // contact. Absorbs the two irreducible rest residuals - penalty-solver compliance
-      // (a resting contact carries load only while slightly penetrated) and trilinear
-      // OVERestimation of the SDF near convex edges (distance-to-a-convex-set is convex,
-      // so interpolating exact node values reads far by up to ~0.2*vs at a 90-degree
-      // edge). Faces rest with an invisible ~2%-of-a-voxel gap instead of a visible
-      // overlap; scales with resolution.
-      pe = sd - sup_n - 0.025f * vs2;
-      n_out2 = r2->rotate_vector(gn);
-      fb = daxa_u32(c.x & 0xFF) | (daxa_u32(c.y & 0xFF) << 8u) | (daxa_u32(c.z & 0xFF) << 16u);
+      if (sd >= -0.35f * vs2)
+      {
+        // NEAR-SURFACE band: EXACT depth by support projection of the rotated sample cube
+        // (an OBB in body2's frame) against the actual occupied CELL from the bitmask - no
+        // interpolation, zero error. This is where resting contacts live; the trilinear
+        // SDF's convex-edge rounding (distance to a convex set is convex, so interpolating
+        // exact node values reads FAR by up to ~0.2*vs at a 90-degree edge) was the visible
+        // standing interpenetration at edge-on-face rests. The SDF still owns membership
+        // (gradient direction, above), so the old exit-feasibility/dominance heuristics and
+        // their churn stay gone: occupancy answers "how deep exactly", the field answers
+        // "which way out".
+        daxa_i32vec3 cref = c;
+        if (!voxel_occ_bit(occ, s2, cref))
+        {
+          // sample center in an empty cell (resting hover): measure against the occupied
+          // cell just behind it along this pass's axis - continuous across the boundary
+          if (axk == 0u) { cref.x -= daxa_i32(sgn_pass); }
+          else if (axk == 1u) { cref.y -= daxa_i32(sgn_pass); }
+          else { cref.z -= daxa_i32(sgn_pass); }
+          if (!voxel_occ_bit(occ, s2, cref)) { continue; }
+        }
+        daxa_f32 go_a = axk == 0u ? s2->grid_origin.x : (axk == 1u ? s2->grid_origin.y : s2->grid_origin.z);
+        daxa_f32 cr_a = daxa_f32(axk == 0u ? cref.x : (axk == 1u ? cref.y : cref.z));
+        daxa_f32 l2_a = axk == 0u ? l2.x : (axk == 1u ? l2.y : l2.z);
+        daxa_f32 sup_pa = axk == 0u ? sup.x : (axk == 1u ? sup.y : sup.z);
+        daxa_f32 dh = l2_a - (go_a + (cr_a + 0.5f) * vs2);
+        pe = sgn_pass * dh - (0.5f * vs2 + sup_pa);
+        n_out2 = r2->rotate_vector(daxa_f32vec3(axk == 0u ? sgn_pass : 0.0f,
+                                                axk == 1u ? sgn_pass : 0.0f,
+                                                axk == 2u ? sgn_pass : 0.0f));
+        fb = daxa_u32(cref.x & 0xFF) | (daxa_u32(cref.y & 0xFF) << 8u) | (daxa_u32(cref.z & 0xFF) << 16u);
+      }
+      else
+      {
+        // DEEP band: only the field knows the global depth and the real nearest exit
+        // (cell-local measurements are structurally blind past one cell - the wedge bug)
+        daxa_f32 sup_n = 0.5f * vs1 * (abs(dot(gn, a0)) + abs(dot(gn, a1)) + abs(dot(gn, a2)));
+        pe = sd - sup_n;
+        n_out2 = r2->rotate_vector(gn);
+        fb = daxa_u32(c.x & 0xFF) | (daxa_u32(c.y & 0xFF) << 8u) | (daxa_u32(c.z & 0xFF) << 16u);
+      }
     }
     else
     {
