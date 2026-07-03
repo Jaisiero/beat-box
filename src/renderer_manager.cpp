@@ -291,8 +291,14 @@ int RendererManager::render()
   bool dump_at_done = false;
 
   bool force_sim_step = true;
+  daxa_u64 render_frames_total = 0; // ALL render frames (stasis ones too) - the PERF frame
+                                    // metric divides wall time by THIS, not by stepped
+                                    // frames, or full-sleep stasis inflates frame=/deflates
+                                    // the printed fps (user-reported "ya no topa 60fps"
+                                    // that the present rate disproved)
   while (!window.should_close())
   {
+    ++render_frames_total;
     if (run_limit_s > 0.0 &&
         std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count() > run_limit_s)
     {
@@ -452,7 +458,20 @@ int RendererManager::render()
         sim_steps_this_frame = 1u;
         force_sim_step = false;
       }
-      if (status_manager->is_simulating())
+      // FULL-SLEEP STASIS: when every active body sleeps, a step is an identity - sleepers
+      // skip advect/solve/integrate and nothing can wake them without a host-visible event
+      // (from full sleep there IS no moving partner; the only wake sources are the pick, a
+      // reset or a scene switch, all of which force stepping). Skipping the whole GPU
+      // pipeline drops the at-rest sim cost to zero. The left mouse button disables the
+      // skip so the pick pass runs and can grab/wake; the readback is from the last stepped
+      // frame, which stays valid precisely because nothing steps.
+      bool const stasis = [&] {
+        auto const &ssc = rigid_body_manager->get_sim_config_reference();
+        if (ssc.active_rigid_body_count == 0u ||
+            ssc.sleeping_count < ssc.active_rigid_body_count) { return false; }
+        return glfwGetMouseButton(window.glfw_window_ptr, GLFW_MOUSE_BUTTON_LEFT) != GLFW_PRESS;
+      }();
+      if (status_manager->is_simulating() && !stasis)
       {
         // during a GUI-toggle hitch, cap the accumulator to ONE step (no burst -> no jerk); the few
         // ms of lost real-time sync over the toggle is imperceptible and resyncs once cooldown ends.
@@ -478,6 +497,15 @@ int RendererManager::render()
       }
     }
     bool const sim_stepped = sim_steps_this_frame > 0u;
+    // accumulation is only VALID over a static world: a sim step may move geometry, and
+    // blending history across poses is the ghost-speckle the user reported (pieces
+    // dissolving between two poses). Camera motion already resets it (input_manager);
+    // this is the geometry half. With pause/full-sleep stasis the world is provably
+    // still, so the progressive refinement keeps working exactly where it is meaningful.
+    if (sim_stepped && status_manager->is_accumulating())
+    {
+      status_manager->reset_accumulation_count();
+    }
     if (!window.update())
       continue;
 
@@ -536,11 +564,15 @@ int RendererManager::render()
         }
       }
       { static daxa_u64 _cf = 0; static auto _t0 = std::chrono::high_resolution_clock::now();
+        static daxa_u64 _lrf = 0;
         // sample every 31 frames (odd) so the readback alternates between the two double-buffered
         // SimConfigs — each holds an independent dbg_ex latch; an even cadence would only ever show one.
         if ((++_cf % 31) == 0) {
           auto _t1 = std::chrono::high_resolution_clock::now();
-          double _ms = std::chrono::duration<double, std::milli>(_t1 - _t0).count() / 31.0; _t0 = _t1;
+          // divide by ALL render frames since the last print (stasis frames included), not by
+          // the 31 stepped ones - stasis interleaving otherwise inflates frame=
+          daxa_u64 _rf = render_frames_total - _lrf; _lrf = render_frames_total;
+          double _ms = std::chrono::duration<double, std::milli>(_t1 - _t0).count() / (double)(_rf ? _rf : 1); _t0 = _t1;
           double _sim_ms = _sim_ms_n ? (_sim_ms_accum / (double)_sim_ms_n) : 0.0;   // [PERF]
           _sim_ms_accum = 0.0; _sim_ms_n = 0;                                        // [PERF]
           // deep-MISS walk diagnostic decode (see BodyLinkManifold::walk_diag)

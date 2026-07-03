@@ -882,7 +882,14 @@ static const daxa_u32 BB_MAX_VOXEL_OCC_U32S = 16384;   // shared occupancy bit p
 static const daxa_u32 BB_MAX_VOXEL_SURF_COUNT = 16384; // shared surface-voxel pool (packed u32)
 static const daxa_u32 BB_MAX_VOXEL_SDF_F32S = 65536;   // shared NODE signed-distance pool (f32,
                                                         // (dims+1)^3 nodes per shape)
-static const daxa_u32 BB_MAX_COLLISION_COUNT = BB_MAX_RIGID_BODY_COUNT * (BB_MAX_RIGID_BODY_COUNT - 1) / 2;
+// MEASURED BUDGETS (opt round 2, F2 philosophy - budget to observed reality, keep the
+// saturation OBSERVABLE): all-pairs sizing (1024*1023/2 = 523,776) cost ~700 MB of VRAM in
+// Manifold-sized buffers alone. Worst PEAK observed across the gauntlet: 1,663 manifolds /
+// 3,275 broad pairs (scene_2, 1001 bodies piling). Budgets carry 10-20x headroom, and both
+// overflow paths are LOUD: manifolds -> dbg_contact_overflow (PERF contact_of=, gauntlet-
+// visible), broad -> emission stops at the cap (LBVH.slang bp bound).
+static const daxa_u32 BB_MAX_BROAD_PAIR_COUNT = 65536; // broad-phase candidate pairs (8 B each)
+static const daxa_u32 BB_MAX_COLLISION_COUNT = 32768;  // manifolds (~460 B each, x2 parities + scratch)
 static const daxa_u32 BB_MAX_MANIFOLD_NODE_COUNT = BB_MAX_COLLISION_COUNT * 2;
 // Graph-coloring solver: a contact gets one of BB_MAX_COLORS colors (bit per color in a u32 body mask);
 // within a color no body repeats, so all that color's contacts solve in parallel. Leftovers go to an

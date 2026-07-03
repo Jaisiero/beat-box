@@ -356,7 +356,11 @@ static constexpr f32 TIME_STEP = 0.01667f;
 static constexpr f32 GRAVITY = 9.81f;
 static constexpr u32 MAX_PRIMITIVE_COUNT = 16384; // voxel bodies emit one AABB primitive per voxel
 static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
-static constexpr u32 MAX_COLLISION_COUNT = MAX_RIGID_BODY_COUNT * (MAX_RIGID_BODY_COUNT - 1) / 2;
+// measured budgets, must mirror BB_MAX_COLLISION_COUNT / BB_MAX_BROAD_PAIR_COUNT in
+// shared.inl (all-pairs sizing cost ~700 MB of VRAM in Manifold buffers alone; peaks
+// observed are ~1.7k manifolds / ~3.3k broad pairs with LOUD overflow gauges)
+static constexpr u32 MAX_COLLISION_COUNT = 32768;
+static constexpr u32 MAX_BROAD_PAIR_COUNT = 65536;
 static constexpr u32 MAX_LBVH_NODE_COUNT = MAX_RIGID_BODY_COUNT * 2 - 1;
 static constexpr u32 MAX_VERTEX_COUNT = MAX_RIGID_BODY_COUNT * 8;
 static constexpr u32 MAX_AXIS_COUNT = MAX_RIGID_BODY_COUNT * 6;
@@ -509,6 +513,10 @@ const auto radix_sort_histogram_pipeline_name = "Radix Sort Histogram";
 // single radix sort
 const auto entry_rigid_body_single_radix_sort = "entry_single_radix_sort";
 const auto rigid_body_single_radix_sort_pipeline_name = "Single Radix Sort";
+
+// single-workgroup whole sort (replaces the 12-task LSD chain for <=1024 bodies)
+const auto entry_single_workgroup_sort = "entry_single_workgroup_sort";
+const auto single_workgroup_sort_pipeline_name = "Single Workgroup Sort";
 
 // generate hierarchy for linear bounding volume hierarchy
 const auto entry_generate_hierarchy_linear_bvh = "entry_generate_hierarchy_linear_bvh";
@@ -837,6 +845,22 @@ struct RigidBodySingleRadixSortInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(RigidBodySingleRadixSortPushConstants),
       .name = rigid_body_single_radix_sort_pipeline_name,
+  };
+};
+
+struct SingleWorkgroupSortInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_single_workgroup_sort,
+          .required_subgroup_size = SUBGROUP_SIZE,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodySingleRadixSortPushConstants),
+      .name = single_workgroup_sort_pipeline_name,
   };
 };
 
