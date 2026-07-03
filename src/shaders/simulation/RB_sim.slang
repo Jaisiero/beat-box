@@ -219,6 +219,97 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
 #endif // BB_RADIX_SORT
 }
 
+// OPT ROUND 2: the whole morton sort in ONE dispatch. BB_MAX_RIGID_BODY_COUNT (1024) fits a
+// single workgroup (128 threads x 8 contiguous items), so the 12-task LSD chain (4 rounds of
+// histogram + scatter + shift bump) collapses into one kernel doing 8 stable 4-bit passes in
+// groupshared memory (~24 KB). STABLE by construction (contiguous per-thread blocks, cross-
+// thread exclusive scan in thread order, in-thread sequential ranks), so the output
+// permutation is bit-identical to the old chain - physics and determinism untouched.
+// Reuses RigidBodySingleRadixSortTaskHead: morton_codes_in is sorted IN PLACE; the out and
+// histogram attachments are unused by this path.
+static const daxa_u32 SWS_THREADS = 128;
+static const daxa_u32 SWS_ITEMS = 8; // 128 * 8 = 1024 = BB_MAX_RIGID_BODY_COUNT
+groupshared daxa_u32 sws_key[2][1024];
+groupshared daxa_u32 sws_val[2][1024];
+groupshared daxa_u32 sws_cnt[16 * SWS_THREADS]; // [digit * THREADS + thread]
+groupshared daxa_u32 sws_base[16];
+
+[shader("compute")]
+[numthreads(SWS_THREADS, 1, 1)] void entry_single_workgroup_sort(daxa_u32vec3 gtid : SV_GroupThreadID)
+{
+  SimConfig* sim_config = (SimConfig*)(SRS.task_head.sim_config);
+  MortonCode* codes = (MortonCode*)(SRS.task_head.morton_codes_in);
+  daxa_u32 t = gtid.x;
+  daxa_u32 n = min(sim_config->rigid_body_count, 1024u);
+  // load; the padded tail sorts to the end (MAX keys) and is never read downstream
+  for (daxa_u32 i = 0u; i < SWS_ITEMS; ++i)
+  {
+    daxa_u32 j = t * SWS_ITEMS + i;
+    sws_key[0][j] = j < n ? codes[j].morton_code : MAX_U32;
+    sws_val[0][j] = j < n ? codes[j].index : MAX_U32;
+  }
+  GroupMemoryBarrierWithGroupSync();
+  daxa_u32 src = 0u;
+  for (daxa_u32 pass = 0u; pass < 8u; ++pass)
+  {
+    daxa_u32 shift = pass * 4u;
+    // per-thread digit counts over this thread's contiguous block
+    daxa_u32 cnt[16];
+    for (daxa_u32 d = 0u; d < 16u; ++d) { cnt[d] = 0u; }
+    for (daxa_u32 i = 0u; i < SWS_ITEMS; ++i)
+    {
+      daxa_u32 d = (sws_key[src][t * SWS_ITEMS + i] >> shift) & 15u;
+      ++cnt[d];
+    }
+    for (daxa_u32 d = 0u; d < 16u; ++d) { sws_cnt[d * SWS_THREADS + t] = cnt[d]; }
+    GroupMemoryBarrierWithGroupSync();
+    // exclusive scan across threads per digit (16 threads, one digit column each)
+    if (t < 16u)
+    {
+      daxa_u32 sum = 0u;
+      for (daxa_u32 q = 0u; q < SWS_THREADS; ++q)
+      {
+        daxa_u32 c = sws_cnt[t * SWS_THREADS + q];
+        sws_cnt[t * SWS_THREADS + q] = sum;
+        sum += c;
+      }
+      sws_base[t] = sum;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (t == 0u)
+    {
+      // exclusive scan of the 16 digit totals
+      daxa_u32 sum = 0u;
+      for (daxa_u32 d = 0u; d < 16u; ++d)
+      {
+        daxa_u32 c = sws_base[d];
+        sws_base[d] = sum;
+        sum += c;
+      }
+    }
+    GroupMemoryBarrierWithGroupSync();
+    // stable scatter: in-thread sequential ranks on top of the scanned offsets
+    daxa_u32 local_rank[16];
+    for (daxa_u32 d = 0u; d < 16u; ++d) { local_rank[d] = 0u; }
+    for (daxa_u32 i = 0u; i < SWS_ITEMS; ++i)
+    {
+      daxa_u32 j = t * SWS_ITEMS + i;
+      daxa_u32 k = sws_key[src][j];
+      daxa_u32 d = (k >> shift) & 15u;
+      daxa_u32 dest = sws_base[d] + sws_cnt[d * SWS_THREADS + t] + local_rank[d];
+      ++local_rank[d];
+      sws_key[1u - src][dest] = k;
+      sws_val[1u - src][dest] = sws_val[src][j];
+    }
+    GroupMemoryBarrierWithGroupSync();
+    src = 1u - src;
+  }
+  for (daxa_u32 i = 0u; i < SWS_ITEMS; ++i)
+  {
+    daxa_u32 j = t * SWS_ITEMS + i;
+    if (j < n) { codes[j] = MortonCode(sws_key[src][j], sws_val[src][j]); }
+  }
+}
 
 // credits: https://developer.nvidia.com/blog/thinking-parallel-part-iii-tree-construction-gpu/
 [shader("compute")]

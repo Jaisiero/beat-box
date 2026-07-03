@@ -201,6 +201,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_GMC;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBRSH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBSRS;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_SWS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BBBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CBBLBVHGH;

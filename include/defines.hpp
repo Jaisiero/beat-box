@@ -510,6 +510,10 @@ const auto radix_sort_histogram_pipeline_name = "Radix Sort Histogram";
 const auto entry_rigid_body_single_radix_sort = "entry_single_radix_sort";
 const auto rigid_body_single_radix_sort_pipeline_name = "Single Radix Sort";
 
+// single-workgroup whole sort (replaces the 12-task LSD chain for <=1024 bodies)
+const auto entry_single_workgroup_sort = "entry_single_workgroup_sort";
+const auto single_workgroup_sort_pipeline_name = "Single Workgroup Sort";
+
 // generate hierarchy for linear bounding volume hierarchy
 const auto entry_generate_hierarchy_linear_bvh = "entry_generate_hierarchy_linear_bvh";
 const auto generate_hierarchy_linear_bvh_pipeline_name = "Generate Hierarchy Linear BVH";
@@ -837,6 +841,22 @@ struct RigidBodySingleRadixSortInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(RigidBodySingleRadixSortPushConstants),
       .name = rigid_body_single_radix_sort_pipeline_name,
+  };
+};
+
+struct SingleWorkgroupSortInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_single_workgroup_sort,
+          .required_subgroup_size = SUBGROUP_SIZE,
+      },
+  };
+
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(RigidBodySingleRadixSortPushConstants),
+      .name = single_workgroup_sort_pipeline_name,
   };
 };
 

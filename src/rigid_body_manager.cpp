@@ -20,6 +20,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_GMC = task_manager->create_compute(GenerateMortonCodesInfo{}.info);
     pipeline_RBRSH = task_manager->create_compute(RigidBodyRadixSortHistogramInfo{}.info);
     pipeline_RBSRS = task_manager->create_compute(RigidBodySingleRadixSortInfo{}.info);
+    pipeline_SWS = task_manager->create_compute(SingleWorkgroupSortInfo{}.info);
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
     pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
     pipeline_CBBLBVHGH = task_manager->create_compute(RigidBodyConvertBoundingBoxesLinearBVHInfo{}.info);
@@ -497,6 +498,25 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                                   daxa::attachment_view(RigidBodySingleRadixSortTaskHead::AT.global_histograms, task_radix_sort_histograms),
                               },
                               user_callback_RBSRS);
+
+  // single-workgroup whole sort: one fixed 1-workgroup dispatch replaces the 12-task LSD
+  // chain (BB_MAX_RIGID_BODY_COUNT = 1024 fits 128 threads x 8 items in groupshared).
+  // Stable -> bit-identical permutation to the old chain (DET-hash verified).
+  auto user_callback_SWS = [this](daxa::TaskInterface ti, auto &)
+  {
+    ti.recorder.set_pipeline(*pipeline_SWS);
+    ti.recorder.push_constant(RigidBodySingleRadixSortPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
+  };
+  using TTask_SWS = TaskTemplate<RigidBodySingleRadixSortTaskHead::Task, decltype(user_callback_SWS)>;
+  TTask_SWS task_SWS(std::array{
+                         daxa::attachment_view(RigidBodySingleRadixSortTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                         daxa::attachment_view(RigidBodySingleRadixSortTaskHead::AT.sim_config, task_sim_config),
+                         daxa::attachment_view(RigidBodySingleRadixSortTaskHead::AT.morton_codes_in, task_morton_codes),
+                         daxa::attachment_view(RigidBodySingleRadixSortTaskHead::AT.morton_codes_out, task_tmp_morton_codes),
+                         daxa::attachment_view(RigidBodySingleRadixSortTaskHead::AT.global_histograms, task_radix_sort_histograms),
+                     },
+                     user_callback_SWS);
 
   daxa::InlineTaskInfo task_URS({
       .attachments = {
@@ -1520,14 +1540,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   G.add_task(task_CRB);
   G.add_task(task_RBD);
   G.add_task(task_GMC);
-  for(auto i = 0u; i < ITERATIONS/2; ++i) {
-    G.add_task(task_RBSRH);
-    G.add_task(task_RBSRS);
-    G.add_task(task_URS);
-    G.add_task(task_RBSRH_swap);
-    G.add_task(task_RBSRS_swap);
-    G.add_task(task_URS);
-  }
+  // single-workgroup whole sort: 1 task instead of the 12-task multi-dispatch LSD chain
+  // (histogram/scatter/shift x4). Same stable permutation; ~11 fewer barriers per step.
+  G.add_task(task_SWS);
   G.add_task(task_RBLBVHGH);
   G.add_task(task_BBBLBVHGH);
   G.add_task(task_CBBLBVHGH);
