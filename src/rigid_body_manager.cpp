@@ -21,6 +21,9 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_RBRSH = task_manager->create_compute(RigidBodyRadixSortHistogramInfo{}.info);
     pipeline_RBSRS = task_manager->create_compute(RigidBodySingleRadixSortInfo{}.info);
     pipeline_SWS = task_manager->create_compute(SingleWorkgroupSortInfo{}.info);
+    pipeline_VSB_INIT = task_manager->create_compute(VoxelSdfInitInfo{}.info);
+    pipeline_VSB_AXIS = task_manager->create_compute(VoxelSdfAxisInfo{}.info);
+    pipeline_VSB_FIN = task_manager->create_compute(VoxelSdfFinalizeInfo{}.info);
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
     pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
     pipeline_CBBLBVHGH = task_manager->create_compute(RigidBodyConvertBoundingBoxesLinearBVHInfo{}.info);
@@ -252,6 +255,13 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
           .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
           .name = "voxel_sdf",
       });
+      for (auto s = 0u; s < 2u; ++s)
+      {
+        voxel_sdf_scratch[s] = device.create_buffer({
+            .size = sizeof(daxa_f32) * BB_MAX_VOXEL_SDF_F32S,
+            .name = std::string("voxel_sdf_scratch") + std::to_string(s),
+        });
+      }
     }
     *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[i]).value() = SimConfig{
         .solver_type = renderer_manager->get_solver(),
@@ -1881,6 +1891,10 @@ void RigidBodyManager::destroy()
   if (!voxel_occupancy.is_empty()) { device.destroy_buffer(voxel_occupancy); voxel_occupancy = {}; }
   if (!voxel_surface.is_empty())   { device.destroy_buffer(voxel_surface);   voxel_surface = {}; }
   if (!voxel_sdf.is_empty())       { device.destroy_buffer(voxel_sdf);       voxel_sdf = {}; }
+  for (auto s = 0u; s < 2u; ++s)
+  {
+    if (!voxel_sdf_scratch[s].is_empty()) { device.destroy_buffer(voxel_sdf_scratch[s]); voxel_sdf_scratch[s] = {}; }
+  }
 
   initialized = false;
 }
@@ -1982,6 +1996,98 @@ bool RigidBodyManager::update_sim()
   update_buffers(); // restore current-parity bindings
 
   return initialized;
+}
+
+void RigidBodyManager::build_voxel_sdf_gpu(std::vector<VoxelShape> const &shapes, std::vector<daxa_f32> const &cpu_reference)
+{
+  if (!initialized || shapes.empty()) { return; }
+  auto const occ_addr = device.device_address(voxel_occupancy).value();
+  auto const sdf_addr = device.device_address(voxel_sdf).value();
+  auto const sc0_addr = device.device_address(voxel_sdf_scratch[0]).value();
+  auto const sc1_addr = device.device_address(voxel_sdf_scratch[1]).value();
+
+  auto rec = device.create_command_recorder({});
+  auto const barrier = [&rec]() {
+    rec.pipeline_barrier({
+        .src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+        .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE,
+    });
+  };
+  for (auto const &s : shapes)
+  {
+    daxa_u32 const nx = s.dims.x + 1u, ny = s.dims.y + 1u, nz = s.dims.z + 1u;
+    daxa_u32 const nodes = nx * ny * nz;
+    VoxelSdfBuildPushConstants pc = {
+        .occupancy_addr = occ_addr,
+        .sdf_addr = sdf_addr,
+        .scratch_solid_addr = sc0_addr,
+        .scratch_empty_addr = sc1_addr,
+        .cell_dims = s.dims,
+        .occ_offset = s.occ_offset,
+        .sdf_offset = s.sdf_offset,
+        .axis = 0u,
+        .voxel_size = s.voxel_size,
+    };
+    rec.set_pipeline(*pipeline_VSB_INIT);
+    rec.push_constant(pc);
+    rec.dispatch({.x = (nodes + 63u) / 64u, .y = 1, .z = 1});
+    barrier();
+    daxa_u32 const nd[3] = {nx, ny, nz};
+    for (daxa_u32 axis = 0u; axis < 3u; ++axis)
+    {
+      pc.axis = axis;
+      daxa_u32 const columns = nd[(axis + 1u) % 3u] * nd[(axis + 2u) % 3u];
+      rec.set_pipeline(*pipeline_VSB_AXIS);
+      rec.push_constant(pc);
+      rec.dispatch({.x = (columns + 63u) / 64u, .y = 1, .z = 1});
+      barrier();
+    }
+    rec.set_pipeline(*pipeline_VSB_FIN);
+    rec.push_constant(pc);
+    rec.dispatch({.x = (nodes + 63u) / 64u, .y = 1, .z = 1});
+    barrier();
+  }
+  auto cmds = rec.complete_current_commands();
+  device.submit_commands({.command_lists = std::array{cmds}});
+  device.wait_idle();
+
+  // BB_SDF_VERIFY: read the GPU field back and compare against the CPU brute force (the
+  // debug oracle the GPU-first directive keeps around). Exactness argument in voxel_sdf.slang;
+  // only sqrt rounding may differ.
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996) // read-only getenv is safe (same suppression as scene_manager)
+#endif
+  static bool const verify = std::getenv("BB_SDF_VERIFY") != nullptr;
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+  if (verify && !cpu_reference.empty())
+  {
+    auto const size = cpu_reference.size() * sizeof(daxa_f32);
+    daxa::BufferId staging = device.create_buffer({
+        .size = size,
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+        .name = "voxel_sdf_verify_staging",
+    });
+    auto rec2 = device.create_command_recorder({});
+    rec2.copy_buffer_to_buffer({.src_buffer = voxel_sdf, .dst_buffer = staging, .size = size});
+    auto cmds2 = rec2.complete_current_commands();
+    device.submit_commands({.command_lists = std::array{cmds2}});
+    device.wait_idle();
+    daxa_f32 const *gpu = device.buffer_host_address_as<daxa_f32>(staging).value();
+    double max_diff = 0.0;
+    size_t worst = 0;
+    for (size_t i = 0; i < cpu_reference.size(); ++i)
+    {
+      double const d = std::abs((double)gpu[i] - (double)cpu_reference[i]);
+      if (d > max_diff) { max_diff = d; worst = i; }
+    }
+    std::cout << "[SDF-VERIFY] nodes=" << cpu_reference.size() << " max|gpu-cpu|=" << max_diff
+              << " (worst node " << worst << ": gpu=" << gpu[worst] << " cpu=" << cpu_reference[worst] << ")"
+              << ((max_diff < 1e-4) ? "  => MATCH" : "  => MISMATCH!") << std::endl;
+    device.destroy_buffer(staging);
+  }
 }
 
 bool RigidBodyManager::read_back_sim_config()

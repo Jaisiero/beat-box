@@ -143,6 +143,12 @@ struct RigidBodyManager{
   daxa::BufferId get_voxel_occupancy_buffer() const { return voxel_occupancy; }
   daxa::BufferId get_voxel_surface_buffer() const { return voxel_surface; }
   daxa::BufferId get_voxel_sdf_buffer() const { return voxel_sdf; }
+  // GPU node-SDF build (GPU-first): computes every shape's node field from the occupancy
+  // bitmask on the GPU (exact separable EDT; see voxel_sdf.slang). Called by the scene
+  // after uploading shapes+occupancy; re-callable on future runtime shape edits.
+  // cpu_reference: when BB_SDF_VERIFY is set, the GPU result is read back and compared
+  // against the CPU brute force (kept as the debug oracle per the GPU-first directive).
+  void build_voxel_sdf_gpu(std::vector<VoxelShape> const &shapes, std::vector<daxa_f32> const &cpu_reference);
 
 private:
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
@@ -202,6 +208,9 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBRSH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBSRS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_SWS;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_INIT;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_AXIS;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_FIN;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BBBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CBBLBVHGH;
@@ -317,6 +326,7 @@ private:
   daxa::BufferId voxel_occupancy = {};
   daxa::BufferId voxel_surface = {};
   daxa::BufferId voxel_sdf = {};
+  daxa::BufferId voxel_sdf_scratch[2] = {}; // squared-distance fields (solid/empty) for the GPU EDT
 
   // Simulation configuration. AVBD is the default solver (user decision after the A/B
   // campaign: rests flush at pen~0 vs 13mm Baumgarte sink, true zero residual velocity,

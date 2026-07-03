@@ -1186,6 +1186,10 @@ public:
                   voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
       std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
                   voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
+      // GPU-first: the node SDF is (re)built ON THE GPU from the occupancy bitmask - the
+      // CPU value uploaded above is only the BB_SDF_VERIFY oracle (the GPU result
+      // overwrites it). This is the path future runtime shape edits (destruction) re-run.
+      rigid_body_manager->build_voxel_sdf_gpu(voxel_shape_cpu, voxel_sdf_cpu);
     }
 
     // TODO: Handle error

@@ -1252,6 +1252,22 @@ struct RigidBodySingleRadixSortPushConstants
   DAXA_TH_BLOB(RigidBodySingleRadixSortTaskHead, task_head)
 };
 
+// GPU node-SDF build (voxel_sdf.slang): no task head - the voxel pools live outside the
+// task graph by convention (written before the sim reads them), so the passes take raw
+// device addresses. One dispatch chain per shape at scene load / on future shape edits.
+struct VoxelSdfBuildPushConstants
+{
+  daxa_u64 occupancy_addr;
+  daxa_u64 sdf_addr;
+  daxa_u64 scratch_solid_addr;
+  daxa_u64 scratch_empty_addr;
+  daxa_u32vec3 cell_dims;
+  daxa_u32 occ_offset;
+  daxa_u32 sdf_offset;
+  daxa_u32 axis;        // 0/1/2 for the separable passes
+  daxa_f32 voxel_size;
+};
+
 // GENERATE HIERARCHY LBVH
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyGenerateHierarchyLinearBVHTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
