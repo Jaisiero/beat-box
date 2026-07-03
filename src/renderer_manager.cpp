@@ -452,7 +452,20 @@ int RendererManager::render()
         sim_steps_this_frame = 1u;
         force_sim_step = false;
       }
-      if (status_manager->is_simulating())
+      // FULL-SLEEP STASIS: when every active body sleeps, a step is an identity - sleepers
+      // skip advect/solve/integrate and nothing can wake them without a host-visible event
+      // (from full sleep there IS no moving partner; the only wake sources are the pick, a
+      // reset or a scene switch, all of which force stepping). Skipping the whole GPU
+      // pipeline drops the at-rest sim cost to zero. The left mouse button disables the
+      // skip so the pick pass runs and can grab/wake; the readback is from the last stepped
+      // frame, which stays valid precisely because nothing steps.
+      bool const stasis = [&] {
+        auto const &ssc = rigid_body_manager->get_sim_config_reference();
+        if (ssc.active_rigid_body_count == 0u ||
+            ssc.sleeping_count < ssc.active_rigid_body_count) { return false; }
+        return glfwGetMouseButton(window.glfw_window_ptr, GLFW_MOUSE_BUTTON_LEFT) != GLFW_PRESS;
+      }();
+      if (status_manager->is_simulating() && !stasis)
       {
         // during a GUI-toggle hitch, cap the accumulator to ONE step (no burst -> no jerk); the few
         // ms of lost real-time sync over the toggle is imperceptible and resyncs once cooldown ends.
