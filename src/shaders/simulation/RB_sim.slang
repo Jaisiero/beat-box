@@ -1996,6 +1996,11 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     RigidBody* r = &rigid_bodies[row];
     if ((r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE)
     {
+      // WAKE on drag: a sleeping body skips advect/solve/integrate, so the spring's velocity
+      // write would be inert (and no contact partner moves to veto it awake). The pick IS the
+      // external force the sleep system cannot see - clear the flag and the quiet timer.
+      r->flags = RigidBodyFlag(daxa_u32(r->flags) & ~daxa_u32(RigidBodyFlag::SLEEPING));
+      r->sleep_timer = 0u;
       daxa_f32 PULL_RATE = 10.0f;      // 1/s: desired closing speed per meter of separation
       daxa_f32 MAX_PULL_SPEED = 12.0f; // m/s: match the terminal clamp. Note: a fast cursor
                                        // sweep carries the box through the pile at this speed,

@@ -429,7 +429,7 @@ private:
   // flag for graph-color contact debug tint
   bool graph_color_debug = false;
   // flag for island sleeping (default OFF: no trampas — see rigid_body_manager.hpp; press O for A/B)
-  bool sleeping_enabled = false;
+  bool sleeping_enabled = true; // mirrors the default SLEEPING_ENABLED sim flag (O toggles)
   bool reset_requested = false; // key R: restart the sim from the initial scene state
   int requested_scene = -1; // F1-F8: switch to scene_N at the next frame boundary (-1 = none)
   bool dump_requested = false; // F9: dump live GPU poses to a scene file at the next frame boundary
