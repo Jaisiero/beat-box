@@ -85,6 +85,11 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
     // become a monotonic run-max instead of per-frame. Reset them here, symmetric to coloring.slang.
     sim_config->dbg_maxv = 0u;
     sim_config->dbg_min_y = MAX_U32;
+    // convergence early-out state: fresh iteration counter + residual slots per step
+    // (iteration 0 InterlockedMax-es into res[0]; stale values would poison the max)
+    sim_config->avbd_iter_tick = 0u;
+    sim_config->avbd_step_res[0] = 0u;
+    sim_config->avbd_step_res[1] = 0u;
   }
   if (i >= sim_config->rigid_body_count)
   {
@@ -326,6 +331,11 @@ daxa_f32 avbd_contact_C(Manifold* m, daxa_u32 j, RigidBody* r1, RigidBody* r2,
   rr2 = p - c2;
 
   daxa_f32 C0 = m->contacts[j].penetration + BB_AVBD_MARGIN;
+  // post-stab slop (normal-row sibling of BB_AVBD_STICK_SLOP, same measured rationale):
+  // sub-slop penetration gets NO positional correction - correcting it every frame is the
+  // push-out/re-settle limit cycle visible as rest jitter. Main sweeps (stab_alpha=1) hide
+  // C0 entirely, so this only shapes the positional pass; depth beyond the slop corrects.
+  if (stab_alpha < 0.5f && C0 < 0.0f) { C0 = min(C0 + BB_AVBD_PS_SLOP, 0.0f); }
   daxa_f32 C = C0 * (1.0f - stab_alpha);
   if (dyn1)
   {
@@ -619,6 +629,19 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
     }
   }
 
+  // convergence early-out (main sweeps only): when the PREVIOUS iteration's max primal
+  // step over ALL bodies fell below the tolerance, the system is at its fixed point and
+  // the remaining sweeps would only re-derive it - skip them. Rest converges in a few
+  // iterations (the bulk of AVBD's cost at rest); impacts keep the full budget because
+  // their steps stay large. asuint on non-negative floats preserves ordering.
+  bool main_sweep = AVBD_PC.stab_alpha > 0.5f && AVBD_PC.ps_depth == MAX_U32;
+  daxa_u32 tick = sim_config->avbd_iter_tick;
+  if (main_sweep && tick > 0u &&
+      sim_config->avbd_step_res[(tick + 1u) & 1u] < asuint(BB_AVBD_CONV_EPS))
+  {
+    return;
+  }
+
   daxa_f32 dt = sim_config->dt;
   daxa_f32 inv_dt2 = dt > 0.0f ? 1.0f / (dt * dt) : 0.0f;
 
@@ -777,6 +800,14 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   Quaternion qn = (dq * r->rotation).normalize();
   r->rotation.v = qn.v;
   r->rotation.w = qn.w;
+
+  // convergence residual: this iteration's max step magnitude (linear + angular)
+  if (main_sweep)
+  {
+    daxa_f32 mag = length(dlin) + length(dang);
+    daxa_u32 prev;
+    InterlockedMax(sim_config->avbd_step_res[tick & 1u], asuint(mag), prev);
+  }
 }
 
 // ----- shock propagation: support-depth BFS over the contact graph -----
@@ -886,6 +917,15 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   if (sim_config->solver_type != SimSolverType::AVBD)
   {
     return;
+  }
+  // convergence tick: exactly one thread advances the iteration counter and clears the
+  // slot the NEXT primal sweep will InterlockedMax into (the dual runs between sweeps,
+  // so no residual writer races this clear)
+  if (compute_i.x == 0u)
+  {
+    daxa_u32 t = sim_config->avbd_iter_tick + 1u;
+    sim_config->avbd_iter_tick = t;
+    sim_config->avbd_step_res[t & 1u] = 0u;
   }
   daxa_u32 m_idx = compute_i.x;
   daxa_u32 coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
