@@ -322,6 +322,12 @@ int RendererManager::render()
       force_sim_step = true;
     }
 
+    // live scene dump request (F9): capture the CURRENT GPU poses to a scene file at this
+    // frame boundary (safe to one-off copy + wait here; it's a debug capture path)
+    if (status_manager->consume_dump()) {
+      scene_manager->dump_scene_live("scene_dump.txt");
+    }
+
     if(rigid_body_manager->is_dirty()) {
       rigid_body_manager->clean_dirty();
       rigid_body_manager->update_sim();

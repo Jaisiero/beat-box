@@ -146,6 +146,12 @@ struct StatusManager
   // boundary where the scene manager is reachable. -1 = no request pending.
   void request_scene(int n) { requested_scene = n; }
   int consume_scene() { int s = requested_scene; requested_scene = -1; return s; }
+
+  // live scene dump request (F9): set from the input callback, consumed in the render loop.
+  // Dumps the CURRENT GPU poses (not the spawn state) in BB_SCENE_FILE format - the capture
+  // tool for "send me the exact configuration you are looking at" debugging.
+  void request_dump() { dump_requested = true; }
+  bool consume_dump() { bool d = dump_requested; dump_requested = false; return d; }
   void stop_simulating() { simulating = false; } // force-pause (used by reset)
 
   void switch_simulating()
@@ -426,6 +432,7 @@ private:
   bool sleeping_enabled = false;
   bool reset_requested = false; // key R: restart the sim from the initial scene state
   int requested_scene = -1; // F1-F8: switch to scene_N at the next frame boundary (-1 = none)
+  bool dump_requested = false; // F9: dump live GPU poses to a scene file at the next frame boundary
   // flag for accumulation
   bool accumulation = false;
   // flag for showing islands

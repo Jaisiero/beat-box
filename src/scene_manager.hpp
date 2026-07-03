@@ -970,7 +970,11 @@ public:
       float px, py, pz; float h = 0.5f, m = 5.0f, e = 0.0f, fr = 0.6f, tmp;
       if (!(ss >> px >> py >> pz)) { continue; }
       if (ss >> tmp) h = tmp;  if (ss >> tmp) m = tmp;  if (ss >> tmp) e = tmp;  if (ss >> tmp) fr = tmp;
-      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(px, py, pz), .rotation = Q, .minimum = daxa_f32vec3(-h, -h, -h), .maximum = daxa_f32vec3(h, h, h), .mass = m, .inv_mass = (m == 0.0f ? 0.0f : 1.0f / m), .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I1, .restitution = e, .friction = fr});
+      // optional rotation (F9 live dumps append it): px py pz h m e fr qx qy qz qw
+      Quaternion cq = Q;
+      float cqx, cqy, cqz, cqw;
+      if (ss >> cqx >> cqy >> cqz >> cqw) { cq = Quaternion(cqx, cqy, cqz, cqw).normalize(); }
+      rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY), .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(px, py, pz), .rotation = cq, .minimum = daxa_f32vec3(-h, -h, -h), .maximum = daxa_f32vec3(h, h, h), .mass = m, .inv_mass = (m == 0.0f ? 0.0f : 1.0f / m), .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I1, .restitution = e, .friction = fr});
       ++n;
     }
     std::cout << "[SCENE] BB_SCENE_FILE loaded " << n << " bodies from '" << path << "'" << std::endl;
@@ -991,6 +995,64 @@ public:
       ++n;
     }
     std::cout << "[SCENE] BB_SCENE_DUMP wrote " << n << " bodies to '" << path << "'" << std::endl;
+  }
+
+  // F9: dump the LIVE GPU poses (current-parity rigid body buffer) in BB_SCENE_FILE format.
+  // Voxel bodies dump as `vox <name> pos quat` (shape_index 1/2/3 = l/cross/frame, the same
+  // order scene_5 and the file loader build them); cubes dump with their rotation appended.
+  // This is the capture half of the repro loop: see the bad configuration -> F9 -> load the
+  // file headless with BB_SCENE_FILE and debug the exact state. CPU-side by design (debug
+  // tooling; the sim itself stays GPU-resident).
+  void dump_scene_live(std::string const &path)
+  {
+    daxa_u32 const count = rigid_body_count;
+    if (count == 0u) { std::cerr << "F9 dump: no bodies" << std::endl; return; }
+    daxa::BufferId src = accel_struct_mngr->get_rigid_body_buffer();
+    if (src.is_empty()) { std::cerr << "F9 dump: rigid body buffer not ready" << std::endl; return; }
+    auto const size = static_cast<daxa::usize>(count) * sizeof(RigidBody);
+    daxa::BufferId staging = device.create_buffer({
+        .size = size,
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+        .name = "scene_dump_staging",
+    });
+    {
+      auto rec = device.create_command_recorder({});
+      rec.copy_buffer_to_buffer({.src_buffer = src, .dst_buffer = staging, .size = size});
+      auto cmds = rec.complete_current_commands();
+      device.submit_commands({.command_lists = std::array{cmds}});
+      device.wait_idle();
+    }
+    RigidBody const *live = device.buffer_host_address_as<RigidBody>(staging).value();
+    std::ofstream out(path, std::ios::trunc);
+    if (!out)
+    {
+      std::cerr << "F9 dump: cannot open '" << path << "'" << std::endl;
+      device.destroy_buffer(staging);
+      return;
+    }
+    out << "# F9 live dump: px py pz [h m e fr qx qy qz qw] / vox <shape> px py pz qx qy qz qw\n";
+    daxa_u32 n = 0u;
+    for (daxa_u32 i = 0u; i < count; ++i)
+    {
+      RigidBody const &b = live[i];
+      if ((b.flags & RigidBodyFlag::DYNAMIC) == RigidBodyFlag::NONE) { continue; }
+      if (b.shape_index != 0u)
+      {
+        char const *name = b.shape_index == 1u ? "l" : b.shape_index == 2u ? "cross" : "frame";
+        out << "vox " << name << " " << b.position.x << " " << b.position.y << " " << b.position.z
+            << " " << b.rotation.v.x << " " << b.rotation.v.y << " " << b.rotation.v.z << " " << b.rotation.w << "\n";
+      }
+      else
+      {
+        float const h = (b.maximum.x - b.minimum.x) * 0.5f;
+        out << b.position.x << " " << b.position.y << " " << b.position.z << " " << h << " " << b.mass
+            << " " << b.restitution << " " << b.friction
+            << " " << b.rotation.v.x << " " << b.rotation.v.y << " " << b.rotation.v.z << " " << b.rotation.w << "\n";
+      }
+      ++n;
+    }
+    device.destroy_buffer(staging);
+    std::cout << "[SCENE] F9 live dump wrote " << n << " bodies to '" << path << "'" << std::endl;
   }
 
   bool load_scene()
