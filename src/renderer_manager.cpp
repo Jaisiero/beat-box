@@ -284,6 +284,11 @@ int RendererManager::render()
   daxa_u64 assert_after = 60u;
   if (const char *e = std::getenv("BB_ASSERT_AFTER")) assert_after = static_cast<daxa_u64>(std::atoll(e));
   int metrics_exit_code = 0;
+  // BB_DUMP_AT_SECONDS=N: headless F9 - dump the LIVE poses once, N seconds into the run
+  // (no window focus needed; SendKeys-based captures race against the user's foreground)
+  double dump_at_s = -1.0;
+  if (const char *e = std::getenv("BB_DUMP_AT_SECONDS")) dump_at_s = std::atof(e);
+  bool dump_at_done = false;
 
   bool force_sim_step = true;
   while (!window.should_close())
@@ -325,6 +330,11 @@ int RendererManager::render()
     // live scene dump request (F9): capture the CURRENT GPU poses to a scene file at this
     // frame boundary (safe to one-off copy + wait here; it's a debug capture path)
     if (status_manager->consume_dump()) {
+      scene_manager->dump_scene_live("scene_dump.txt");
+    }
+    if (dump_at_s > 0.0 && !dump_at_done &&
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count() >= dump_at_s) {
+      dump_at_done = true;
       scene_manager->dump_scene_live("scene_dump.txt");
     }
 
@@ -556,6 +566,8 @@ int RendererManager::render()
                     << " nan=" << sc.gc_sat_nanflags << " y=" << sc.gc_sat_pos_y
                     << " maxv=" << sc.dbg_maxv
                     << " fresh=" << sc.dbg_fresh
+                    << " miss=[p" << sc.dbg_miss_present << " a" << sc.dbg_miss_absent
+                    << " c" << sc.dbg_miss_corrupt << " e" << sc.dbg_miss_emptyhead << "]"
                     << " ftag=[" << ((sc.dbg_fresh_tag >> 22u) & 0x1FFu) << "," << ((sc.dbg_fresh_tag >> 12u) & 0x3FFu)
                     << " k" << ((sc.dbg_fresh_tag >> 4u) & 0xFFu) << " n" << (sc.dbg_fresh_tag & 0xFu)
                     << (sc.dbg_fresh_tag >> 31u ? " MISS" : "") << "]"

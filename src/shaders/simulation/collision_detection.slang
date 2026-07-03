@@ -1921,6 +1921,27 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       if (fresh > 0u)
       {
         InterlockedAdd(sim_config->dbg_fresh, fresh);
+        // MISS anatomy histogram: when the whole manifold failed to match, re-walk the
+        // previous chain and record WHY (matcher bug vs existence flicker vs corruption).
+        // The ftag culprit latch showed rest churn is dominated by whole-manifold MISSes;
+        // this splits them by cause so the fix targets the real one.
+        if (!matched_old && warm_starting && rba_prev_exists && rbb_prev_exists)
+        {
+          daxa_u32 pmnc2 = min(previous_sim_config.manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+          daxa_u32 pcc2 = min(previous_sim_config.g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+          daxa_u32 wd = BodyLinkManifold::walk_diag(
+              rba_prev_index, rbb_prev_index, previous_rigid_bodies[rba_prev_index].manifold_node_index,
+              pmnc2, pcc2, collision_map_prev, previous_manifold_nodes, old_collisions);
+          daxa_u32 _mh;
+          if ((wd & (1u << 29)) != 0u) { InterlockedAdd(sim_config->dbg_miss_present, 1u, _mh); }
+          else
+          {
+            daxa_u32 reason = wd >> 30;
+            if (reason == 3u) { InterlockedAdd(sim_config->dbg_miss_absent, 1u, _mh); }
+            else if (reason == 0u) { InterlockedAdd(sim_config->dbg_miss_emptyhead, 1u, _mh); }
+            else { InterlockedAdd(sim_config->dbg_miss_corrupt, 1u, _mh); }
+          }
+        }
         // culprit latch: pair + key + count of one churning manifold (Max = stable pick).
         // Bit 31 distinguishes "no old manifold FOUND for this pair+key" (key flap /
         // first touch) from "found, but these contacts failed both matching passes".

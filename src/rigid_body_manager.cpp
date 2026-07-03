@@ -1331,10 +1331,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       daxa::attachment_view(AvbdTaskHead::AT.avbd_state, task_avbd_state),
       daxa::attachment_view(AvbdTaskHead::AT.body_color, task_avbd_body_color),
   };
-  auto avbd_dispatch = [this](daxa::TaskInterface ti, std::shared_ptr<daxa::ComputePipeline> &pl, daxa_u32 pc_color, daxa_f32 stab_alpha, daxa_u32 dispatch_offset, daxa_u32 ps_depth = MAX_U32)
+  auto avbd_dispatch = [this](daxa::TaskInterface ti, std::shared_ptr<daxa::ComputePipeline> &pl, daxa_u32 pc_color, daxa_f32 stab_alpha, daxa_u32 dispatch_offset, daxa_u32 ps_depth = MAX_U32, daxa_f32 relax = 1.0f)
   {
     ti.recorder.set_pipeline(*pl);
-    ti.recorder.push_constant(AvbdPushConstants{.task_head = ti.attachment_shader_blob, .color = pc_color, .stab_alpha = stab_alpha, .ps_depth = ps_depth});
+    ti.recorder.push_constant(AvbdPushConstants{.task_head = ti.attachment_shader_blob, .color = pc_color, .stab_alpha = stab_alpha, .ps_depth = ps_depth, .relax = relax});
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(AvbdTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * dispatch_offset});
   };
   auto user_callback_AVBD_CR = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_CR, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
@@ -1380,7 +1380,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_AVBD_WS = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_WS)>;
   TTask_AVBD_WS task_AVBD_WS(avbd_views, user_callback_AVBD_WS);
 
-  auto make_avbd_primal = [this, avbd_dispatch](daxa_u32 c, daxa_f32 stab_alpha, daxa_u32 ps_depth)
+  auto make_avbd_primal = [this, avbd_dispatch](daxa_u32 c, daxa_f32 stab_alpha, daxa_u32 ps_depth, daxa_f32 relax = 1.0f)
   {
     // A1: dispatch_indirect at this color's own workgroup count (0 if the body color is unused) instead
     // of the full body grid for all 32 colors early-outing 25/32 of them. Written by task_AVBD_CDISP.
@@ -1388,7 +1388,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     // used color in an EMPTY layer (above the pile height) is also skipped. Written by task_AVBD_CASCD.
     daxa_u32 disp_off = (ps_depth == MAX_U32) ? (AVBD_COLOR_SOLVE_DISPATCH_OFFSET + c)
                                               : (AVBD_CASCADE_DISPATCH_OFFSET + ps_depth * BB_MAX_COLORS + c);
-    return [this, avbd_dispatch, c, stab_alpha, ps_depth, disp_off](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, stab_alpha, disp_off, ps_depth); };
+    return [this, avbd_dispatch, c, stab_alpha, ps_depth, disp_off, relax](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, stab_alpha, disp_off, ps_depth, relax); };
   };
   using TTask_AVBD_PRIM = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_primal(0u, 1.0f, MAX_U32))>;
   std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_vec;     // main sweeps: alpha = 1 (delta-only constraint)
@@ -1397,13 +1397,18 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                                                        // entry [d * COLORS + c]
   std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_PS_plain_vec; // post-stab without the layer
                                                             // filter (symmetric polish sweeps)
+  std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_PS_relax_vec; // EXTRA post-stab sweeps at
+                                                            // BB_AVBD_PS_RELAX step scale
+                                                            // (damped: more sweeps converge)
   task_AVBD_PRIM_vec.reserve(BB_AVBD_MAX_BODY_COLORS);
   task_AVBD_PRIM_PS_vec.reserve(BB_AVBD_SHOCK_LAYERS * BB_AVBD_MAX_BODY_COLORS);
   task_AVBD_PRIM_PS_plain_vec.reserve(BB_AVBD_MAX_BODY_COLORS);
+  task_AVBD_PRIM_PS_relax_vec.reserve(BB_AVBD_MAX_BODY_COLORS);
   for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
   {
     task_AVBD_PRIM_vec.emplace_back(avbd_views, make_avbd_primal(c, 1.0f, MAX_U32));
     task_AVBD_PRIM_PS_plain_vec.emplace_back(avbd_views, make_avbd_primal(c, 0.0f, MAX_U32));
+    task_AVBD_PRIM_PS_relax_vec.emplace_back(avbd_views, make_avbd_primal(c, 0.0f, MAX_U32, BB_AVBD_PS_RELAX));
   }
   for (daxa_u32 d = 0u; d < BB_AVBD_SHOCK_LAYERS; ++d)
   {
@@ -1672,6 +1677,16 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
     {
       G.add_task(task_AVBD_PRIM_PS_plain_vec[c]);
+    }
+  }
+  // EXTRA damped sweeps: full-strength alpha=0 Gauss-Seidel diverges past 4 sweeps (measured
+  // MISS storms - the shared.inl note); at half step-scale the extra sweeps keep extracting
+  // the loaded pile's standing depth without the ratchet.
+  for (daxa_u32 ps = 0u; ps < BB_AVBD_POST_STAB_RELAXED; ++ps)
+  {
+    for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+    {
+      G.add_task(task_AVBD_PRIM_PS_relax_vec[c]);
     }
   }
   } // end AVBD FIN/impact/post-stab

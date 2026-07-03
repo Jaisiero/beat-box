@@ -474,6 +474,10 @@ groupshared Atomic<daxa_u32> histogram[RADIX_SORT_BINS];
   sim_config->dbg_node_overflow = 0u;
   sim_config->dbg_vox_interior = 0u; // voxel embedding latch (see shared.inl)
   sim_config->dbg_vox_wedge = 0u;    // thin-feature pass-through wedge latch (see shared.inl)
+  sim_config->dbg_miss_present = 0u; // warm-start MISS anatomy histogram (see shared.inl)
+  sim_config->dbg_miss_absent = 0u;
+  sim_config->dbg_miss_corrupt = 0u;
+  sim_config->dbg_miss_emptyhead = 0u;
 
   DispatchBuffer* dispatch_buffer =
       (DispatchBuffer*)(NPD.task_head.dispatch_buffer);

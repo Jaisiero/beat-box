@@ -85,6 +85,16 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
     // become a monotonic run-max instead of per-frame. Reset them here, symmetric to coloring.slang.
     sim_config->dbg_maxv = 0u;
     sim_config->dbg_min_y = MAX_U32;
+    // deep-pocket trace latches: same phantom as dbg_min_y above - their reset lives in
+    // entry_graph_color_reset, which the AVBD graph SKIPS, so under AVBD the trace froze
+    // the run-max (a frame-2 rain transient read as a "stuck 250mm pair" for 12000 frames)
+    sim_config->dbg_pk_pen = 0u;
+    sim_config->dbg_pk_body = 0u;
+    sim_config->dbg_pk_lambda = 0.0f;
+    sim_config->dbg_pk_k = 0.0f;
+    sim_config->dbg_pk_vn = 0.0f;
+    sim_config->dbg_pk_stick = 0u;
+    sim_config->dbg_pk_omega = 0u;
     // convergence early-out state: fresh iteration counter + residual slots per step
     // (iteration 0 InterlockedMax-es into res[0]; stale values would poison the max)
     sim_config->avbd_iter_tick = 0u;
@@ -790,9 +800,10 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   daxa_f32 dx[6];
   avbd_solve6(H, rhs, dx);
 
-  // no step limiting: the reference scheme relies on the inertia term + penalty curvature
-  daxa_f32vec3 dlin = daxa_f32vec3(dx[0], dx[1], dx[2]);
-  daxa_f32vec3 dang = daxa_f32vec3(dx[3], dx[4], dx[5]);
+  // no step limiting: the reference scheme relies on the inertia term + penalty curvature.
+  // relax < 1 damps the EXTRA post-stab sweeps (full-strength alpha=0 GS diverges past 4).
+  daxa_f32vec3 dlin = daxa_f32vec3(dx[0], dx[1], dx[2]) * AVBD_PC.relax;
+  daxa_f32vec3 dang = daxa_f32vec3(dx[3], dx[4], dx[5]) * AVBD_PC.relax;
 
   r->position += dlin;
   daxa_f32vec3 half = dang * 0.5f;
