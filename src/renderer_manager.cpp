@@ -291,8 +291,14 @@ int RendererManager::render()
   bool dump_at_done = false;
 
   bool force_sim_step = true;
+  daxa_u64 render_frames_total = 0; // ALL render frames (stasis ones too) - the PERF frame
+                                    // metric divides wall time by THIS, not by stepped
+                                    // frames, or full-sleep stasis inflates frame=/deflates
+                                    // the printed fps (user-reported "ya no topa 60fps"
+                                    // that the present rate disproved)
   while (!window.should_close())
   {
+    ++render_frames_total;
     if (run_limit_s > 0.0 &&
         std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count() > run_limit_s)
     {
@@ -549,11 +555,15 @@ int RendererManager::render()
         }
       }
       { static daxa_u64 _cf = 0; static auto _t0 = std::chrono::high_resolution_clock::now();
+        static daxa_u64 _lrf = 0;
         // sample every 31 frames (odd) so the readback alternates between the two double-buffered
         // SimConfigs — each holds an independent dbg_ex latch; an even cadence would only ever show one.
         if ((++_cf % 31) == 0) {
           auto _t1 = std::chrono::high_resolution_clock::now();
-          double _ms = std::chrono::duration<double, std::milli>(_t1 - _t0).count() / 31.0; _t0 = _t1;
+          // divide by ALL render frames since the last print (stasis frames included), not by
+          // the 31 stepped ones - stasis interleaving otherwise inflates frame=
+          daxa_u64 _rf = render_frames_total - _lrf; _lrf = render_frames_total;
+          double _ms = std::chrono::duration<double, std::milli>(_t1 - _t0).count() / (double)(_rf ? _rf : 1); _t0 = _t1;
           double _sim_ms = _sim_ms_n ? (_sim_ms_accum / (double)_sim_ms_n) : 0.0;   // [PERF]
           _sim_ms_accum = 0.0; _sim_ms_n = 0;                                        // [PERF]
           // deep-MISS walk diagnostic decode (see BodyLinkManifold::walk_diag)
