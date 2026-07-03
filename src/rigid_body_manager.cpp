@@ -1679,14 +1679,17 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       G.add_task(task_AVBD_PRIM_PS_plain_vec[c]);
     }
   }
-  // EXTRA damped sweeps: full-strength alpha=0 Gauss-Seidel diverges past 4 sweeps (measured
-  // MISS storms - the shared.inl note); at half step-scale the extra sweeps keep extracting
-  // the loaded pile's standing depth without the ratchet.
-  for (daxa_u32 ps = 0u; ps < BB_AVBD_POST_STAB_RELAXED; ++ps)
+  // EXTRA damped sweeps - knob currently 0 (MEASURED WORSE, see BB_AVBD_POST_STAB_RELAXED
+  // in shared.inl); if constexpr keeps the falsified-but-kept mechanism from emitting the
+  // always-false-loop warning (C4296) while it sits parked.
+  if constexpr (BB_AVBD_POST_STAB_RELAXED > 0u)
   {
-    for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+    for (daxa_u32 ps = 0u; ps < BB_AVBD_POST_STAB_RELAXED; ++ps)
     {
-      G.add_task(task_AVBD_PRIM_PS_relax_vec[c]);
+      for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+      {
+        G.add_task(task_AVBD_PRIM_PS_relax_vec[c]);
+      }
     }
   }
   } // end AVBD FIN/impact/post-stab

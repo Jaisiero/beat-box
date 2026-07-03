@@ -184,14 +184,14 @@ private:
   | SimFlag::ACCUM_IMPULSE
   | SimFlag::WARM_STARTING
   | SimFlag::USE_GRAPH_COLORING
-  // SLEEPING_ENABLED OFF by default (user decision 2026-06-15: "dejemos de hacer trampas").
-  // Sleeping froze a 250mm-interpenetrated cube (the trampa) AND toggling it OFF mid-run
-  // exploded the pile (waking ~420 frozen interpenetrated bodies in ONE frame releases their
-  // accumulated penalty energy at once). With sleeping off from the start there is no frozen
-  // state to release: bodies stay active and the solver resolves penetration continuously.
-  // Fix the honest (no-trampa) rest first; re-enable sleeping (with a graceful wake) later.
-  // Press O to toggle on.
-  ;
+  // SLEEPING_ENABLED back ON by default (user decision 2026-07-03), closing the 2026-06-15
+  // "dejemos de hacer trampas" era. The original objection was that sleeping froze visibly
+  // interpenetrated states; since then the honest rest was actually built: exact SDF+SAT
+  // voxel narrow phase, post-stab slop, convergence early-out - canonical scenes settle at
+  // pen 0-5mm with fresh=0, so what sleeping freezes now is a CORRECT state. scene_7's
+  // slow-relaxing internal debt (accepted as torture-test behavior, see the settle-tail
+  // notes) sleeps once quiet instead of chewing itself for minutes. Press O to toggle off.
+  | SimFlag::SLEEPING_ENABLED;
   // simulating flag update 
   bool sim_flag_dirty[DOUBLE_BUFFERING] = {};
   bool suppress_warm_starting_once = false;
