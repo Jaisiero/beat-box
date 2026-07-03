@@ -497,6 +497,15 @@ int RendererManager::render()
       }
     }
     bool const sim_stepped = sim_steps_this_frame > 0u;
+    // accumulation is only VALID over a static world: a sim step may move geometry, and
+    // blending history across poses is the ghost-speckle the user reported (pieces
+    // dissolving between two poses). Camera motion already resets it (input_manager);
+    // this is the geometry half. With pause/full-sleep stasis the world is provably
+    // still, so the progressive refinement keeps working exactly where it is meaningful.
+    if (sim_stepped && status_manager->is_accumulating())
+    {
+      status_manager->reset_accumulation_count();
+    }
     if (!window.update())
       continue;
 
