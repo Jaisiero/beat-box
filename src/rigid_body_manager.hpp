@@ -143,12 +143,15 @@ struct RigidBodyManager{
   daxa::BufferId get_voxel_occupancy_buffer() const { return voxel_occupancy; }
   daxa::BufferId get_voxel_surface_buffer() const { return voxel_surface; }
   daxa::BufferId get_voxel_sdf_buffer() const { return voxel_sdf; }
-  // GPU node-SDF build (GPU-first): computes every shape's node field from the occupancy
-  // bitmask on the GPU (exact separable EDT; see voxel_sdf.slang). Called by the scene
-  // after uploading shapes+occupancy; re-callable on future runtime shape edits.
-  // cpu_reference: when BB_SDF_VERIFY is set, the GPU result is read back and compared
+  // GPU build of the derived voxel-shape pools (GPU-first): node SDF (exact separable EDT)
+  // + packed surface-voxel list (canonical cell order, byte-identical to the CPU oracle's),
+  // both from the occupancy bitmask; see voxel_sdf.slang. Called by the scene after
+  // uploading shapes+occupancy; re-callable on future runtime shape edits (destruction).
+  // cpu_*_reference: when BB_SDF_VERIFY is set, GPU results are read back and compared
   // against the CPU brute force (kept as the debug oracle per the GPU-first directive).
-  void build_voxel_sdf_gpu(std::vector<VoxelShape> const &shapes, std::vector<daxa_f32> const &cpu_reference);
+  void build_voxel_pools_gpu(std::vector<VoxelShape> const &shapes,
+                             std::vector<daxa_f32> const &cpu_sdf_reference,
+                             std::vector<daxa_u32> const &cpu_surf_reference);
 
 private:
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
@@ -211,6 +214,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_INIT;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_AXIS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_FIN;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_SURF;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BBBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CBBLBVHGH;

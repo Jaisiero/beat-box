@@ -24,6 +24,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_VSB_INIT = task_manager->create_compute(VoxelSdfInitInfo{}.info);
     pipeline_VSB_AXIS = task_manager->create_compute(VoxelSdfAxisInfo{}.info);
     pipeline_VSB_FIN = task_manager->create_compute(VoxelSdfFinalizeInfo{}.info);
+    pipeline_VSB_SURF = task_manager->create_compute(VoxelSurfaceBuildInfo{}.info);
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
     pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
     pipeline_CBBLBVHGH = task_manager->create_compute(RigidBodyConvertBoundingBoxesLinearBVHInfo{}.info);
@@ -1998,13 +1999,17 @@ bool RigidBodyManager::update_sim()
   return initialized;
 }
 
-void RigidBodyManager::build_voxel_sdf_gpu(std::vector<VoxelShape> const &shapes, std::vector<daxa_f32> const &cpu_reference)
+void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shapes,
+                                             std::vector<daxa_f32> const &cpu_sdf_reference,
+                                             std::vector<daxa_u32> const &cpu_surf_reference)
 {
   if (!initialized || shapes.empty()) { return; }
   auto const occ_addr = device.device_address(voxel_occupancy).value();
   auto const sdf_addr = device.device_address(voxel_sdf).value();
   auto const sc0_addr = device.device_address(voxel_sdf_scratch[0]).value();
   auto const sc1_addr = device.device_address(voxel_sdf_scratch[1]).value();
+  auto const shapes_addr = device.device_address(voxel_shapes).value();
+  auto const surf_addr = device.device_address(voxel_surface).value();
 
   auto rec = device.create_command_recorder({});
   auto const barrier = [&rec]() {
@@ -2013,8 +2018,9 @@ void RigidBodyManager::build_voxel_sdf_gpu(std::vector<VoxelShape> const &shapes
         .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE,
     });
   };
-  for (auto const &s : shapes)
+  for (daxa_u32 si = 0u; si < (daxa_u32)shapes.size(); ++si)
   {
+    auto const &s = shapes[si];
     daxa_u32 const nx = s.dims.x + 1u, ny = s.dims.y + 1u, nz = s.dims.z + 1u;
     daxa_u32 const nodes = nx * ny * nz;
     VoxelSdfBuildPushConstants pc = {
@@ -2022,9 +2028,13 @@ void RigidBodyManager::build_voxel_sdf_gpu(std::vector<VoxelShape> const &shapes
         .sdf_addr = sdf_addr,
         .scratch_solid_addr = sc0_addr,
         .scratch_empty_addr = sc1_addr,
+        .shapes_addr = shapes_addr,
+        .surface_addr = surf_addr,
         .cell_dims = s.dims,
         .occ_offset = s.occ_offset,
         .sdf_offset = s.sdf_offset,
+        .surf_offset = s.surf_offset,
+        .shape_index = si,
         .axis = 0u,
         .voxel_size = s.voxel_size,
     };
@@ -2046,6 +2056,11 @@ void RigidBodyManager::build_voxel_sdf_gpu(std::vector<VoxelShape> const &shapes
     rec.push_constant(pc);
     rec.dispatch({.x = (nodes + 63u) / 64u, .y = 1, .z = 1});
     barrier();
+    // surface list is independent of the EDT chain (reads only the bitmask); single group
+    rec.set_pipeline(*pipeline_VSB_SURF);
+    rec.push_constant(pc);
+    rec.dispatch({.x = 1, .y = 1, .z = 1});
+    barrier();
   }
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
@@ -2062,9 +2077,9 @@ void RigidBodyManager::build_voxel_sdf_gpu(std::vector<VoxelShape> const &shapes
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #endif
-  if (verify && !cpu_reference.empty())
+  if (verify && !cpu_sdf_reference.empty())
   {
-    auto const size = cpu_reference.size() * sizeof(daxa_f32);
+    auto const size = cpu_sdf_reference.size() * sizeof(daxa_f32);
     daxa::BufferId staging = device.create_buffer({
         .size = size,
         .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
@@ -2078,14 +2093,47 @@ void RigidBodyManager::build_voxel_sdf_gpu(std::vector<VoxelShape> const &shapes
     daxa_f32 const *gpu = device.buffer_host_address_as<daxa_f32>(staging).value();
     double max_diff = 0.0;
     size_t worst = 0;
-    for (size_t i = 0; i < cpu_reference.size(); ++i)
+    for (size_t i = 0; i < cpu_sdf_reference.size(); ++i)
     {
-      double const d = std::abs((double)gpu[i] - (double)cpu_reference[i]);
+      double const d = std::abs((double)gpu[i] - (double)cpu_sdf_reference[i]);
       if (d > max_diff) { max_diff = d; worst = i; }
     }
-    std::cout << "[SDF-VERIFY] nodes=" << cpu_reference.size() << " max|gpu-cpu|=" << max_diff
-              << " (worst node " << worst << ": gpu=" << gpu[worst] << " cpu=" << cpu_reference[worst] << ")"
+    std::cout << "[SDF-VERIFY] nodes=" << cpu_sdf_reference.size() << " max|gpu-cpu|=" << max_diff
+              << " (worst node " << worst << ": gpu=" << gpu[worst] << " cpu=" << cpu_sdf_reference[worst] << ")"
               << ((max_diff < 1e-4) ? "  => MATCH" : "  => MISMATCH!") << std::endl;
+    device.destroy_buffer(staging);
+  }
+  if (verify && !cpu_surf_reference.empty())
+  {
+    // surface list must be BYTE-IDENTICAL (same canonical order) and the GPU-patched
+    // surf_count must equal the CPU count for every shape
+    auto const surf_size = cpu_surf_reference.size() * sizeof(daxa_u32);
+    auto const shapes_size = shapes.size() * sizeof(VoxelShape);
+    daxa::BufferId staging = device.create_buffer({
+        .size = surf_size + shapes_size,
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+        .name = "voxel_surf_verify_staging",
+    });
+    auto rec2 = device.create_command_recorder({});
+    rec2.copy_buffer_to_buffer({.src_buffer = voxel_surface, .dst_buffer = staging, .size = surf_size});
+    rec2.copy_buffer_to_buffer({.src_buffer = voxel_shapes, .dst_buffer = staging, .dst_offset = surf_size, .size = shapes_size});
+    auto cmds2 = rec2.complete_current_commands();
+    device.submit_commands({.command_lists = std::array{cmds2}});
+    device.wait_idle();
+    daxa_u32 const *gpu_surf = device.buffer_host_address_as<daxa_u32>(staging).value();
+    VoxelShape const *gpu_shapes = reinterpret_cast<VoxelShape const *>(gpu_surf + cpu_surf_reference.size());
+    daxa_u32 entry_mismatches = 0u, count_mismatches = 0u, checked = 0u;
+    for (size_t si = 0; si < shapes.size(); ++si)
+    {
+      if (gpu_shapes[si].surf_count != shapes[si].surf_count) { ++count_mismatches; }
+      for (daxa_u32 i = 0u; i < shapes[si].surf_count; ++i, ++checked)
+      {
+        if (gpu_surf[shapes[si].surf_offset + i] != cpu_surf_reference[shapes[si].surf_offset + i]) { ++entry_mismatches; }
+      }
+    }
+    std::cout << "[SURF-VERIFY] shapes=" << shapes.size() << " entries=" << checked
+              << " entry_mismatches=" << entry_mismatches << " count_mismatches=" << count_mismatches
+              << ((entry_mismatches + count_mismatches == 0u) ? "  => MATCH" : "  => MISMATCH!") << std::endl;
     device.destroy_buffer(staging);
   }
 }

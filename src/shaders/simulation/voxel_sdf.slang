@@ -127,6 +127,45 @@ static const daxa_f32 VSB_INF = 1.0e30f;
   }
 }
 
+// SURFACE-VOXEL LIST on the GPU (the other fracture-path pool): solid cells with at least
+// one empty 6-neighbor, packed x | y<<8 | z<<16 | first_empty_dir<<24. SINGLE THREAD per
+// shape, scanning cells in canonical bit order (x-fastest) - BYTE-IDENTICAL to the CPU
+// oracle's list, so the narrow phase's iteration order (and thus every order-sensitive
+// FP accumulation) is unchanged. Serial is deliberate: determinism first; cells <= 32k
+// scan in microseconds at load, optimize with a scan-compaction only if fracture-scale
+// grids ever make this hot. Also patches shapes[shape_index].surf_count.
+[shader("compute")]
+[numthreads(64, 1, 1)] void entry_voxel_surface_build(daxa_u32vec3 tid : SV_DispatchThreadID)
+{
+  if (tid.x != 0u) { return; }
+  daxa_u32* occ = (daxa_u32*)(VSB.occupancy_addr);
+  daxa_u32* surf = (daxa_u32*)(VSB.surface_addr);
+  VoxelShape* shapes = (VoxelShape*)(VSB.shapes_addr);
+  daxa_u32 n = 0u;
+  for (daxa_u32 z = 0u; z < VSB.cell_dims.z; ++z)
+  {
+    for (daxa_u32 y = 0u; y < VSB.cell_dims.y; ++y)
+    {
+      for (daxa_u32 x = 0u; x < VSB.cell_dims.x; ++x)
+      {
+        if (!vsb_cell_solid(occ, daxa_i32(x), daxa_i32(y), daxa_i32(z))) { continue; }
+        // first empty 6-neighbor, same probe order as the CPU oracle (-x,+x,-y,+y,-z,+z)
+        daxa_i32 nb[6][3] = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
+        for (daxa_u32 d = 0u; d < 6u; ++d)
+        {
+          if (!vsb_cell_solid(occ, daxa_i32(x) + nb[d][0], daxa_i32(y) + nb[d][1], daxa_i32(z) + nb[d][2]))
+          {
+            surf[VSB.surf_offset + n] = x | (y << 8u) | (z << 16u) | (d << 24u);
+            ++n;
+            break;
+          }
+        }
+      }
+    }
+  }
+  shapes[VSB.shape_index].surf_count = n;
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)] void entry_voxel_sdf_finalize(daxa_u32vec3 tid : SV_DispatchThreadID)
 {

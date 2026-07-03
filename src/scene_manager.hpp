@@ -527,7 +527,13 @@ public:
     u32 const bit_count = dims.x * dims.y * dims.z;
     u32 const occ_offset = (u32)voxel_occ_cpu.size();
     voxel_occ_cpu.resize(occ_offset + (bit_count + 31u) / 32u, 0u);
+    // surface ENTRIES are built ON THE GPU (build_voxel_pools_gpu, canonical cell order);
+    // the CPU fill below runs only as the BB_SDF_VERIFY oracle. The pool slice is reserved
+    // at the worst case (every solid cell on the surface) so offsets never depend on the env.
+    static bool const sdf_verify_oracle = bb_getenv("BB_SDF_VERIFY") != nullptr;
     u32 const surf_offset = (u32)voxel_surf_cpu.size();
+    voxel_surf_cpu.resize(surf_offset + count, 0u);
+    u32 surf_n = 0;
     glm::mat3 inertia(0.0f);
     std::vector<Aabb> prims;
     prims.reserve(count);
@@ -545,19 +551,21 @@ public:
           inertia += glm::mat3(voxel_mass * vs * vs / 6.0f);
           prims.push_back(Aabb(daxa_f32vec3(center.x - 0.5f * vs, center.y - 0.5f * vs, center.z - 0.5f * vs),
                                daxa_f32vec3(center.x + 0.5f * vs, center.y + 0.5f * vs, center.z + 0.5f * vs)));
-          // surface voxel: any of the 6 neighbors empty; normal_code = first empty direction
+          // surface voxel: any of the 6 neighbors empty; normal_code = first empty direction.
+          // count always (record field, trivial); the ENTRY only under the oracle env
           i32 const nx[6][3] = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
           for (u32 d = 0; d < 6; ++d)
           {
             if (!is_solid((i32)x + nx[d][0], (i32)y + nx[d][1], (i32)z + nx[d][2]))
             {
-              voxel_surf_cpu.push_back(x | (y << 8) | (z << 16) | (d << 24));
+              if (sdf_verify_oracle) { voxel_surf_cpu[surf_offset + surf_n] = x | (y << 8) | (z << 16) | (d << 24); }
+              ++surf_n;
               break;
             }
           }
         }
 
-    // NODE signed-distance field: the REAL build runs ON THE GPU (build_voxel_sdf_gpu,
+    // NODE signed-distance field: the REAL build runs ON THE GPU (build_voxel_pools_gpu,
     // exact separable EDT from the occupancy bitmask - the destructibility rebuild path).
     // This CPU brute force is kept ONLY as the BB_SDF_VERIFY oracle and is skipped
     // otherwise (GPU-first directive: CPU algorithms are temporary/debug scaffolding).
@@ -570,7 +578,6 @@ public:
       glm::vec3 const d = glm::max(glm::max(lo - p, p - (lo + glm::vec3(1.0f))), glm::vec3(0.0f));
       return glm::length(d);
     };
-    static bool const sdf_verify_oracle = bb_getenv("BB_SDF_VERIFY") != nullptr;
     if (sdf_verify_oracle)
     for (u32 nz = 0; nz < ndims.z; ++nz)
       for (u32 ny = 0; ny < ndims.y; ++ny)
@@ -605,7 +612,7 @@ public:
         .grid_origin = daxa_f32vec3(grid_origin.x, grid_origin.y, grid_origin.z),
         .occ_offset = occ_offset,
         .surf_offset = surf_offset,
-        .surf_count = (u32)voxel_surf_cpu.size() - surf_offset,
+        .surf_count = surf_n,
         .sdf_offset = sdf_offset,
     });
     voxel_shape_prims.push_back(std::move(prims));
@@ -1188,10 +1195,11 @@ public:
                   voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
       std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
                   voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
-      // GPU-first: the node SDF is (re)built ON THE GPU from the occupancy bitmask - the
-      // CPU value uploaded above is only the BB_SDF_VERIFY oracle (the GPU result
-      // overwrites it). This is the path future runtime shape edits (destruction) re-run.
-      rigid_body_manager->build_voxel_sdf_gpu(voxel_shape_cpu, voxel_sdf_cpu);
+      // GPU-first: the node SDF and the surface-voxel list are (re)built ON THE GPU from
+      // the occupancy bitmask - the CPU values uploaded above are only the BB_SDF_VERIFY
+      // oracles (the GPU results overwrite them, including each shape's surf_count).
+      // This is the path future runtime shape edits (destruction) re-run.
+      rigid_body_manager->build_voxel_pools_gpu(voxel_shape_cpu, voxel_sdf_cpu, voxel_surf_cpu);
     }
 
     // TODO: Handle error

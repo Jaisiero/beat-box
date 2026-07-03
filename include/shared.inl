@@ -1261,9 +1261,13 @@ struct VoxelSdfBuildPushConstants
   daxa_u64 sdf_addr;
   daxa_u64 scratch_solid_addr;
   daxa_u64 scratch_empty_addr;
+  daxa_u64 shapes_addr;  // VoxelShape records (the surface pass patches surf_count)
+  daxa_u64 surface_addr; // packed surface-voxel pool
   daxa_u32vec3 cell_dims;
   daxa_u32 occ_offset;
   daxa_u32 sdf_offset;
+  daxa_u32 surf_offset;
+  daxa_u32 shape_index;
   daxa_u32 axis;        // 0/1/2 for the separable passes
   daxa_f32 voxel_size;
 };

@@ -523,9 +523,11 @@ const auto voxel_sdf_shader_file_string = "voxel_sdf.slang";
 const auto entry_voxel_sdf_init = "entry_voxel_sdf_init";
 const auto entry_voxel_sdf_axis = "entry_voxel_sdf_axis";
 const auto entry_voxel_sdf_finalize = "entry_voxel_sdf_finalize";
+const auto entry_voxel_surface_build = "entry_voxel_surface_build";
 const auto voxel_sdf_init_pipeline_name = "Voxel SDF Init";
 const auto voxel_sdf_axis_pipeline_name = "Voxel SDF Axis";
 const auto voxel_sdf_finalize_pipeline_name = "Voxel SDF Finalize";
+const auto voxel_surface_build_pipeline_name = "Voxel Surface Build";
 
 // generate hierarchy for linear bounding volume hierarchy
 const auto entry_generate_hierarchy_linear_bvh = "entry_generate_hierarchy_linear_bvh";
@@ -915,6 +917,21 @@ struct VoxelSdfFinalizeInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(VoxelSdfBuildPushConstants),
       .name = voxel_sdf_finalize_pipeline_name,
+  };
+};
+
+struct VoxelSurfaceBuildInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{voxel_sdf_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_voxel_surface_build,
+          .required_subgroup_size = SUBGROUP_SIZE,
+      },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(VoxelSdfBuildPushConstants),
+      .name = voxel_surface_build_pipeline_name,
   };
 };
 
