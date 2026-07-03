@@ -557,11 +557,11 @@ public:
           }
         }
 
-    // NODE signed-distance field: exact Euclidean distance from each voxel CORNER to the
-    // solid's surface, negative inside. Nodes (not cell centers) so 2-voxel features keep
-    // their midplane fold. Distance to a region = min point-to-box distance over its cells;
-    // the "empty region" additionally includes everything outside the grid box. Brute force
-    // over <=(33^3) nodes x cells is microseconds at these sizes.
+    // NODE signed-distance field: the REAL build runs ON THE GPU (build_voxel_sdf_gpu,
+    // exact separable EDT from the occupancy bitmask - the destructibility rebuild path).
+    // This CPU brute force is kept ONLY as the BB_SDF_VERIFY oracle and is skipped
+    // otherwise (GPU-first directive: CPU algorithms are temporary/debug scaffolding).
+    // The pool slice is always RESERVED (sdf_offset accounting must not depend on the env).
     u32 const sdf_offset = (u32)voxel_sdf_cpu.size();
     glm::uvec3 const ndims = dims + glm::uvec3(1);
     voxel_sdf_cpu.resize(sdf_offset + ndims.x * ndims.y * ndims.z, 0.0f);
@@ -570,6 +570,8 @@ public:
       glm::vec3 const d = glm::max(glm::max(lo - p, p - (lo + glm::vec3(1.0f))), glm::vec3(0.0f));
       return glm::length(d);
     };
+    static bool const sdf_verify_oracle = bb_getenv("BB_SDF_VERIFY") != nullptr;
+    if (sdf_verify_oracle)
     for (u32 nz = 0; nz < ndims.z; ++nz)
       for (u32 ny = 0; ny < ndims.y; ++ny)
         for (u32 nx_ = 0; nx_ < ndims.x; ++nx_)
