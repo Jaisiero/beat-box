@@ -566,6 +566,8 @@ int RendererManager::render()
                     << " nan=" << sc.gc_sat_nanflags << " y=" << sc.gc_sat_pos_y
                     << " maxv=" << sc.dbg_maxv
                     << " fresh=" << sc.dbg_fresh
+                    << " miss=[p" << sc.dbg_miss_present << " a" << sc.dbg_miss_absent
+                    << " c" << sc.dbg_miss_corrupt << " e" << sc.dbg_miss_emptyhead << "]"
                     << " ftag=[" << ((sc.dbg_fresh_tag >> 22u) & 0x1FFu) << "," << ((sc.dbg_fresh_tag >> 12u) & 0x3FFu)
                     << " k" << ((sc.dbg_fresh_tag >> 4u) & 0xFFu) << " n" << (sc.dbg_fresh_tag & 0xFu)
                     << (sc.dbg_fresh_tag >> 31u ? " MISS" : "") << "]"

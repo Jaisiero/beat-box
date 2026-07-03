@@ -692,6 +692,11 @@ struct SimConfig
                                   // an axis pair whose +/- manifolds BOTH ran deep (opposing forces
                                   // cancelling = stable invisible interpenetration); the deeper side
                                   // is suppressed so the shallower one extracts. scene_5 wedge fix.
+  daxa_u32 dbg_miss_present;      // warm-start MISS anatomy: pair's old manifold EXISTS on the prev
+                                  // chain but the matcher returned false (matcher/walk bug)
+  daxa_u32 dbg_miss_absent;       // ... chain walked to the end, pair genuinely absent (existence flicker)
+  daxa_u32 dbg_miss_corrupt;      // ... walk aborted on an out-of-bounds node/map entry (chain corruption)
+  daxa_u32 dbg_miss_emptyhead;    // ... previous body's chain head empty (no manifolds at all last frame)
   daxa_u32 dbg_vox_interior;      // per-frame MAX of a voxel manifold's interior_hits: samples fully
                                   // surrounded by the OTHER body's solid = a body is EMBEDDED inside
                                   // another. Deep voxel-voxel overlap is otherwise INVISIBLE to
