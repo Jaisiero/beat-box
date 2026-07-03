@@ -800,9 +800,10 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   daxa_f32 dx[6];
   avbd_solve6(H, rhs, dx);
 
-  // no step limiting: the reference scheme relies on the inertia term + penalty curvature
-  daxa_f32vec3 dlin = daxa_f32vec3(dx[0], dx[1], dx[2]);
-  daxa_f32vec3 dang = daxa_f32vec3(dx[3], dx[4], dx[5]);
+  // no step limiting: the reference scheme relies on the inertia term + penalty curvature.
+  // relax < 1 damps the EXTRA post-stab sweeps (full-strength alpha=0 GS diverges past 4).
+  daxa_f32vec3 dlin = daxa_f32vec3(dx[0], dx[1], dx[2]) * AVBD_PC.relax;
+  daxa_f32vec3 dang = daxa_f32vec3(dx[3], dx[4], dx[5]) * AVBD_PC.relax;
 
   r->position += dlin;
   daxa_f32vec3 half = dang * 0.5f;

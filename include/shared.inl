@@ -1005,6 +1005,17 @@ static const daxa_u32 BB_AVBD_POST_STAB_SWEEPS = 4; // alpha=0 positional sweeps
                                                     // relaxation ratchets closed-loop piles into
                                                     // MISS storms). More sweeps need a relaxation
                                                     // factor first.
+static const daxa_u32 BB_AVBD_POST_STAB_RELAXED = 0; // EXTRA damped post-stab sweeps. MEASURED
+                                                     // (2026-07-03, scene_7 90s): 4 sweeps at 0.5
+                                                     // step scale made the tail WORSE (pen_mean
+                                                     // 81->170, maxv_mean 255->461, sim +1.7ms) -
+                                                     // more positional correction per frame pumps
+                                                     // MORE energy into the confined pile, damped
+                                                     // or not. Same law as "more iterations =
+                                                     // worse". Mechanism kept at 0 for future
+                                                     // experiments; the tail's real driver is the
+                                                     // rest-time warm-start churn (fresh=20-60).
+static const daxa_f32 BB_AVBD_PS_RELAX = 0.5f;       // step scale of the relaxed sweeps (unused at 0)
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_POINT_COUNT = 8192;
 static const daxa_u32 BB_MAX_DEBUG_CONTACT_LINE_VERTEX_COUNT = BB_MAX_DEBUG_CONTACT_POINT_COUNT * 2;
 
@@ -1451,6 +1462,10 @@ struct AvbdPushConstants
   daxa_f32 stab_alpha;  // 1.0 = main sweeps (constraint delta only), 0.0 = post-stabilization
   daxa_u32 ps_depth;    // shock propagation (post-stab only): solve ONLY bodies whose
                         // saturated support depth equals this layer; MAX_U32 = no filter
+  daxa_f32 relax;       // primal step scale: 1.0 = full Newton step; <1 under-relaxes the
+                        // EXTRA post-stab sweeps (full-strength alpha=0 Gauss-Seidel diverges
+                        // past 4 sweeps - the measured MISS storms; damping is the classical
+                        // fix that lets more sweeps keep converging)
 };
 
 
