@@ -1870,6 +1870,13 @@ const static daxa::f32 LINE_SIZE = 0.5f;
     return;
   }
 
+  // count ONLY when the vertices are actually written (DEBUG_INFO on): the GUI draws
+  // collision_point_count vertices from these buffers, so a count taken while the flag was
+  // off points the draw at stale/garbage data (the TAB-after-full-sleep ghost contacts)
+  if (!sim_config->has_flag(SimFlag::DEBUG_INFO))
+  {
+    return;
+  }
   daxa_u32 index = 0;
   InterlockedAdd(sim_config->g_c_info.collision_point_count, contact_count, index);
   if(index >= BB_MAX_DEBUG_CONTACT_POINT_COUNT)
@@ -1878,7 +1885,6 @@ const static daxa::f32 LINE_SIZE = 0.5f;
   }
   contact_count = min(contact_count, BB_MAX_DEBUG_CONTACT_POINT_COUNT - index);
 
-  if (sim_config->has_flag(SimFlag::DEBUG_INFO))
   {
     var vertex_buffer = (GUIVertex*)(CP.task_head.vertex_buffer);
     var line_vertex_buffer = (GUIVertexLine*)(CP.task_head.line_vertex_buffer);

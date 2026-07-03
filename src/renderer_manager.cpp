@@ -568,6 +568,10 @@ int RendererManager::render()
         auto const &ssc = rigid_body_manager->get_sim_config_reference();
         if (ssc.active_rigid_body_count == 0u ||
             ssc.sleeping_count < ssc.active_rigid_body_count) { return false; }
+        // a GUI toggle (TAB) changes DEBUG_INFO, and the contact-point debug buffers only
+        // regenerate inside a sim step - force a couple of (identity) steps so the overlay
+        // shows the CURRENT contacts instead of whatever the buffers last held
+        if (gui_hitch_cooldown > 0) { return false; }
         return glfwGetMouseButton(window.glfw_window_ptr, GLFW_MOUSE_BUTTON_LEFT) != GLFW_PRESS;
       }();
       if (status_manager->is_simulating() && !stasis)
