@@ -524,10 +524,14 @@ const auto entry_voxel_sdf_init = "entry_voxel_sdf_init";
 const auto entry_voxel_sdf_axis = "entry_voxel_sdf_axis";
 const auto entry_voxel_sdf_finalize = "entry_voxel_sdf_finalize";
 const auto entry_voxel_surface_build = "entry_voxel_surface_build";
+const auto entry_voxel_inertia_reduce = "entry_voxel_inertia_reduce";
+const auto entry_voxel_prims_build = "entry_voxel_prims_build";
 const auto voxel_sdf_init_pipeline_name = "Voxel SDF Init";
 const auto voxel_sdf_axis_pipeline_name = "Voxel SDF Axis";
 const auto voxel_sdf_finalize_pipeline_name = "Voxel SDF Finalize";
 const auto voxel_surface_build_pipeline_name = "Voxel Surface Build";
+const auto voxel_inertia_reduce_pipeline_name = "Voxel Inertia Reduce";
+const auto voxel_prims_build_pipeline_name = "Voxel Prims Build";
 
 // generate hierarchy for linear bounding volume hierarchy
 const auto entry_generate_hierarchy_linear_bvh = "entry_generate_hierarchy_linear_bvh";
@@ -932,6 +936,36 @@ struct VoxelSurfaceBuildInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(VoxelSdfBuildPushConstants),
       .name = voxel_surface_build_pipeline_name,
+  };
+};
+
+struct VoxelInertiaReduceInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{voxel_sdf_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_voxel_inertia_reduce,
+          .required_subgroup_size = SUBGROUP_SIZE,
+      },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(VoxelSdfBuildPushConstants),
+      .name = voxel_inertia_reduce_pipeline_name,
+  };
+};
+
+struct VoxelPrimsBuildInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{voxel_sdf_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_voxel_prims_build,
+          .required_subgroup_size = SUBGROUP_SIZE,
+      },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(VoxelSdfBuildPushConstants),
+      .name = voxel_prims_build_pipeline_name,
   };
 };
 

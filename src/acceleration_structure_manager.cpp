@@ -243,7 +243,8 @@ void AccelerationStructureManager::build_AS()
   }
 }
 
-bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives)
+bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
+                                                       std::function<void(daxa::BufferId)> const &post_primitive_upload)
 {
   if(!initialized) {
     std::cerr << "ERROR: AccelerationStructureManager is not initialized inside build_accel_structs!" << std::endl;
@@ -288,6 +289,9 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
   // Copy primitives to the buffer
   std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
+  // GPU-first hook: voxel bodies' AABB ranges are built ON the GPU straight into this
+  // scratch (overwriting the oracle-only CPU ranges) before the BLAS build reads it
+  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer); }
 
   // BUILDING BLAS
   auto clear_build_AS = [&]()

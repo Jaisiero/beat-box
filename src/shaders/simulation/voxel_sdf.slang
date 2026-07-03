@@ -166,6 +166,79 @@ static const daxa_f32 VSB_INF = 1.0e30f;
   shapes[VSB.shape_index].surf_count = n;
 }
 
+// MASS-PROPERTY REDUCTION on the GPU (fracture primitive): count, CoM and unit inertia
+// tensor of a shape from its bitmask. Single thread, canonical order (same accumulation
+// order as the CPU authoring code; CoM in f32 vs the CPU's f64 is the only divergence,
+// bounded by the verify oracle). Two sweeps: CoM first, then inertia about it.
+[shader("compute")]
+[numthreads(64, 1, 1)] void entry_voxel_inertia_reduce(daxa_u32vec3 tid : SV_DispatchThreadID)
+{
+  if (tid.x != 0u) { return; }
+  daxa_u32* occ = (daxa_u32*)(VSB.occupancy_addr);
+  VoxelShapeDerived* derived = (VoxelShapeDerived*)(VSB.derived_addr);
+  daxa_f32 vs = VSB.voxel_size;
+
+  daxa_u32 cnt = 0u;
+  daxa_f32vec3 csum = daxa_f32vec3(0.0f);
+  for (daxa_u32 z = 0u; z < VSB.cell_dims.z; ++z)
+    for (daxa_u32 y = 0u; y < VSB.cell_dims.y; ++y)
+      for (daxa_u32 x = 0u; x < VSB.cell_dims.x; ++x)
+        if (vsb_cell_solid(occ, daxa_i32(x), daxa_i32(y), daxa_i32(z)))
+        {
+          csum += daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f);
+          ++cnt;
+        }
+  daxa_f32vec3 com = csum / daxa_f32(max(cnt, 1u)) * vs;
+
+  // parallel-axis voxel inertia per unit voxel mass: point term + own-cube term vs^2/6
+  daxa_f32mat3x3 I = daxa_f32mat3x3(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+  for (daxa_u32 z = 0u; z < VSB.cell_dims.z; ++z)
+    for (daxa_u32 y = 0u; y < VSB.cell_dims.y; ++y)
+      for (daxa_u32 x = 0u; x < VSB.cell_dims.x; ++x)
+        if (vsb_cell_solid(occ, daxa_i32(x), daxa_i32(y), daxa_i32(z)))
+        {
+          daxa_f32vec3 c = daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f) * vs - com;
+          daxa_f32 r2 = dot(c, c);
+          daxa_f32 own = vs * vs / 6.0f;
+          I[0][0] += r2 - c.x * c.x + own; I[0][1] += -c.x * c.y;       I[0][2] += -c.x * c.z;
+          I[1][0] += -c.y * c.x;           I[1][1] += r2 - c.y * c.y + own; I[1][2] += -c.y * c.z;
+          I[2][0] += -c.z * c.x;           I[2][1] += -c.z * c.y;       I[2][2] += r2 - c.z * c.z + own;
+        }
+  derived[VSB.shape_index].count = cnt;
+  derived[VSB.shape_index].com = com;
+  derived[VSB.shape_index].unit_inertia = I;
+}
+
+// BLAS AABB PRIMITIVES on the GPU: one Aabb per solid cell, written straight into the AS
+// manager's primitive scratch at the body's range. Parallel over cells; the destination
+// slot is the cell's canonical RANK (popcount of preceding occupancy bits) - exact,
+// order-independent, and identical to the CPU oracle's push order. No accumulation, so
+// full parallelism costs no determinism.
+[shader("compute")]
+[numthreads(64, 1, 1)] void entry_voxel_prims_build(daxa_u32vec3 tid : SV_DispatchThreadID)
+{
+  daxa_u32 bit_count = VSB.cell_dims.x * VSB.cell_dims.y * VSB.cell_dims.z;
+  daxa_u32 bit = tid.x;
+  if (bit >= bit_count) { return; }
+  daxa_u32* occ = (daxa_u32*)(VSB.occupancy_addr);
+  daxa_u32 word = occ[VSB.occ_offset + bit / 32u];
+  if (((word >> (bit % 32u)) & 1u) == 0u) { return; }
+
+  daxa_u32 rank = countbits(word & ((1u << (bit % 32u)) - 1u));
+  for (daxa_u32 w = 0u; w < bit / 32u; ++w) { rank += countbits(occ[VSB.occ_offset + w]); }
+
+  daxa_u32 x = bit % VSB.cell_dims.x;
+  daxa_u32 y = (bit / VSB.cell_dims.x) % VSB.cell_dims.y;
+  daxa_u32 z = bit / (VSB.cell_dims.x * VSB.cell_dims.y);
+  VoxelShape* shapes = (VoxelShape*)(VSB.shapes_addr);
+  daxa_f32vec3 origin = shapes[VSB.shape_index].grid_origin;
+  daxa_f32 vs = VSB.voxel_size;
+  daxa_f32vec3 center = origin + daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f) * vs;
+  Aabb* prims = (Aabb*)(VSB.prims_addr);
+  prims[VSB.prims_offset + rank].minimum = center - daxa_f32vec3(0.5f * vs);
+  prims[VSB.prims_offset + rank].maximum = center + daxa_f32vec3(0.5f * vs);
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)] void entry_voxel_sdf_finalize(daxa_u32vec3 tid : SV_DispatchThreadID)
 {

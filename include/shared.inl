@@ -1263,13 +1263,28 @@ struct VoxelSdfBuildPushConstants
   daxa_u64 scratch_empty_addr;
   daxa_u64 shapes_addr;  // VoxelShape records (the surface pass patches surf_count)
   daxa_u64 surface_addr; // packed surface-voxel pool
+  daxa_u64 derived_addr; // VoxelShapeDerived records (inertia-reduce output)
+  daxa_u64 prims_addr;   // BLAS AABB primitive pool (prims pass fills one body's range)
   daxa_u32vec3 cell_dims;
   daxa_u32 occ_offset;
   daxa_u32 sdf_offset;
   daxa_u32 surf_offset;
   daxa_u32 shape_index;
+  daxa_u32 prims_offset; // first Aabb of the target body's range in prims_addr
   daxa_u32 axis;        // 0/1/2 for the separable passes
   daxa_f32 voxel_size;
+};
+
+// GPU-reduced mass properties of a voxel shape, per UNIT voxel mass (density stays a
+// scene/author parameter): mass = voxel_mass * count, I = voxel_mass * unit_inertia.
+// com is relative to the grid min corner in world units; grid_origin = -com. The future
+// fracture path computes fragment bodies from this GPU-side; at scene LOAD the CPU
+// authoring values still feed the RigidBody records and this is their verify twin.
+struct VoxelShapeDerived
+{
+  daxa_u32 count;              // solid cells
+  daxa_f32vec3 com;            // center of mass (world units from the grid min corner)
+  daxa_f32mat3x3 unit_inertia; // about the CoM, own-cube term included
 };
 
 // GENERATE HIERARCHY LBVH

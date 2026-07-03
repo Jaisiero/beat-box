@@ -151,7 +151,15 @@ struct RigidBodyManager{
   // against the CPU brute force (kept as the debug oracle per the GPU-first directive).
   void build_voxel_pools_gpu(std::vector<VoxelShape> const &shapes,
                              std::vector<daxa_f32> const &cpu_sdf_reference,
-                             std::vector<daxa_u32> const &cpu_surf_reference);
+                             std::vector<daxa_u32> const &cpu_surf_reference,
+                             std::vector<VoxelShapeDerived> const &cpu_derived_reference);
+  // GPU build of every voxel BODY's BLAS AABB range, written straight into the AS
+  // manager's primitive scratch buffer (called between its host upload and the BLAS
+  // build). bodies = (shape index, first-Aabb offset) per voxel body, in body order.
+  void build_voxel_prims_gpu(std::vector<VoxelShape> const &shapes,
+                             std::vector<std::pair<daxa_u32, daxa_u32>> const &bodies,
+                             daxa::BufferId prims_buffer,
+                             std::vector<Aabb> const &cpu_reference);
 
 private:
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
@@ -215,6 +223,8 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_AXIS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_FIN;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_SURF;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_INERTIA;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_PRIMS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BBBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CBBLBVHGH;
@@ -331,6 +341,7 @@ private:
   daxa::BufferId voxel_surface = {};
   daxa::BufferId voxel_sdf = {};
   daxa::BufferId voxel_sdf_scratch[2] = {}; // squared-distance fields (solid/empty) for the GPU EDT
+  daxa::BufferId voxel_derived = {};        // VoxelShapeDerived per shape (GPU mass-property reduce)
 
   // Simulation configuration. AVBD is the default solver (user decision after the A/B
   // campaign: rests flush at pen~0 vs 13mm Baumgarte sink, true zero residual velocity,

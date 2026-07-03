@@ -549,8 +549,13 @@ public:
           f32 const r2 = glm::dot(center, center);
           inertia += voxel_mass * (glm::mat3(r2) - glm::outerProduct(center, center));
           inertia += glm::mat3(voxel_mass * vs * vs / 6.0f);
-          prims.push_back(Aabb(daxa_f32vec3(center.x - 0.5f * vs, center.y - 0.5f * vs, center.z - 0.5f * vs),
-                               daxa_f32vec3(center.x + 0.5f * vs, center.y + 0.5f * vs, center.z + 0.5f * vs)));
+          // BLAS AABBs are built ON THE GPU (entry_voxel_prims_build via the AS post-upload
+          // hook); the CPU fill is only the BB_SDF_VERIFY oracle
+          if (sdf_verify_oracle)
+          {
+            prims.push_back(Aabb(daxa_f32vec3(center.x - 0.5f * vs, center.y - 0.5f * vs, center.z - 0.5f * vs),
+                                 daxa_f32vec3(center.x + 0.5f * vs, center.y + 0.5f * vs, center.z + 0.5f * vs)));
+          }
           // surface voxel: any of the 6 neighbors empty; normal_code = first empty direction.
           // count always (record field, trivial); the ENTRY only under the oracle env
           i32 const nx[6][3] = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
@@ -615,7 +620,20 @@ public:
         .surf_count = surf_n,
         .sdf_offset = sdf_offset,
     });
+    if (!sdf_verify_oracle)
+    {
+      // placeholder range with the right SIZE: the aabb vector's voxel ranges are
+      // overwritten on the GPU before any BLAS build reads them
+      prims.resize(count, Aabb(daxa_f32vec3(0.0f, 0.0f, 0.0f), daxa_f32vec3(0.0f, 0.0f, 0.0f)));
+    }
     voxel_shape_prims.push_back(std::move(prims));
+    // CPU authoring mass properties, recorded as the GPU inertia-reduce's verify twin
+    // (unit voxel mass; the kernel is the future fracture path's fragment-mass primitive)
+    voxel_derived_cpu.push_back(VoxelShapeDerived{
+        .count = count,
+        .com = daxa_f32vec3((f32)com.x, (f32)com.y, (f32)com.z),
+        .unit_inertia = daxa_mat3_from_glm_mat3(inertia * (1.0f / voxel_mass)),
+    });
 
     return VoxelShapeBuild{
         .shape_id = (u32)voxel_shape_cpu.size(), // 1-based
@@ -624,6 +642,17 @@ public:
         .minimum = daxa_f32vec3(grid_origin.x, grid_origin.y, grid_origin.z),
         .maximum = daxa_f32vec3(grid_origin.x + dims.x * vs, grid_origin.y + dims.y * vs, grid_origin.z + dims.z * vs),
         .primitive_count = (u32)voxel_shape_prims.back().size(),
+    };
+  }
+
+  // AS post-upload hook: fills every voxel body's AABB range in the primitive scratch ON
+  // THE GPU (entry_voxel_prims_build) between the host upload and the BLAS build. Both
+  // build_accel_structs call sites (load + reset) must pass it - the CPU aabb entries for
+  // voxel ranges are zeros unless BB_SDF_VERIFY authored the oracle values.
+  std::function<void(daxa::BufferId)> voxel_prims_hook()
+  {
+    return [this](daxa::BufferId prims_buffer) {
+      rigid_body_manager->build_voxel_prims_gpu(voxel_shape_cpu, voxel_prim_sites, prims_buffer, aabb);
     };
   }
 
@@ -1149,7 +1178,10 @@ public:
       else
       {
         // voxel body: inertia from the voxel sum (set by build_voxel_shape) and one AABB
-        // primitive per solid voxel (the BLAS builder consumes primitive_count in body order)
+        // primitive per solid voxel (the BLAS builder consumes primitive_count in body order).
+        // Record the body's range so the GPU prims pass can fill it (the CPU entries are
+        // zeros unless BB_SDF_VERIFY authored the oracle values).
+        voxel_prim_sites.emplace_back(rigid_body.shape_index - 1u, (u32)aabb.size());
         auto const &prims = voxel_shape_prims.at(rigid_body.shape_index - 1u);
         aabb.insert(aabb.end(), prims.begin(), prims.end());
       }
@@ -1195,15 +1227,15 @@ public:
                   voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
       std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
                   voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
-      // GPU-first: the node SDF and the surface-voxel list are (re)built ON THE GPU from
-      // the occupancy bitmask - the CPU values uploaded above are only the BB_SDF_VERIFY
-      // oracles (the GPU results overwrite them, including each shape's surf_count).
-      // This is the path future runtime shape edits (destruction) re-run.
-      rigid_body_manager->build_voxel_pools_gpu(voxel_shape_cpu, voxel_sdf_cpu, voxel_surf_cpu);
+      // GPU-first: the node SDF, the surface-voxel list and the mass-property reduce are
+      // (re)built ON THE GPU from the occupancy bitmask - the CPU values uploaded above
+      // are only the BB_SDF_VERIFY oracles (the GPU results overwrite them, including each
+      // shape's surf_count). This is the path future runtime shape edits (destruction) re-run.
+      rigid_body_manager->build_voxel_pools_gpu(voxel_shape_cpu, voxel_sdf_cpu, voxel_surf_cpu, voxel_derived_cpu);
     }
 
     // TODO: Handle error
-    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb)) {
+    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook())) {
       std::cerr << "ERROR: Failed to build acceleration structures in scene_manager!" << std::endl;
       return false;
     }
@@ -1242,7 +1274,7 @@ public:
     }
     // zero the incremental upload counters first, or the 2nd reset would append (864->1296 > max) and fail
     accel_struct_mngr->reset_for_reload();
-    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb))
+    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook()))
     {
       std::cerr << "ERROR: reset() failed to re-upload rigid bodies!" << std::endl;
       return false;
@@ -1291,6 +1323,8 @@ public:
     voxel_surf_cpu.clear();
     voxel_sdf_cpu.clear();
     voxel_shape_prims.clear();
+    voxel_prim_sites.clear();
+    voxel_derived_cpu.clear();
     id_generator = 0;
     rigid_body_count = 0;
     rigid_body_active_count = 0;
@@ -1362,6 +1396,8 @@ private:
   std::vector<daxa_u32> voxel_surf_cpu;
   std::vector<daxa_f32> voxel_sdf_cpu; // node SDF, (dims+1)^3 f32s per shape
   std::vector<std::vector<Aabb>> voxel_shape_prims; // BLAS primitives per shape (body frame)
+  std::vector<std::pair<daxa_u32, daxa_u32>> voxel_prim_sites; // per voxel body: (shape idx, first Aabb in `aabb`)
+  std::vector<VoxelShapeDerived> voxel_derived_cpu; // CPU mass properties (GPU reduce verify twin)
 
   // Active rigid body buffer
   daxa::BufferId active_rigid_body_buffer;

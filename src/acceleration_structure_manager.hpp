@@ -2,6 +2,7 @@
 
 #include "defines.hpp"
 #include "task_manager.hpp"
+#include <functional>
 
 BB_NAMESPACE_BEGIN
 
@@ -45,7 +46,11 @@ struct AccelerationStructureManager
 
   // NOTE: queue sync assures double buffering is filled
   void build_AS();
-  bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives);
+  // post_primitive_upload: optional hook run between the host primitive upload and the
+  // BLAS build - the GPU voxel-prims pass writes each voxel body's AABB range into the
+  // scratch buffer here (GPU-first; the CPU-filled ranges are only the verify oracle).
+  bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
+                           std::function<void(daxa::BufferId)> const &post_primitive_upload = {});
   void update_TLAS();
   // Zero the incremental upload counters so the next build_accel_structs() re-fills from offset 0
   // (used by scene reset/reload). Without this the counts accumulate and the 2nd reload exceeds the

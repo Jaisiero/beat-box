@@ -25,6 +25,8 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_VSB_AXIS = task_manager->create_compute(VoxelSdfAxisInfo{}.info);
     pipeline_VSB_FIN = task_manager->create_compute(VoxelSdfFinalizeInfo{}.info);
     pipeline_VSB_SURF = task_manager->create_compute(VoxelSurfaceBuildInfo{}.info);
+    pipeline_VSB_INERTIA = task_manager->create_compute(VoxelInertiaReduceInfo{}.info);
+    pipeline_VSB_PRIMS = task_manager->create_compute(VoxelPrimsBuildInfo{}.info);
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
     pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
     pipeline_CBBLBVHGH = task_manager->create_compute(RigidBodyConvertBoundingBoxesLinearBVHInfo{}.info);
@@ -263,6 +265,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
             .name = std::string("voxel_sdf_scratch") + std::to_string(s),
         });
       }
+      voxel_derived = device.create_buffer({
+          .size = sizeof(VoxelShapeDerived) * BB_MAX_VOXEL_SHAPE_COUNT,
+          .name = "voxel_derived",
+      });
     }
     *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[i]).value() = SimConfig{
         .solver_type = renderer_manager->get_solver(),
@@ -1896,6 +1902,7 @@ void RigidBodyManager::destroy()
   {
     if (!voxel_sdf_scratch[s].is_empty()) { device.destroy_buffer(voxel_sdf_scratch[s]); voxel_sdf_scratch[s] = {}; }
   }
+  if (!voxel_derived.is_empty()) { device.destroy_buffer(voxel_derived); voxel_derived = {}; }
 
   initialized = false;
 }
@@ -2001,7 +2008,8 @@ bool RigidBodyManager::update_sim()
 
 void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shapes,
                                              std::vector<daxa_f32> const &cpu_sdf_reference,
-                                             std::vector<daxa_u32> const &cpu_surf_reference)
+                                             std::vector<daxa_u32> const &cpu_surf_reference,
+                                             std::vector<VoxelShapeDerived> const &cpu_derived_reference)
 {
   if (!initialized || shapes.empty()) { return; }
   auto const occ_addr = device.device_address(voxel_occupancy).value();
@@ -2010,6 +2018,7 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
   auto const sc1_addr = device.device_address(voxel_sdf_scratch[1]).value();
   auto const shapes_addr = device.device_address(voxel_shapes).value();
   auto const surf_addr = device.device_address(voxel_surface).value();
+  auto const derived_addr = device.device_address(voxel_derived).value();
 
   auto rec = device.create_command_recorder({});
   auto const barrier = [&rec]() {
@@ -2030,11 +2039,14 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
         .scratch_empty_addr = sc1_addr,
         .shapes_addr = shapes_addr,
         .surface_addr = surf_addr,
+        .derived_addr = derived_addr,
+        .prims_addr = 0u,
         .cell_dims = s.dims,
         .occ_offset = s.occ_offset,
         .sdf_offset = s.sdf_offset,
         .surf_offset = s.surf_offset,
         .shape_index = si,
+        .prims_offset = 0u,
         .axis = 0u,
         .voxel_size = s.voxel_size,
     };
@@ -2056,8 +2068,12 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
     rec.push_constant(pc);
     rec.dispatch({.x = (nodes + 63u) / 64u, .y = 1, .z = 1});
     barrier();
-    // surface list is independent of the EDT chain (reads only the bitmask); single group
+    // surface list + mass-property reduce are independent of the EDT chain (they read
+    // only the bitmask); single group each
     rec.set_pipeline(*pipeline_VSB_SURF);
+    rec.push_constant(pc);
+    rec.dispatch({.x = 1, .y = 1, .z = 1});
+    rec.set_pipeline(*pipeline_VSB_INERTIA);
     rec.push_constant(pc);
     rec.dispatch({.x = 1, .y = 1, .z = 1});
     barrier();
@@ -2134,6 +2150,137 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
     std::cout << "[SURF-VERIFY] shapes=" << shapes.size() << " entries=" << checked
               << " entry_mismatches=" << entry_mismatches << " count_mismatches=" << count_mismatches
               << ((entry_mismatches + count_mismatches == 0u) ? "  => MATCH" : "  => MISMATCH!") << std::endl;
+    device.destroy_buffer(staging);
+  }
+  if (verify && !cpu_derived_reference.empty())
+  {
+    // mass properties: counts must be exact; com/inertia within FP-order tolerance (the
+    // GPU accumulates the CoM in f32 where the CPU authoring uses f64)
+    auto const size = shapes.size() * sizeof(VoxelShapeDerived);
+    daxa::BufferId staging = device.create_buffer({
+        .size = size,
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+        .name = "voxel_derived_verify_staging",
+    });
+    auto rec2 = device.create_command_recorder({});
+    rec2.copy_buffer_to_buffer({.src_buffer = voxel_derived, .dst_buffer = staging, .size = size});
+    auto cmds2 = rec2.complete_current_commands();
+    device.submit_commands({.command_lists = std::array{cmds2}});
+    device.wait_idle();
+    VoxelShapeDerived const *gpu = device.buffer_host_address_as<VoxelShapeDerived>(staging).value();
+    daxa_u32 count_mismatches = 0u;
+    double max_rel = 0.0;
+    for (size_t si = 0; si < shapes.size(); ++si)
+    {
+      auto const &c = cpu_derived_reference[si];
+      auto const &g = gpu[si];
+      if (g.count != c.count) { ++count_mismatches; }
+      auto const rel = [&](double gv, double cv) {
+        double const denom = std::max(std::abs(cv), 1e-6);
+        max_rel = std::max(max_rel, std::abs(gv - cv) / denom);
+      };
+      auto const rel3 = [&](daxa_f32vec3 const &gv, daxa_f32vec3 const &cv) {
+        rel(gv.x, cv.x); rel(gv.y, cv.y); rel(gv.z, cv.z);
+      };
+      rel3(g.com, c.com);
+      rel3(g.unit_inertia.x, c.unit_inertia.x);
+      rel3(g.unit_inertia.y, c.unit_inertia.y);
+      rel3(g.unit_inertia.z, c.unit_inertia.z);
+    }
+    std::cout << "[INERTIA-VERIFY] shapes=" << shapes.size() << " count_mismatches=" << count_mismatches
+              << " max_rel=" << max_rel
+              << ((count_mismatches == 0u && max_rel < 1e-3) ? "  => MATCH" : "  => MISMATCH!") << std::endl;
+    device.destroy_buffer(staging);
+  }
+}
+
+void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shapes,
+                                             std::vector<std::pair<daxa_u32, daxa_u32>> const &bodies,
+                                             daxa::BufferId prims_buffer,
+                                             std::vector<Aabb> const &cpu_reference)
+{
+  if (!initialized || bodies.empty()) { return; }
+  auto const occ_addr = device.device_address(voxel_occupancy).value();
+  auto const shapes_addr = device.device_address(voxel_shapes).value();
+  auto const prims_addr = device.device_address(prims_buffer).value();
+
+  auto rec = device.create_command_recorder({});
+  for (auto const &[shape_index, prim_offset] : bodies)
+  {
+    auto const &s = shapes[shape_index];
+    daxa_u32 const cells = s.dims.x * s.dims.y * s.dims.z;
+    VoxelSdfBuildPushConstants pc = {
+        .occupancy_addr = occ_addr,
+        .sdf_addr = 0u,
+        .scratch_solid_addr = 0u,
+        .scratch_empty_addr = 0u,
+        .shapes_addr = shapes_addr,
+        .surface_addr = 0u,
+        .derived_addr = 0u,
+        .prims_addr = prims_addr,
+        .cell_dims = s.dims,
+        .occ_offset = s.occ_offset,
+        .sdf_offset = 0u,
+        .surf_offset = 0u,
+        .shape_index = shape_index,
+        .prims_offset = prim_offset,
+        .axis = 0u,
+        .voxel_size = s.voxel_size,
+    };
+    rec.set_pipeline(*pipeline_VSB_PRIMS);
+    rec.push_constant(pc);
+    rec.dispatch({.x = (cells + 63u) / 64u, .y = 1, .z = 1});
+  }
+  // make the writes visible to the AS build that follows this call
+  rec.pipeline_barrier({
+      .src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+      .dst_access = daxa::AccessConsts::ACCELERATION_STRUCTURE_BUILD_READ,
+  });
+  auto cmds = rec.complete_current_commands();
+  device.submit_commands({.command_lists = std::array{cmds}});
+  device.wait_idle();
+
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+  static bool const verify = std::getenv("BB_SDF_VERIFY") != nullptr;
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+  if (verify && !cpu_reference.empty())
+  {
+    auto const size = cpu_reference.size() * sizeof(Aabb);
+    daxa::BufferId staging = device.create_buffer({
+        .size = size,
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+        .name = "voxel_prims_verify_staging",
+    });
+    auto rec2 = device.create_command_recorder({});
+    rec2.copy_buffer_to_buffer({.src_buffer = prims_buffer, .dst_buffer = staging, .size = size});
+    auto cmds2 = rec2.complete_current_commands();
+    device.submit_commands({.command_lists = std::array{cmds2}});
+    device.wait_idle();
+    Aabb const *gpu = device.buffer_host_address_as<Aabb>(staging).value();
+    daxa_u32 mismatches = 0u, checked = 0u;
+    double max_diff = 0.0;
+    // compare every entry: voxel ranges are GPU-written, cube bodies' single boxes are
+    // CPU-written in both and match trivially
+    for (size_t i = 0; i < cpu_reference.size(); ++i)
+    {
+      double const d = std::max({std::abs((double)gpu[i].minimum.x - (double)cpu_reference[i].minimum.x),
+                                 std::abs((double)gpu[i].minimum.y - (double)cpu_reference[i].minimum.y),
+                                 std::abs((double)gpu[i].minimum.z - (double)cpu_reference[i].minimum.z),
+                                 std::abs((double)gpu[i].maximum.x - (double)cpu_reference[i].maximum.x),
+                                 std::abs((double)gpu[i].maximum.y - (double)cpu_reference[i].maximum.y),
+                                 std::abs((double)gpu[i].maximum.z - (double)cpu_reference[i].maximum.z)});
+      if (d > 1e-5) { ++mismatches; }
+      max_diff = std::max(max_diff, d);
+      ++checked;
+    }
+    std::cout << "[PRIMS-VERIFY] entries=" << checked << " mismatches=" << mismatches
+              << " max|gpu-cpu|=" << max_diff
+              << ((mismatches == 0u) ? "  => MATCH" : "  => MISMATCH!") << std::endl;
     device.destroy_buffer(staging);
   }
 }
