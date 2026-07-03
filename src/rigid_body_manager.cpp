@@ -183,7 +183,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .name = "lbvh_nodes" + std::to_string(i),
     });
     broad_phase_collisions[i] = create_owned({
-        .size = sizeof(BroadPhaseCollision) * MAX_COLLISION_COUNT,
+        .size = sizeof(BroadPhaseCollision) * MAX_BROAD_PAIR_COUNT,
         .name = "broad_phase_collisions" + std::to_string(i),
     });
     collision_entries[i] = create_owned({

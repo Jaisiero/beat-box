@@ -573,7 +573,7 @@ groupshared daxa_u32 sws_base[16];
   DispatchBuffer* dispatch_buffer =
       (DispatchBuffer*)(NPD.task_head.dispatch_buffer);
 
-  let broad_phase_collision_count = min(sim_config->broad_phase_collision_count, BB_MAX_COLLISION_COUNT);
+  let broad_phase_collision_count = min(sim_config->broad_phase_collision_count, BB_MAX_BROAD_PAIR_COUNT);
   let np_count = (broad_phase_collision_count + RIGID_BODY_SIM_COMPUTE_X - 1) / RIGID_BODY_SIM_COMPUTE_X;
   dispatch_buffer->narrow_phase_dispatch = daxa_u32vec3(np_count, 1, 1);
 }
@@ -585,7 +585,7 @@ groupshared daxa_u32 sws_base[16];
       (SimConfig*)(NP.task_head.sim_config);
 
   daxa_u32 index = compute_i.x;
-  daxa_u32 collision_count = min(sim_config->broad_phase_collision_count, BB_MAX_COLLISION_COUNT);
+  daxa_u32 collision_count = min(sim_config->broad_phase_collision_count, BB_MAX_BROAD_PAIR_COUNT);
   if (index >= collision_count)
   {
     return;

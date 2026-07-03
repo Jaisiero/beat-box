@@ -253,7 +253,7 @@ struct LBVH {
             if(overlap_left && child_left.is_leaf()) {
                 if(child_left.check_index(primitive_index) ) {
                     InterlockedAdd(sim_config->broad_phase_collision_count, 1U, bp_collision_index);
-                    if(bp_collision_index < BB_MAX_COLLISION_COUNT) {
+                    if(bp_collision_index < BB_MAX_BROAD_PAIR_COUNT) {
                         bp_collisions[bp_collision_index] = BroadPhaseCollision(primitive_index, child_left.get_index());
                     }
                 }
@@ -263,7 +263,7 @@ struct LBVH {
             if(overlap_right && child_right.is_leaf()) {
                 if(child_right.check_index(primitive_index) ) {
                     InterlockedAdd(sim_config->broad_phase_collision_count, 1U, bp_collision_index);
-                    if(bp_collision_index < BB_MAX_COLLISION_COUNT) {
+                    if(bp_collision_index < BB_MAX_BROAD_PAIR_COUNT) {
                         bp_collisions[bp_collision_index] = BroadPhaseCollision(primitive_index, child_right.get_index());
                     }
                 }
