@@ -54,6 +54,10 @@ struct RendererManager
   TaskGraph RT_TG;
   daxa::TaskImage task_swapchain_image{{.is_swapchain_image = true, .name = "swapchain_image"}};
   daxa::TaskImage task_accumulation_buffer{{.is_swapchain_image = false, .name = "accumulation_buffer"}};
+  // render scale (BB_RENDER_SCALE env, 0.25..1.0): trace into a SCALED offscreen target,
+  // then blit-upscale (linear) to the swapchain. The GUI still draws at full resolution
+  // AFTER the upscale. At 1.0 the target is a 1x1 dummy and the old direct wiring is used.
+  daxa::TaskImage task_rt_target{{.is_swapchain_image = false, .name = "rt_target"}};
   daxa::TaskBuffer task_camera_buffer{{.buffer = {}, .name = "camera_buffer"}};
   daxa::TaskBuffer task_ray_tracing_config{{.buffer = {}, .name = "ray_tracing_config"}};
   daxa::TaskBuffer task_ray_tracing_config_host{{.buffer = {}, .name = "ray_tracing_config_host"}};
@@ -100,6 +104,8 @@ private:
   daxa::BufferId ray_tracing_config_host_buffer[DOUBLE_BUFFERING];
 
   daxa::ImageId accumulation_buffer;
+  daxa::ImageId rt_target_image = {};
+  f32 render_scale = 1.0f; // BB_RENDER_SCALE, parsed once in create()
 };
 
 BB_NAMESPACE_END

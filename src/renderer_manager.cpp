@@ -38,11 +38,34 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   
   RT_pipeline = pipeline;
 
+  // render scale (BB_RENDER_SCALE=0.25..1.0): trace at a reduced resolution and upscale.
+  // Path tracing cost is ~linear in pixels: 0.75 = ~44% fewer rays, 0.5 = 75% fewer.
+  // The shader derives UVs from DispatchRaysDimensions(), so it scales transparently.
+  if (const char *e = std::getenv("BB_RENDER_SCALE"))
+  {
+    render_scale = std::clamp((f32)std::atof(e), 0.25f, 1.0f);
+    std::cout << "[RENDER] BB_RENDER_SCALE=" << render_scale << std::endl;
+  }
+  auto scaled_extent = [this]() -> daxa::Extent3D {
+    auto const ext = gpu->swapchain_get_extent();
+    return daxa::Extent3D(std::max(1u, (daxa_u32)(ext.x * render_scale)),
+                          std::max(1u, (daxa_u32)(ext.y * render_scale)), 1);
+  };
+
+  // the accumulation buffer matches the TRACE resolution (accumulation happens pre-upscale)
   accumulation_buffer = gpu->device.create_image({
       .format = gpu->swapchain.get_format(),
-      .size = daxa::Extent3D(gpu->swapchain_get_extent().x, gpu->swapchain_get_extent().y, 1),
+      .size = scaled_extent(),
       .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
       .name = "accumulation_buffer",
+  });
+  // offscreen trace target (1x1 dummy at scale 1.0, where the old direct-to-swapchain
+  // wiring stays in effect and the blit task is not recorded)
+  rt_target_image = gpu->device.create_image({
+      .format = gpu->swapchain.get_format(),
+      .size = render_scale < 1.0f ? scaled_extent() : daxa::Extent3D(1, 1, 1),
+      .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_SRC | daxa::ImageUsageFlagBits::TRANSFER_DST,
+      .name = "rt_target",
   });
   
   daxa::InlineTaskInfo task_update_RT_config({
@@ -93,11 +116,13 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
 
   using TTask = TaskTemplate<RayTracingTaskHead::Task, decltype(user_callback)>;
 
-  // Instantiate the task using the template class
+  // Instantiate the task using the template class. With render scale active the "swapchain"
+  // attachment is the scaled offscreen target; the upscale blit brings it to the swapchain.
+  daxa::TaskImage rt_output = render_scale < 1.0f ? task_rt_target : task_swapchain_image;
   TTask task_RT(std::array{
                   daxa::attachment_view(RayTracingTaskHead::AT.camera, task_camera_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.ray_tracing_config, task_ray_tracing_config),
-                  daxa::attachment_view(RayTracingTaskHead::AT.swapchain, task_swapchain_image),
+                  daxa::attachment_view(RayTracingTaskHead::AT.swapchain, rt_output),
                   daxa::attachment_view(RayTracingTaskHead::AT.accumulation_buffer, task_accumulation_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.tlas, accel_struct_mngr->task_tlas),
                   daxa::attachment_view(RayTracingTaskHead::AT.rigid_body_map, rigid_body_manager->task_rigid_body_entries),
@@ -152,14 +177,42 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
     rigid_body_manager->task_islands, 
     rigid_body_manager->task_contact_islands};
 
-  std::array<daxa::TaskImage, 3> images = {task_swapchain_image, task_accumulation_buffer, task_stbn_texture};
+  std::array<daxa::TaskImage, 4> images = {task_swapchain_image, task_accumulation_buffer, task_stbn_texture, task_rt_target};
 
   std::array<daxa::TaskTlas, 1> tlases = {accel_struct_mngr->task_tlas};
 
   RT_TG = task_manager->create_task_graph(RT_TG_name, buffers, images, {}, tlases, true);
 
+  // upscale blit: scaled trace target -> full-resolution swapchain (linear filter). Only
+  // recorded when render scale is active; the GUI tasks draw AFTER at full resolution.
+  daxa::InlineTaskInfo task_upscale({
+      .attachments = {
+          daxa::inl_attachment(daxa::TaskImageAccess::TRANSFER_READ, task_rt_target),
+          daxa::inl_attachment(daxa::TaskImageAccess::TRANSFER_WRITE, task_swapchain_image),
+      },
+      .task = [this](daxa::TaskInterface const &ti)
+      {
+        auto const src = ti.get(task_rt_target).id;
+        auto const dst = ti.get(task_swapchain_image).id;
+        auto const s = ti.device.image_info(src).value().size;
+        auto const d = ti.device.image_info(dst).value().size;
+        ti.recorder.blit_image_to_image({
+            .src_image = src,
+            .dst_image = dst,
+            .src_offsets = {{{0, 0, 0}, {(daxa_i32)s.x, (daxa_i32)s.y, 1}}},
+            .dst_offsets = {{{0, 0, 0}, {(daxa_i32)d.x, (daxa_i32)d.y, 1}}},
+            .filter = daxa::Filter::LINEAR,
+        });
+      },
+      .name = "upscale rt target to swapchain",
+  });
+
   RT_TG.add_task(task_update_RT_config);
   RT_TG.add_task(task_RT);
+  if (render_scale < 1.0f)
+  {
+    RT_TG.add_task(task_upscale);
+  }
   RT_TG.add_task(task_cpy_to_accum_buffer);
   RT_TG.add_task(gui_manager->gui_axes_task_info);
   RT_TG.add_task(gui_manager->gui_line_task_info);
@@ -192,6 +245,7 @@ void RendererManager::destroy()
   }
 
   gpu->device.destroy_image(accumulation_buffer);
+  gpu->device.destroy_image(rt_target_image);
 
   initialized = false;
 }
@@ -219,6 +273,7 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
   task_ray_tracing_config.set_buffer(ray_tracing_config_buffer[get_frame_index()]);
   task_ray_tracing_config_host.set_buffer(ray_tracing_config_host_buffer[get_frame_index()]);
   task_accumulation_buffer.set_image(accumulation_buffer);
+  task_rt_target.set_image(rt_target_image);
   task_stbn_texture.set_image(image_manager->get_spatiotemporal_blue_noise_image());
 
   return true;
@@ -639,12 +694,21 @@ int RendererManager::render()
       gpu->swapchain_resize();
       window.swapchain_out_of_date = false;
       gpu->device.destroy_image(accumulation_buffer);
+      gpu->device.destroy_image(rt_target_image);
       // TODO: refactor this
+      auto const rs_ext = daxa::Extent3D(std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().x * render_scale)),
+                                         std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().y * render_scale)), 1);
       accumulation_buffer = gpu->device.create_image({
           .format = gpu->swapchain.get_format(),
-          .size = daxa::Extent3D(gpu->swapchain_get_extent().x, gpu->swapchain_get_extent().y, 1),
+          .size = rs_ext, // matches the TRACE resolution (accumulation is pre-upscale)
           .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
           .name = "accumulation_buffer",
+      });
+      rt_target_image = gpu->device.create_image({
+          .format = gpu->swapchain.get_format(),
+          .size = render_scale < 1.0f ? rs_ext : daxa::Extent3D(1, 1, 1),
+          .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_SRC | daxa::ImageUsageFlagBits::TRANSFER_DST,
+          .name = "rt_target",
       });
       status_manager->reset_accumulation_count();
     }
