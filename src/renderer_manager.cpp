@@ -52,9 +52,13 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
                           std::max(1u, (daxa_u32)(ext.y * render_scale)), 1);
   };
 
-  // the accumulation buffer matches the TRACE resolution (accumulation happens pre-upscale)
+  // the accumulation buffer matches the TRACE resolution (accumulation happens pre-upscale).
+  // FORMAT: RGBA16F, NOT the swapchain's 8-bit UNORM - the buffer stores LINEAR HDR radiance
+  // (tonemap happens after averaging, PT batch 2), and UNORM storage CLAMPED every value >1.0
+  // and quantized darks to 1/255: accumulated images came out dimmer/flatter than the live
+  // frame with banding (user-reported "el buffer de acumulación no funciona bien").
   accumulation_buffer = gpu->device.create_image({
-      .format = gpu->swapchain.get_format(),
+      .format = daxa::Format::R16G16B16A16_SFLOAT,
       .size = scaled_extent(),
       .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
       .name = "accumulation_buffer",
@@ -208,12 +212,15 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   });
 
   RT_TG.add_task(task_update_RT_config);
+  // the frame-0 CLEAR must run BEFORE the trace: it used to run after, wiping the first
+  // accumulated sample so frame 1 averaged against zeros (a half-brightness start that
+  // only washed out ~1/N)
+  RT_TG.add_task(task_cpy_to_accum_buffer);
   RT_TG.add_task(task_RT);
   if (render_scale < 1.0f)
   {
     RT_TG.add_task(task_upscale);
   }
-  RT_TG.add_task(task_cpy_to_accum_buffer);
   RT_TG.add_task(gui_manager->gui_axes_task_info);
   RT_TG.add_task(gui_manager->gui_line_task_info);
   RT_TG.add_task(gui_manager->gui_task_info);
@@ -699,7 +706,7 @@ int RendererManager::render()
       auto const rs_ext = daxa::Extent3D(std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().x * render_scale)),
                                          std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().y * render_scale)), 1);
       accumulation_buffer = gpu->device.create_image({
-          .format = gpu->swapchain.get_format(),
+          .format = daxa::Format::R16G16B16A16_SFLOAT, // linear HDR storage (see create())
           .size = rs_ext, // matches the TRACE resolution (accumulation is pre-upscale)
           .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
           .name = "accumulation_buffer",
