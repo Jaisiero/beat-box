@@ -411,6 +411,43 @@ int RendererManager::render()
       rigid_body_manager->update_sim();
     }
 
+    // FRAME-PACING ANCHOR: poll events + acquire the swapchain image BEFORE the sim steps.
+    // The acquire is the call that blocks at vsync cadence (FIFO); with it up front every
+    // loop iteration is evenly ~16.7 ms and the fixed-timestep accumulator receives time
+    // SMOOTHLY (1 step per presented frame). Measured at the old position - before the
+    // blocking point, with the CPU running ahead of the GPU queue - wall time arrived in
+    // ~50 ms bursts: the sim stepped 2-3 times every third frame and physics motion
+    // visibly stuttered at ~20 Hz while the display presented a smooth 60 (user: "la
+    // simulación se ralentiza en algunos momentos"; pace=[rf71 st71] with 31 print
+    // frames was the tell). Latent flaw exposed by the render getting 2x faster.
+    if (!window.update())
+      continue;
+    if (window.swapchain_out_of_date)
+    {
+      gpu->swapchain_resize();
+      window.swapchain_out_of_date = false;
+      gpu->device.destroy_image(accumulation_buffer);
+      gpu->device.destroy_image(rt_target_image);
+      auto const rs_ext = daxa::Extent3D(std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().x * render_scale)),
+                                         std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().y * render_scale)), 1);
+      accumulation_buffer = gpu->device.create_image({
+          .format = daxa::Format::R16G16B16A16_SFLOAT, // linear HDR storage (see create())
+          .size = rs_ext, // matches the TRACE resolution (accumulation is pre-upscale)
+          .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
+          .name = "accumulation_buffer",
+      });
+      rt_target_image = gpu->device.create_image({
+          .format = gpu->swapchain.get_format(),
+          .size = render_scale < 1.0f ? rs_ext : daxa::Extent3D(1, 1, 1),
+          .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_SRC | daxa::ImageUsageFlagBits::TRANSFER_DST,
+          .name = "rt_target",
+      });
+      status_manager->reset_accumulation_count();
+    }
+    auto swapchain_image = gpu->swapchain_acquire_next_image();
+    if (swapchain_image.is_empty())
+      continue;
+
     // Simulate rigid bodies: fixed 60 Hz with REAL catch-up. The sim double buffers rotate
     // per STEP (begin_sim_step inside simulate()), so several steps inside one render frame
     // are legal; only the last step of the burst gets published (TLAS build below). Below
@@ -568,8 +605,7 @@ int RendererManager::render()
     {
       status_manager->reset_accumulation_count();
     }
-    if (!window.update())
-      continue;
+    // (window.update() + swapchain acquire moved to the frame-pacing anchor above the sim)
 
     // Update the acceleration structures (only when the sim actually stepped — skipped frames
     // render the unchanged state and avoid the full-pipeline synchronize + readback)
@@ -636,6 +672,7 @@ int RendererManager::render()
           daxa_u64 _rf = render_frames_total - _lrf; _lrf = render_frames_total;
           double _ms = std::chrono::duration<double, std::milli>(_t1 - _t0).count() / (double)(_rf ? _rf : 1); _t0 = _t1;
           double _sim_ms = _sim_ms_n ? (_sim_ms_accum / (double)_sim_ms_n) : 0.0;   // [PERF]
+          daxa_u64 _steps_n = _sim_ms_n;                                             // [PERF] steps since last print
           _sim_ms_accum = 0.0; _sim_ms_n = 0;                                        // [PERF]
           // deep-MISS walk diagnostic decode (see BodyLinkManifold::walk_diag)
           auto dm_walk_str = [](daxa_u32 w) {
@@ -683,7 +720,8 @@ int RendererManager::render()
                     << " idsum=" << (daxa_i64)sc.dbg_id_sum - (daxa_i64)((daxa_u64)sc.rigid_body_count * (sc.rigid_body_count - 1) / 2)
                     << " EX[s=" << sc.dbg_ex_stage << " b=" << sc.dbg_ex_body << " f=" << sc.dbg_ex_frame
                     << " v=" << sc.dbg_ex_vel << " y=" << sc.dbg_ex_y << " vy=" << sc.dbg_ex_vy << "]"
-                    << " | frame=" << _ms << " ms (" << (1000.0 / _ms) << " fps)"
+                    << " | pace=[rf" << _rf << " st" << _steps_n << " acc" << (daxa_u64)(sim_accum_s * 1000.0) << "ms]"
+                    << " frame=" << _ms << " ms (" << (1000.0 / _ms) << " fps)"
                     << "  sim=" << _sim_ms << " ms" << std::endl; } }
       // TODO: change for wait compute queue
       gpu->synchronize();
@@ -695,56 +733,13 @@ int RendererManager::render()
       accel_struct_mngr->update_TLAS();
     }
 
-    // Rebuild swapchain
-    if (window.swapchain_out_of_date)
-    {
-      gpu->swapchain_resize();
-      window.swapchain_out_of_date = false;
-      gpu->device.destroy_image(accumulation_buffer);
-      gpu->device.destroy_image(rt_target_image);
-      // TODO: refactor this
-      auto const rs_ext = daxa::Extent3D(std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().x * render_scale)),
-                                         std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().y * render_scale)), 1);
-      accumulation_buffer = gpu->device.create_image({
-          .format = daxa::Format::R16G16B16A16_SFLOAT, // linear HDR storage (see create())
-          .size = rs_ext, // matches the TRACE resolution (accumulation is pre-upscale)
-          .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
-          .name = "accumulation_buffer",
-      });
-      rt_target_image = gpu->device.create_image({
-          .format = gpu->swapchain.get_format(),
-          .size = render_scale < 1.0f ? rs_ext : daxa::Extent3D(1, 1, 1),
-          .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_SRC | daxa::ImageUsageFlagBits::TRANSFER_DST,
-          .name = "rt_target",
-      });
-      status_manager->reset_accumulation_count();
-    }
-
-    auto handle_reload_result = [&](daxa::PipelineReloadResult reload_error, std::shared_ptr<RayTracingPipeline> RT_pipeline, RendererManager *TG) -> void
-    {
-      if (auto error = daxa::get_if<daxa::PipelineReloadError>(&reload_error))
-      {
-        std::cout << "Failed to reload " << error->message << std::endl;
-      }
-      else if (daxa::get_if<daxa::PipelineReloadSuccess>(&reload_error))
-      {
-        TG->destroy();
-        TG->create("Ray Tracing Task Graph", RT_pipeline, RT_pipeline->rebuild_SBT());
-        std::cout << "Successfully reloaded!" << std::endl;
-      }
-    };
-
-    auto swapchain_image = gpu->swapchain_acquire_next_image();
-    if (!swapchain_image.is_empty())
-    {
-      // TODO: re-enable hot-reload once migration is stable
-      // handle_reload_result(task_manager->reload(), RT_pipeline, this);
-      camera_manager->update(gpu->swapchain_get_extent());
-      update_resources(swapchain_image, *camera_manager);
-      execute();
-      gpu->garbage_collector();
-      status_manager->next_frame();
-    }
+    // (swapchain resize + acquire moved to the frame-pacing anchor above the sim; the image
+    // was acquired there and is rendered here)
+    camera_manager->update(gpu->swapchain_get_extent());
+    update_resources(swapchain_image, *camera_manager);
+    execute();
+    gpu->garbage_collector();
+    status_manager->next_frame();
   }
   gpu->synchronize();
   gpu->garbage_collector();
