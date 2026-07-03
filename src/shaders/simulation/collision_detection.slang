@@ -1720,8 +1720,13 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   // has BOTH sides deeper than the wedge threshold, SUPPRESS the deeper side so the shallower one
   // (least displacement = the entry side before the midplane) extracts the piece. Legitimate
   // hole-threading keeps both walls: resting clearance contacts stay far under the threshold.
-  // Cost: detection runs twice for voxel pairs — a cold path (tens of pairs, scene_5-class).
+  // Detection runs ONCE per pass: the probe's six full manifolds are CACHED (detection is
+  // deterministic, so the cache is bit-identical to a re-run) and the emit loop consumes
+  // them - the previous probe-then-recompute structure paid the whole voxel narrow phase
+  // twice per pair. ~1.4 KB of local memory per voxel-pair thread buys a 2x cut on the
+  // hottest per-pair cost (SDF sampling + 15-axis SAT sweeps).
   bool axis_have[6];
+  Manifold vox_cache[6];
   for (daxa_u32 pi = 0u; pi < 6u; ++pi) { axis_have[pi] = true; }
   if (voxel_pair)
   {
@@ -1733,14 +1738,11 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
     // When embedded, SUPPRESS every manifold whose normal opposes the pair's separation
     // direction (emitted-normal convention: separation === normalize(rB - rA), both flip cases)
     // so the surviving contacts push the bodies APART instead of cancelling.
-    daxa_f32vec3 axis_n[6];
     daxa_u32 overlap = 0u;
     for (daxa_u32 pi = 0u; pi < 6u; ++pi)
     {
-      bool ph = voxel_axis_collision_detection(sim_config, r, r2, pi, manifold);
-      axis_have[pi] = ph;
-      axis_n[pi] = manifold.normal;
-      overlap = max(overlap, daxa_u32(max(manifold.error, 0)));
+      axis_have[pi] = voxel_axis_collision_detection(sim_config, r, r2, pi, vox_cache[pi]);
+      overlap = max(overlap, daxa_u32(max(vox_cache[pi].error, 0)));
     }
     if (overlap >= 2u) // edge/sliver wedges (a frame edge sunk into an arm) overlap only a few
                        // voxel centers despite being visually deep — 2 centers ~ 0.25 wu^3 is
@@ -1752,7 +1754,7 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
         daxa_f32vec3 sep = normalize(d12);
         for (daxa_u32 pi = 0u; pi < 6u; ++pi)
         {
-          if (axis_have[pi] && dot(axis_n[pi], sep) < -0.2f)
+          if (axis_have[pi] && dot(vox_cache[pi].normal, sep) < -0.2f)
           {
             axis_have[pi] = false;
             daxa_u32 _w; InterlockedAdd(sim_config->dbg_vox_wedge, 1u, _w);
@@ -1768,7 +1770,8 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   if (voxel_pair)
   {
     if (!axis_have[emit_i]) { continue; }
-    have = voxel_axis_collision_detection(sim_config, r, r2, emit_i, manifold);
+    manifold = vox_cache[emit_i];
+    have = true;
   }
   else
   {

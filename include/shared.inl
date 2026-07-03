@@ -608,6 +608,8 @@ struct SimConfig
   daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
   daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)
   daxa_u32 avbd_max_support_depth; // AVBD: max support-depth layer over dynamic bodies this step (post-BFS, clamped to SHOCK_LAYERS-1); the post-stab cascade skips layers above this
+  daxa_u32 avbd_iter_tick;         // AVBD convergence early-out: main-sweep iteration counter, ticked by the dual pass (thread 0) between primal sweeps
+  daxa_u32 avbd_step_res[2];       // AVBD: max primal step magnitude of main-sweep iteration (tick&1), stored as ordered float bits (asuint of a non-negative f32 compares like the float). When the PREVIOUS iteration's max step is below BB_AVBD_CONV_EPS the system converged: remaining main sweeps early-return (rest converges in a few of the 10 iterations; impacts keep the full budget - quality by construction)
   daxa_u32 avbd_violations;        // AVBD: body-coloring invariant violations (adjacent same color; must be 0)
   daxa_u32 avbd_stick_count;       // AVBD: # contacts whose sticking anchors were reused this step (diagnostics)
   daxa_u32 gc_max_degree;          // graph-coloring DIAG: max colored-degree = max popcount(body_color_mask) over bodies
@@ -973,6 +975,16 @@ static const daxa_f32 BB_AVBD_STICK_SLOP = 0.001f;  // anchor drift deadband: be
                                                     // measured optimum: 0 -> sleeps 870, 1mm -> 920,
                                                     // 2mm -> 820 of 1024 at rest)
 static const daxa_u32 BB_AVBD_ITERATIONS = 10;      // main sweeps (+1 post-stabilization sweep)
+static const daxa_f32 BB_AVBD_CONV_EPS = 5.0e-5f;   // convergence tolerance on an iteration's max
+                                                    // primal step (m + rad): 0.05 mm - stops main
+                                                    // sweeps only when nothing is moving anymore
+static const daxa_f32 BB_AVBD_PS_SLOP = 0.005f;     // post-stab NORMAL-row slop (same family as
+                                                    // BB_AVBD_STICK_SLOP below, same measured
+                                                    // rationale): sub-5mm penetration is not
+                                                    // positionally corrected - correcting it every
+                                                    // frame is the push-out/re-settle limit cycle
+                                                    // visible as rest "nervous jitter". Depth beyond
+                                                    // the slop still corrects fully.
 static const daxa_u32 BB_AVBD_COLOR_ROUNDS = 16;    // Jones-Plassmann body-coloring rounds
 static const daxa_u32 BB_AVBD_MAX_BODY_COLORS = 32; // primal dispatches per sweep (empty = no-op)
 static const daxa_u32 BB_AVBD_SHOCK_LAYERS = 12;    // shock propagation: depth buckets for the

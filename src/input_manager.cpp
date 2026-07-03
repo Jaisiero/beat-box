@@ -178,6 +178,11 @@ void InputManager::on_key(i32 key, i32 action)
   case GLFW_KEY_F8:
     if (action == GLFW_PRESS) { status_mngr->request_scene(8); status_mngr->reset_accumulation_count(); }
     break;
+  // F9: dump the LIVE GPU poses to scene_dump.txt (BB_SCENE_FILE format, incl. voxel bodies
+  // with rotation) - capture the exact configuration on screen for offline reproduction
+  case GLFW_KEY_F9:
+    if (action == GLFW_PRESS) { status_mngr->request_dump(); }
+    break;
   case GLFW_KEY_7:
     if (action == GLFW_PRESS)
     {
