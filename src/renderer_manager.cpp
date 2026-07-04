@@ -276,7 +276,7 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
   }
 
   task_swapchain_image.set_image(swapchain_image);
-  task_camera_buffer.set_buffer(cam_mngr.camera_buffer);
+  task_camera_buffer.set_buffer(cam_mngr.camera_buffer[get_frame_index()]);
   task_ray_tracing_config.set_buffer(ray_tracing_config_buffer[get_frame_index()]);
   task_ray_tracing_config_host.set_buffer(ray_tracing_config_host_buffer[get_frame_index()]);
   task_accumulation_buffer.set_image(accumulation_buffer);
@@ -739,7 +739,7 @@ int RendererManager::render()
 
     // (swapchain resize + acquire moved to the frame-pacing anchor above the sim; the image
     // was acquired there and is rendered here)
-    camera_manager->update(gpu->swapchain_get_extent());
+    camera_manager->update(gpu->swapchain_get_extent(), get_frame_index());
     update_resources(swapchain_image, *camera_manager);
     execute();
     gpu->garbage_collector();
