@@ -624,6 +624,16 @@ int RendererManager::render()
     // render the unchanged state and avoid the full-pipeline synchronize + readback)
     if(sim_stepped || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
+      // FRACTURE: consume any impact-pass events (dedicated GPU->host bridge buffer).
+      // The orchestrator carves/labels on the GPU and respawns fragments via the
+      // reset-path upload machinery; no-op (one compare) when nothing fractured.
+      if (sim_stepped)
+      {
+        if (auto const *feb = rigid_body_manager->get_fracture_events())
+        {
+          scene_manager->process_fracture_events(*feb);
+        }
+      }
       // DEEP-POCKET TRACE: one CSV row per stepped frame with the deepest awake contact's
       // {pen,lambda,k,vn,pair,stick} latched by entry_avbd_pocket_trace. Full-rate (every
       // frame) so a 1-frame-period oscillation isn't aliased. Truncates at startup.
@@ -727,6 +737,7 @@ int RendererManager::render()
                     << " c2ph=" << sc.dbg_cp2_poshash << " c2rh=" << sc.dbg_cp2_rothash
                     << " vhf=" << sc.dbg_vh_fin << " vhi=" << sc.dbg_vh_imp << std::dec
                     << " vox=" << sc.dbg_vox_interior << " wedge=" << sc.dbg_vox_wedge
+                    << " frac=" << (rigid_body_manager->get_fracture_events() ? rigid_body_manager->get_fracture_events()->serial : 0u)
                     << " pen=" << sc.dbg_pen
                     << " miny=" << (sc.dbg_min_y == 0xFFFFFFFFu ? 0.0 : (double)sc.dbg_min_y / 1000.0 - 100.0)
                     << " deep100=" << sc.dbg_deep100 << " deep200=" << sc.dbg_deep200

@@ -27,6 +27,9 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_VSB_SURF = task_manager->create_compute(VoxelSurfaceBuildInfo{}.info);
     pipeline_VSB_INERTIA = task_manager->create_compute(VoxelInertiaReduceInfo{}.info);
     pipeline_VSB_PRIMS = task_manager->create_compute(VoxelPrimsBuildInfo{}.info);
+    pipeline_VFR_CARVE = task_manager->create_compute(VoxelCarveInfo{}.info);
+    pipeline_VFR_FLOOD_INIT = task_manager->create_compute(VoxelFloodInitInfo{}.info);
+    pipeline_VFR_FLOOD_STEP = task_manager->create_compute(VoxelFloodStepInfo{}.info);
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
     pipeline_BBBLBVHGH = task_manager->create_compute(RigidBodyBuildBoundingBoxesLinearBVHInfo{}.info);
     pipeline_CBBLBVHGH = task_manager->create_compute(RigidBodyConvertBoundingBoxesLinearBVHInfo{}.info);
@@ -269,6 +272,14 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
           .size = sizeof(VoxelShapeDerived) * BB_MAX_VOXEL_SHAPE_COUNT,
           .name = "voxel_derived",
       });
+      // FRACTURE event bridge (pick_state pattern): GPU-written by the impact pass,
+      // host-read by the orchestrator; survives the per-step sim-config re-upload
+      fracture_events_buffer = device.create_buffer({
+          .size = sizeof(FractureEventBuffer),
+          .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+          .name = "fracture_events",
+      });
+      *device.buffer_host_address_as<FractureEventBuffer>(fracture_events_buffer).value() = FractureEventBuffer{};
     }
     *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[i]).value() = SimConfig{
         .solver_type = renderer_manager->get_solver(),
@@ -289,6 +300,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .voxel_occupancy_addr = device.device_address(voxel_occupancy).value(),
         .voxel_surface_addr = device.device_address(voxel_surface).value(),
         .voxel_sdf_addr = device.device_address(voxel_sdf).value(),
+        .fracture_events_addr = device.device_address(fracture_events_buffer).value(),
     };
   }
   tmp_morton_codes = create_owned({
@@ -1903,6 +1915,7 @@ void RigidBodyManager::destroy()
     if (!voxel_sdf_scratch[s].is_empty()) { device.destroy_buffer(voxel_sdf_scratch[s]); voxel_sdf_scratch[s] = {}; }
   }
   if (!voxel_derived.is_empty()) { device.destroy_buffer(voxel_derived); voxel_derived = {}; }
+  if (!fracture_events_buffer.is_empty()) { device.destroy_buffer(fracture_events_buffer); fracture_events_buffer = {}; }
 
   initialized = false;
 }
@@ -1995,6 +2008,7 @@ bool RigidBodyManager::update_sim()
         .voxel_occupancy_addr = device.device_address(voxel_occupancy).value(),
         .voxel_surface_addr = device.device_address(voxel_surface).value(),
         .voxel_sdf_addr = device.device_address(voxel_sdf).value(),
+        .fracture_events_addr = device.device_address(fracture_events_buffer).value(),
     };
 
     update_buffers(f);
@@ -2283,6 +2297,104 @@ void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shap
               << ((mismatches == 0u) ? "  => MATCH" : "  => MISMATCH!") << std::endl;
     device.destroy_buffer(staging);
   }
+}
+
+void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 carve_center_grid, daxa_f32 carve_radius_grid,
+                                       std::vector<daxa_u32> &out_occ_words, std::vector<daxa_u32> &out_labels)
+{
+  if (!initialized) { return; }
+  daxa_u32 const cells = shape.dims.x * shape.dims.y * shape.dims.z;
+  daxa_u32 const words = (cells + 31u) / 32u;
+  VoxelFracturePushConstants pc = {
+      .occupancy_addr = device.device_address(voxel_occupancy).value(),
+      .labels_addr = device.device_address(voxel_sdf_scratch[0]).value(),
+      .cell_dims = shape.dims,
+      .occ_offset = shape.occ_offset,
+      .carve_center = carve_center_grid,
+      .carve_radius = carve_radius_grid,
+  };
+  auto rec = device.create_command_recorder({});
+  auto const barrier = [&rec]() {
+    rec.pipeline_barrier({
+        .src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+        .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE,
+    });
+  };
+  daxa_u32 const groups = (cells + 63u) / 64u;
+  if (carve_radius_grid > 0.0f)
+  {
+    rec.set_pipeline(*pipeline_VFR_CARVE);
+    rec.push_constant(pc);
+    rec.dispatch({.x = groups, .y = 1, .z = 1});
+    barrier();
+  }
+  rec.set_pipeline(*pipeline_VFR_FLOOD_INIT);
+  rec.push_constant(pc);
+  rec.dispatch({.x = groups, .y = 1, .z = 1});
+  barrier();
+  // min-propagation + pointer jumping: reach roughly doubles per iteration, so
+  // 2*ceil(log2(cells)) + slack converges for any component shape. FIXED count (no
+  // early-out readback) keeps the pass deterministic and single-submit.
+  daxa_u32 iters = 8u;
+  for (daxa_u32 c = cells; c > 1u; c >>= 1u) { iters += 2u; }
+  rec.set_pipeline(*pipeline_VFR_FLOOD_STEP);
+  for (daxa_u32 it = 0u; it < iters; ++it)
+  {
+    rec.push_constant(pc);
+    rec.dispatch({.x = groups, .y = 1, .z = 1});
+    barrier();
+  }
+  auto cmds = rec.complete_current_commands();
+  device.submit_commands({.command_lists = std::array{cmds}});
+  device.wait_idle();
+
+  // readbacks (fracture-rate one-offs): carved occupancy words + per-cell labels
+  auto const occ_bytes = (u64)words * sizeof(daxa_u32);
+  auto const lbl_bytes = (u64)cells * sizeof(daxa_u32);
+  daxa::BufferId staging = device.create_buffer({
+      .size = occ_bytes + lbl_bytes,
+      .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+      .name = "fracture_readback_staging",
+  });
+  auto rec2 = device.create_command_recorder({});
+  rec2.copy_buffer_to_buffer({.src_buffer = voxel_occupancy, .dst_buffer = staging,
+                              .src_offset = (u64)shape.occ_offset * sizeof(daxa_u32), .size = occ_bytes});
+  rec2.copy_buffer_to_buffer({.src_buffer = voxel_sdf_scratch[0], .dst_buffer = staging,
+                              .dst_offset = occ_bytes, .size = lbl_bytes});
+  auto cmds2 = rec2.complete_current_commands();
+  device.submit_commands({.command_lists = std::array{cmds2}});
+  device.wait_idle();
+  daxa_u32 const *host = device.buffer_host_address_as<daxa_u32>(staging).value();
+  out_occ_words.assign(host, host + words);
+  out_labels.assign(host + words, host + words + cells);
+  device.destroy_buffer(staging);
+}
+
+void RigidBodyManager::read_voxel_derived(daxa_u32 count, std::vector<VoxelShapeDerived> &out)
+{
+  out.clear();
+  if (!initialized || count == 0u) { return; }
+  auto const size = (u64)count * sizeof(VoxelShapeDerived);
+  daxa::BufferId staging = device.create_buffer({
+      .size = size,
+      .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+      .name = "voxel_derived_readback_staging",
+  });
+  auto rec = device.create_command_recorder({});
+  rec.copy_buffer_to_buffer({.src_buffer = voxel_derived, .dst_buffer = staging, .size = size});
+  auto cmds = rec.complete_current_commands();
+  device.submit_commands({.command_lists = std::array{cmds}});
+  device.wait_idle();
+  VoxelShapeDerived const *host = device.buffer_host_address_as<VoxelShapeDerived>(staging).value();
+  out.assign(host, host + count);
+  device.destroy_buffer(staging);
+}
+
+void RigidBodyManager::upload_voxel_shapes(std::vector<VoxelShape> const &shapes)
+{
+  if (!initialized || shapes.empty()) { return; }
+  std::memcpy(device.buffer_host_address_as<VoxelShape>(voxel_shapes).value(),
+              shapes.data(), shapes.size() * sizeof(VoxelShape));
 }
 
 bool RigidBodyManager::read_back_sim_config()

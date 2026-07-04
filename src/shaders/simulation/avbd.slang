@@ -1109,6 +1109,9 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   // real bodies; these locals only order the solve.
   daxa_f32vec3 lv1 = r1->velocity, lw1 = r1->omega;
   daxa_f32vec3 lv2 = r2->velocity, lw2 = r2->omega;
+  // FRACTURE classifier: strongest fired-row impulse + its contact point, per manifold
+  daxa_f32 frac_imp = 0.0f;
+  daxa_f32vec3 frac_p = daxa_f32vec3(0.0f);
 
   for (daxa_u32 j = 0u; j < cc; ++j)
   {
@@ -1142,6 +1145,22 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     daxa_f32 e = clamp(max(r1->restitution, r2->restitution), 0.0f, 1.0f);
     daxa_f32 target = -e * vn_pre; // >= 0
     daxa_f32 dvn = vn - target;
+    // effective mass along n (hoisted above the fire gate: the FRACTURE classifier needs
+    // it for every approaching row, fired or not)
+    daxa_f32vec3 t1 = dyn1 ? cross(mul(inv_i1, cross(ra, n)), ra) : daxa_f32vec3(0.0f);
+    daxa_f32vec3 t2 = dyn2 ? cross(mul(inv_i2, cross(rb, n)), rb) : daxa_f32vec3(0.0f);
+    daxa_f32 K = inv_m1 + inv_m2 + dot(n, t1 + t2);
+    if (K <= 1.0e-9f)
+    {
+      continue;
+    }
+    // FRACTURE classifier: the impulse a full inelastic stop of the ENTRY approach would
+    // take (-vn_pre/K). NOT the fired trim impulse: for voxel bodies the positional solve
+    // (deep-extract ramp) often absorbs the stop, leaving the velocity trim ~nothing to
+    // remove (measured: a 12 m/s slam read 0.005 through the trim) - the material doesn't
+    // care WHO absorbed the momentum.
+    daxa_f32 stop_imp = -vn_pre / K; // > 0 (vn_pre < 0 past the approach gate)
+    if (stop_imp > frac_imp) { frac_imp = stop_imp; frac_p = p; }
     // fire on BOTH sides of the target (hard-impact "teleport" fix). The old e=0 rule only
     // trimmed leftover SEPARATION (dvn > 0) - but on the impact frame itself the alpha-blind
     // main solve barely resolves the overlap, so vn is still APPROACHING and the row never
@@ -1156,15 +1175,7 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     {
       continue;
     }
-    // effective mass along n and the impulse that drives vn -> target
-    daxa_f32vec3 t1 = dyn1 ? cross(mul(inv_i1, cross(ra, n)), ra) : daxa_f32vec3(0.0f);
-    daxa_f32vec3 t2 = dyn2 ? cross(mul(inv_i2, cross(rb, n)), rb) : daxa_f32vec3(0.0f);
-    daxa_f32 K = inv_m1 + inv_m2 + dot(n, t1 + t2);
-    if (K <= 1.0e-9f)
-    {
-      continue;
-    }
-    daxa_f32 p_imp = -dvn / K;
+    daxa_f32 p_imp = -dvn / K; // the impulse that drives vn -> target
     m->contacts[j].normal_mass = p_imp; // trims over-rebound / leftover approach, injects e>0 bounce
     // relax the local velocities so the NEXT row sees this row's impulse (see header note)
     daxa_f32vec3 imp = p_imp * n;
@@ -1176,6 +1187,30 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     // as a next-frame velocity bounce through the main sweeps - both falsified live). The
     // ramp rebuilds within a frame exactly as for any fresh contact; loads never fire.
     m->contacts[j].normal_impulse = 0.0f;
+  }
+
+  // FRACTURE (MVP): one event per (manifold, breakable body) whose strongest fired-row
+  // impulse exceeds the body's threshold. Persistent serial ring - the host consumes by
+  // serial, nothing is ever cleared (survives multi-step catch-up bursts). Loads never
+  // reach here (rows only fire past the approach gate).
+  if (frac_imp > 0.0f)
+  {
+    FractureEventBuffer* feb = (FractureEventBuffer*)(sim_config->fracture_events_addr);
+    [unroll]
+    for (daxa_u32 side = 0u; side < 2u; ++side)
+    {
+      RigidBody* rb_side = side == 0u ? r1 : r2;
+      bool dyn_side = side == 0u ? dyn1 : dyn2;
+      if (!dyn_side || rb_side->fracture_impulse <= 0.0f || rb_side->shape_index == 0u) { continue; }
+      if (frac_imp <= rb_side->fracture_impulse) { continue; }
+      daxa_u32 serial;
+      InterlockedAdd(feb->serial, 1u, serial);
+      daxa_u32 slot = serial % BB_MAX_FRACTURE_EVENTS;
+      feb->events[slot].body_id = rb_side->id;
+      feb->events[slot].impulse = frac_imp;
+      feb->events[slot].position = frac_p;
+      feb->events[slot].normal = n;
+    }
   }
 }
 

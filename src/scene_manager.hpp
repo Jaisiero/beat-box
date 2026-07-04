@@ -12,6 +12,9 @@
 #include <fstream> // BB_SCENE_FILE / BB_SCENE_DUMP data-driven scenes (F3)
 #include <sstream>
 #include <string>
+#include <map>       // fracture: component census
+#include <set>       // fracture: per-batch body dedup
+#include <algorithm> // fracture: component ordering
 
 BB_NAMESPACE_BEGIN
 
@@ -620,6 +623,7 @@ public:
         .surf_count = surf_n,
         .sdf_offset = sdf_offset,
     });
+    shape_private.push_back(false); // load shapes are shared between bodies (fracture clones them)
     if (!sdf_verify_oracle)
     {
       // placeholder range with the right SIZE: the aabb vector's voxel ranges are
@@ -656,9 +660,10 @@ public:
     };
   }
 
-  void push_voxel_body(VoxelShapeBuild const &s, daxa_f32vec3 pos, Quaternion rot, daxa_u32 mat, f32 friction)
+  void push_voxel_body(VoxelShapeBuild const &s, daxa_f32vec3 pos, Quaternion rot, daxa_u32 mat, f32 friction,
+                       f32 fracture_impulse = 0.0f)
   {
-    rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY), .primitive_count = s.primitive_count, .primitive_offset = 0, .shape_index = s.shape_id, .position = pos, .rotation = rot, .minimum = s.minimum, .maximum = s.maximum, .mass = s.mass, .inv_mass = 1.0f / s.mass, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = s.inv_inertia, .restitution = 0.0f, .friction = friction});
+    rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY), .primitive_count = s.primitive_count, .primitive_offset = 0, .shape_index = s.shape_id, .position = pos, .rotation = rot, .minimum = s.minimum, .maximum = s.maximum, .mass = s.mass, .inv_mass = 1.0f / s.mass, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = s.inv_inertia, .restitution = 0.0f, .friction = friction, .fracture_impulse = fracture_impulse});
     rigid_bodies.back().material_index = mat;
   }
 
@@ -990,10 +995,12 @@ public:
       if (line.compare(s, 4, "vox ") == 0)
       {
         std::string kw, shape;
-        float px, py, pz, qx = 0.0f, qy = 0.0f, qz = 0.0f, qw = 1.0f, qt;
+        float px, py, pz, qx = 0.0f, qy = 0.0f, qz = 0.0f, qw = 1.0f, qt, strength = 0.0f;
         ss >> kw >> shape;
         if (!(ss >> px >> py >> pz)) { continue; }
         if (ss >> qt) { qx = qt; if (ss >> qt) qy = qt; if (ss >> qt) qz = qt; if (ss >> qt) qw = qt; }
+        // optional 5th trailing value: fracture strength (impact impulse in kg*m/s; 0 = unbreakable)
+        if (ss >> qt) { strength = qt; }
         Quaternion q = Quaternion(qx, qy, qz, qw).normalize(); // hand-typed quats: keep |q|==1
         ensure_shapes();
         VoxelShapeBuild const *vsb = shape == "l" ? &vox_l : shape == "cross" ? &vox_cross
@@ -1001,7 +1008,8 @@ public:
         if (vsb == nullptr) { std::cerr << "BB_SCENE_FILE: unknown vox shape '" << shape << "'" << std::endl; continue; }
         // palette above: 3=green (l), 5=yellow (cross), 7=magenta (frame) — the scene_5 look
         daxa_u32 const vmat = shape == "l" ? 3u : shape == "cross" ? 5u : 7u;
-        push_voxel_body(*vsb, daxa_f32vec3(px, py, pz), q, vmat, 0.6f);
+        if (strength > 0.0f) { std::cout << "[SCENE] vox '" << shape << "' fracture strength " << strength << std::endl; }
+        push_voxel_body(*vsb, daxa_f32vec3(px, py, pz), q, vmat, 0.6f, strength);
         ++n;
         continue;
       }
@@ -1091,6 +1099,354 @@ public:
     }
     device.destroy_buffer(staging);
     std::cout << "[SCENE] F9 live dump wrote " << n << " bodies to '" << path << "'" << std::endl;
+  }
+
+  // ================================ FRACTURE (MVP) ================================
+  // Host ORCHESTRATOR for GPU fracture. The impact pass latches events into SimConfig's
+  // persistent serial ring; this consumes them. All geometry/analysis is GPU (carve +
+  // connected components + the pool rebuild chain); the host only moves validated numbers
+  // (slot allocation, RigidBody records) and re-enters the battle-tested load/reset upload
+  // path - a "mini-reload" with a full AS rebuild (a few ms at fracture instants; the
+  // update_sim warm-start wipe is the known reset-path behavior, visually masked by the
+  // fracture itself). Slot recycling is deliberately NOT here: pools are append-only with
+  // loud overflow guards (phase 2 = free-lists).
+
+  // by value: Quaternion::conjugate() is not const-qualified (shared shader/C++ struct)
+  static daxa_f32vec3 quat_rotate(Quaternion q, daxa_f32vec3 const &v)
+  {
+    return (q * Quaternion(v, 0.0f) * q.conjugate()).v;
+  }
+  static daxa_f32vec3 quat_rotate_inv(Quaternion q, daxa_f32vec3 const &v)
+  {
+    return (q.conjugate() * Quaternion(v, 0.0f) * q).v;
+  }
+
+  // post-derived fixup bookkeeping: fragment records need the GPU-reduced com before they
+  // can be finalized; the parent shifts to its new com. Parent kinematics are CAPTURED at
+  // apply time (later events in the same batch must not see half-fixed values).
+  struct FragFix
+  {
+    daxa_u32 body;       // host body index (== persistent id)
+    daxa_f32 voxel_mass; // parent's per-voxel mass (invariant under fracture)
+    glm::vec3 com_old;   // parent's pre-fracture com (from the grid min corner, world scale)
+    daxa_f32vec3 parent_pos;
+    Quaternion parent_rot;
+    daxa_f32vec3 parent_vel;
+    daxa_f32vec3 parent_omega;
+  };
+
+  // Pull the LIVE GPU body states into the host vector (the host holds the SPAWN state by
+  // design - see reset()). Without this, the fracture respawn would teleport the whole
+  // scene back to its initial placement. Same mechanism as the F9 live dump.
+  bool sync_live_bodies()
+  {
+    daxa_u32 const count = rigid_body_count;
+    if (count == 0u) { return false; }
+    daxa::BufferId src = accel_struct_mngr->get_rigid_body_buffer();
+    if (src.is_empty()) { return false; }
+    auto const size = static_cast<daxa::usize>(count) * sizeof(RigidBody);
+    daxa::BufferId staging = device.create_buffer({
+        .size = size,
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+        .name = "fracture_live_sync_staging",
+    });
+    {
+      auto rec = device.create_command_recorder({});
+      rec.copy_buffer_to_buffer({.src_buffer = src, .dst_buffer = staging, .size = size});
+      auto cmds = rec.complete_current_commands();
+      device.submit_commands({.command_lists = std::array{cmds}});
+      device.wait_idle();
+    }
+    RigidBody const *live = device.buffer_host_address_as<RigidBody>(staging).value();
+    for (daxa_u32 i = 0u; i < count; ++i)
+    {
+      RigidBody const &lb = live[i]; // GPU rows are sort-ordered; map by persistent id
+      if (lb.id >= rigid_bodies.size()) { continue; }
+      auto &hb = rigid_bodies[lb.id];
+      hb.position = lb.position;
+      hb.rotation = lb.rotation;
+      hb.velocity = lb.velocity;
+      hb.omega = lb.omega;
+      hb.prev_velocity = lb.prev_velocity;
+      hb.prev_omega = lb.prev_omega;
+      hb.flags = lb.flags;
+      hb.sleep_timer = lb.sleep_timer;
+      // solver scratch: reset like reset() does (the respawn starts a fresh warm world)
+      hb.island_index = MAX_U32;
+      hb.manifold_node_index = MAX_U32;
+      hb.active_index = MAX_U32;
+    }
+    device.destroy_buffer(staging);
+    return true;
+  }
+
+  // one event: clone-if-shared, GPU carve + component labels, split components into bodies
+  bool apply_fracture(FractureEvent const &ev, std::vector<FragFix> &fixes)
+  {
+    if (ev.body_id >= rigid_bodies.size()) { return false; }
+    auto &body = rigid_bodies[ev.body_id];
+    if (body.shape_index == 0u || (body.flags & RigidBodyFlag::DYNAMIC) == RigidBodyFlag::NONE) { return false; }
+    daxa_u32 shape_i = body.shape_index - 1u;
+    daxa_u32vec3 const dims = voxel_shape_cpu[shape_i].dims;
+    daxa_u32 const cells = dims.x * dims.y * dims.z;
+    daxa_u32 const words = (cells + 31u) / 32u;
+    daxa_u32 const nodes = (dims.x + 1u) * (dims.y + 1u) * (dims.z + 1u);
+    auto pools_full = [&]() {
+      return voxel_shape_cpu.size() >= BB_MAX_VOXEL_SHAPE_COUNT ||
+             voxel_occ_cpu.size() + words > BB_MAX_VOXEL_OCC_U32S ||
+             voxel_surf_cpu.size() + cells > BB_MAX_VOXEL_SURF_COUNT ||
+             voxel_sdf_cpu.size() + nodes > BB_MAX_VOXEL_SDF_F32S;
+    };
+
+    // CLONE-ON-FIRST-FRACTURE: load shapes are SHARED between bodies (scene_5 reuses one L
+    // for three pieces) - carving a shared slice would dent every sibling. Fracture-born
+    // shapes are single-owner (shape_private) and carve in place.
+    if (!shape_private[shape_i])
+    {
+      if (pools_full())
+      {
+        std::cerr << "FRACTURE: shape pools full, event dropped (body " << ev.body_id << ")" << std::endl;
+        return false;
+      }
+      VoxelShape ns = voxel_shape_cpu[shape_i];
+      ns.occ_offset = (u32)voxel_occ_cpu.size();
+      ns.surf_offset = (u32)voxel_surf_cpu.size();
+      ns.sdf_offset = (u32)voxel_sdf_cpu.size();
+      std::vector<daxa_u32> occ_copy(voxel_occ_cpu.begin() + voxel_shape_cpu[shape_i].occ_offset,
+                                     voxel_occ_cpu.begin() + voxel_shape_cpu[shape_i].occ_offset + words);
+      voxel_occ_cpu.insert(voxel_occ_cpu.end(), occ_copy.begin(), occ_copy.end());
+      voxel_surf_cpu.resize(voxel_surf_cpu.size() + cells, 0u);
+      voxel_sdf_cpu.resize(voxel_sdf_cpu.size() + nodes, 0.0f);
+      voxel_shape_cpu.push_back(ns);
+      shape_private.push_back(true);
+      voxel_shape_prims.push_back(std::vector<Aabb>(voxel_shape_prims[shape_i].size(),
+                                                    Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0))));
+      body.shape_index = (u32)voxel_shape_cpu.size(); // 1-based
+      shape_i = (u32)voxel_shape_cpu.size() - 1u;
+      // the GPU pool doesn't have the clone yet: re-upload occupancy + records so the
+      // carve kernel sees it (small pools; fracture-rate one-off)
+      std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer()).value(),
+                  voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
+      rigid_body_manager->upload_voxel_shapes(voxel_shape_cpu);
+    }
+    VoxelShape const shape = voxel_shape_cpu[shape_i]; // stable copy for this event
+
+    // world -> grid-space carve center
+    daxa_f32vec3 const rel = daxa_f32vec3(ev.position.x - body.position.x,
+                                          ev.position.y - body.position.y,
+                                          ev.position.z - body.position.z);
+    daxa_f32vec3 const lp = quat_rotate_inv(body.rotation, rel);
+    f32 const vs = shape.voxel_size;
+    daxa_f32vec3 const grid_c = daxa_f32vec3((lp.x - shape.grid_origin.x) / vs,
+                                             (lp.y - shape.grid_origin.y) / vs,
+                                             (lp.z - shape.grid_origin.z) / vs);
+    // impulse-scaled crater: a harder hit breaks more (radius in cells; clamped so a big
+    // overshoot chips instead of pulverizing - the pulverization clamp refuses total loss)
+    f32 const carve_r = std::clamp(1.0f + 0.6f * (ev.impulse / body.fracture_impulse), 1.6f, 2.6f);
+
+    // capture per-voxel mass + parent kinematics BEFORE anything changes
+    daxa_u32 const old_count = (daxa_u32)voxel_shape_prims[shape_i].size();
+    if (old_count == 0u) { return false; }
+    FragFix const parent_ctx{ev.body_id,
+                             body.mass / (f32)old_count,
+                             glm::vec3(-shape.grid_origin.x, -shape.grid_origin.y, -shape.grid_origin.z),
+                             body.position, body.rotation, body.velocity, body.omega};
+
+    // GPU: carve + connected-component labels; tiny readbacks for the bookkeeping
+    std::vector<daxa_u32> occ_words, labels;
+    rigid_body_manager->carve_and_label(shape, grid_c, carve_r, occ_words, labels);
+
+    // component census (labels are min cell indices -> deterministic identities)
+    std::map<daxa_u32, daxa_u32> comp_counts;
+    for (daxa_u32 c = 0u; c < cells; ++c)
+    {
+      if (labels[c] != MAX_U32) { ++comp_counts[labels[c]]; }
+    }
+    if (comp_counts.empty())
+    {
+      // full pulverization: clamp (MVP keeps bodies alive). The host slice is untouched,
+      // so the respawn upload restores the GPU slice = the carve is refused.
+      std::cerr << "FRACTURE: body " << ev.body_id << " would pulverize entirely; carve refused" << std::endl;
+      return true; // respawn anyway to restore the GPU slice
+    }
+    std::vector<std::pair<daxa_u32, daxa_u32>> comps(comp_counts.begin(), comp_counts.end());
+    std::sort(comps.begin(), comps.end(), [](auto const &a, auto const &b) {
+      return a.second != b.second ? a.second > b.second : a.first < b.first;
+    });
+
+    auto write_component = [&](daxa_u32 occ_offset, daxa_u32 label) {
+      for (daxa_u32 w = 0u; w < words; ++w) { voxel_occ_cpu[occ_offset + w] = 0u; }
+      for (daxa_u32 c = 0u; c < cells; ++c)
+      {
+        if (labels[c] == label) { voxel_occ_cpu[occ_offset + c / 32u] |= 1u << (c % 32u); }
+      }
+    };
+
+    // largest component keeps this body/shape
+    write_component(shape.occ_offset, comps[0].first);
+    voxel_shape_prims[shape_i].assign(comps[0].second, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0)));
+    body.primitive_count = comps[0].second;
+    fixes.push_back(parent_ctx);
+
+    // the rest become fragment shapes + bodies (same dims: no re-indexing, tiny slices)
+    for (size_t k = 1; k < comps.size(); ++k)
+    {
+      if (pools_full() || rigid_bodies.size() >= MAX_RIGID_BODY_COUNT)
+      {
+        std::cerr << "FRACTURE: pools/bodies full, fragment dropped" << std::endl;
+        break;
+      }
+      VoxelShape fs = shape;
+      fs.occ_offset = (u32)voxel_occ_cpu.size();
+      fs.surf_offset = (u32)voxel_surf_cpu.size();
+      fs.sdf_offset = (u32)voxel_sdf_cpu.size();
+      voxel_occ_cpu.resize(voxel_occ_cpu.size() + words, 0u);
+      voxel_surf_cpu.resize(voxel_surf_cpu.size() + cells, 0u);
+      voxel_sdf_cpu.resize(voxel_sdf_cpu.size() + nodes, 0.0f);
+      write_component(fs.occ_offset, comps[k].first);
+      voxel_shape_cpu.push_back(fs);
+      shape_private.push_back(true);
+      voxel_shape_prims.push_back(std::vector<Aabb>(comps[k].second, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0))));
+
+      RigidBody frag = body; // inherit material/friction/restitution/strength/pose
+      frag.id = id_generator++;
+      frag.shape_index = (u32)voxel_shape_cpu.size();
+      frag.primitive_count = comps[k].second;
+      frag.primitive_offset = 0u;
+      frag.island_index = MAX_U32;
+      frag.manifold_node_index = MAX_U32;
+      frag.active_index = MAX_U32;
+      frag.sleep_timer = 0u;
+      frag.flags = RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY;
+      // mass/inertia/position/velocity are PROVISIONAL until the derived readback fixup
+      rigid_bodies.push_back(frag);
+      rigid_body_map[rigid_body_active_count++] = frag.id;
+      ++rigid_body_count;
+      FragFix ff = parent_ctx;
+      ff.body = frag.id;
+      fixes.push_back(ff);
+    }
+    return true;
+  }
+
+  // the mini-reload: pools up, GPU rebuild chain, derived readback -> final records, AS + sim refresh
+  void respawn_after_fracture(std::vector<FragFix> const &fixes)
+  {
+    // 1. pools upload (the host vectors are authoritative again)
+    std::memcpy(device.buffer_host_address_as<VoxelShape>(rigid_body_manager->get_voxel_shapes_buffer()).value(),
+                voxel_shape_cpu.data(), voxel_shape_cpu.size() * sizeof(VoxelShape));
+    std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer()).value(),
+                voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
+    std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_surface_buffer()).value(),
+                voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
+    std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
+                voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
+    // 2. GPU rebuild chain (SDF + surface + inertia for every shape - tiny at these sizes)
+    rigid_body_manager->build_voxel_pools_gpu(voxel_shape_cpu, voxel_sdf_cpu, voxel_surf_cpu, voxel_derived_cpu);
+    // 3. the GPU mass-property reduce is the AUTHORITY for the affected records
+    std::vector<VoxelShapeDerived> derived;
+    rigid_body_manager->read_voxel_derived((daxa_u32)voxel_shape_cpu.size(), derived);
+    for (auto const &fx : fixes)
+    {
+      auto &b = rigid_bodies[fx.body];
+      daxa_u32 const si = b.shape_index - 1u;
+      VoxelShapeDerived const &d = derived[si];
+      if (d.count == 0u) { continue; } // pulverization-clamp path: record untouched
+      b.mass = fx.voxel_mass * (f32)d.count;
+      b.inv_mass = 1.0f / b.mass;
+      glm::mat3 I;
+      I[0] = glm::vec3(d.unit_inertia.x.x, d.unit_inertia.x.y, d.unit_inertia.x.z);
+      I[1] = glm::vec3(d.unit_inertia.y.x, d.unit_inertia.y.y, d.unit_inertia.y.z);
+      I[2] = glm::vec3(d.unit_inertia.z.x, d.unit_inertia.z.y, d.unit_inertia.z.z);
+      b.inv_inertia = daxa_mat3_from_glm_mat3(glm::inverse(I * fx.voxel_mass));
+      // shape frame: com back at the body origin
+      glm::vec3 const com_new(d.com.x, d.com.y, d.com.z);
+      VoxelShape &sh = voxel_shape_cpu[si];
+      sh.grid_origin = daxa_f32vec3(-com_new.x, -com_new.y, -com_new.z);
+      b.minimum = sh.grid_origin;
+      b.maximum = daxa_f32vec3(sh.grid_origin.x + sh.dims.x * sh.voxel_size,
+                               sh.grid_origin.y + sh.dims.y * sh.voxel_size,
+                               sh.grid_origin.z + sh.dims.z * sh.voxel_size);
+      // kinematics from the CAPTURED parent frame: same world voxels, new com ->
+      // pos' = pos + R*(com_new - com_old); v' = v + omega x (pos' - pos)
+      glm::vec3 const shift = com_new - fx.com_old;
+      daxa_f32vec3 const ws = quat_rotate(fx.parent_rot, daxa_f32vec3(shift.x, shift.y, shift.z));
+      b.rotation = fx.parent_rot;
+      b.position = daxa_f32vec3(fx.parent_pos.x + ws.x, fx.parent_pos.y + ws.y, fx.parent_pos.z + ws.z);
+      glm::vec3 const w(fx.parent_omega.x, fx.parent_omega.y, fx.parent_omega.z);
+      glm::vec3 const dv = glm::cross(w, glm::vec3(ws.x, ws.y, ws.z));
+      b.velocity = daxa_f32vec3(fx.parent_vel.x + dv.x, fx.parent_vel.y + dv.y, fx.parent_vel.z + dv.z);
+      b.omega = fx.parent_omega;
+      b.prev_velocity = b.velocity;
+      b.prev_omega = b.omega;
+      // a fracture wakes what it touches
+      b.flags = RigidBodyFlag(daxa_u32(b.flags) & ~daxa_u32(RigidBodyFlag::SLEEPING));
+      b.sleep_timer = 0u;
+    }
+    // 4. records with fixed grid_origins back to the GPU (the prims pass reads them)
+    rigid_body_manager->upload_voxel_shapes(voxel_shape_cpu);
+    // 5. primitive lists in body order (same layout rule as load)
+    aabb.clear();
+    voxel_prim_sites.clear();
+    for (auto &rb : rigid_bodies)
+    {
+      if (rb.shape_index == 0u)
+      {
+        aabb.push_back(Aabb(rb.minimum, rb.maximum));
+      }
+      else
+      {
+        voxel_prim_sites.emplace_back(rb.shape_index - 1u, (u32)aabb.size());
+        auto const &prims = voxel_shape_prims.at(rb.shape_index - 1u);
+        aabb.insert(aabb.end(), prims.begin(), prims.end());
+      }
+    }
+    // 6. full AS rebuild + sim refresh (the reset() tail, minus the pause)
+    accel_struct_mngr->reset_for_reload();
+    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook()))
+    {
+      std::cerr << "FRACTURE: AS rebuild failed!" << std::endl;
+      return;
+    }
+    accel_struct_mngr->build_AS();
+    rigid_body_manager->update_sim();
+    rigid_body_manager->update_active_rigid_body_list();
+    status_manager->next_frame();
+    rigid_body_manager->update_sim();
+    rigid_body_manager->update_active_rigid_body_list();
+    status_manager->next_frame();
+    accel_struct_mngr->update_TLAS();
+    std::cout << "[FRACTURE] respawn: " << rigid_body_count << " bodies, "
+              << voxel_shape_cpu.size() << " shapes" << std::endl;
+  }
+
+  // entry point, called from the render loop after each stepped frame (event source = the
+  // dedicated GPU->host bridge buffer, NOT SimConfig - see FractureEventBuffer)
+  void process_fracture_events(FractureEventBuffer const &fb)
+  {
+    daxa_u32 const serial = fb.serial;
+    if (serial == fracture_serial_seen) { return; }
+    daxa_u32 n = serial - fracture_serial_seen;
+    if (n > BB_MAX_FRACTURE_EVENTS)
+    {
+      std::cerr << "FRACTURE: " << (n - BB_MAX_FRACTURE_EVENTS) << " events dropped (ring overflow)" << std::endl;
+      n = BB_MAX_FRACTURE_EVENTS;
+    }
+    fracture_serial_seen = serial;
+    // live GPU state first: the respawn re-uploads the whole host vector
+    if (!sync_live_bodies()) { return; }
+    bool any = false;
+    std::vector<FragFix> fixes;
+    std::set<daxa_u32> done; // one carve per body per batch (an impact spams manifold rows)
+    for (daxa_u32 s = serial - n; s != serial; ++s)
+    {
+      FractureEvent const &ev = fb.events[s % BB_MAX_FRACTURE_EVENTS];
+      if (done.count(ev.body_id) != 0u) { continue; }
+      done.insert(ev.body_id);
+      std::cout << "[FRACTURE] body " << ev.body_id << " impulse " << ev.impulse << std::endl;
+      any = apply_fracture(ev, fixes) || any;
+    }
+    if (any) { respawn_after_fracture(fixes); }
   }
 
   bool load_scene()
@@ -1325,6 +1681,9 @@ public:
     voxel_shape_prims.clear();
     voxel_prim_sites.clear();
     voxel_derived_cpu.clear();
+    shape_private.clear();
+    fracture_serial_seen = 0;
+    rigid_body_manager->reset_fracture_events(); // stale serials from the old scene reference dead ids
     id_generator = 0;
     rigid_body_count = 0;
     rigid_body_active_count = 0;
@@ -1398,6 +1757,11 @@ private:
   std::vector<std::vector<Aabb>> voxel_shape_prims; // BLAS primitives per shape (body frame)
   std::vector<std::pair<daxa_u32, daxa_u32>> voxel_prim_sites; // per voxel body: (shape idx, first Aabb in `aabb`)
   std::vector<VoxelShapeDerived> voxel_derived_cpu; // CPU mass properties (GPU reduce verify twin)
+  // FRACTURE bookkeeping: single-owner flag per shape (load shapes are shared between
+  // bodies -> clone-on-first-fracture; fracture-born shapes carve in place) + the host's
+  // last-consumed event serial (the GPU ring is never cleared)
+  std::vector<bool> shape_private;
+  daxa_u32 fracture_serial_seen = 0;
 
   // Active rigid body buffer
   daxa::BufferId active_rigid_body_buffer;

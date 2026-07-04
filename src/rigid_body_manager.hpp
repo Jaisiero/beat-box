@@ -160,6 +160,31 @@ struct RigidBodyManager{
                              std::vector<std::pair<daxa_u32, daxa_u32>> const &bodies,
                              daxa::BufferId prims_buffer,
                              std::vector<Aabb> const &cpu_reference);
+  // FRACTURE (MVP): carve an impact sphere out of a shape's live occupancy slice and
+  // label its connected components, all on the GPU (labels in the EDT scratch buffer).
+  // Readbacks (fracture-rate one-offs): the carved occupancy words and the per-cell
+  // component labels - the host orchestrator does the bookkeeping from those.
+  void carve_and_label(VoxelShape const &shape, daxa_f32vec3 carve_center_grid, daxa_f32 carve_radius_grid,
+                       std::vector<daxa_u32> &out_occ_words, std::vector<daxa_u32> &out_labels);
+  // read the GPU mass-property records (count/com/unit inertia) for the first `count`
+  // shapes - the authority for fragment RigidBody records after a pools rebuild
+  void read_voxel_derived(daxa_u32 count, std::vector<VoxelShapeDerived> &out);
+  // FRACTURE event bridge (host side): GPU-written by the impact pass, host-read here.
+  // Tear-free enough for the ring: the serial is a single u32 and the host consumes
+  // between steps (the sim loop synchronizes the GPU around every step).
+  FractureEventBuffer const *get_fracture_events()
+  {
+    if (!initialized || fracture_events_buffer.is_empty()) { return nullptr; }
+    return device.buffer_host_address_as<FractureEventBuffer>(fracture_events_buffer).value();
+  }
+  void reset_fracture_events()
+  {
+    if (!initialized || fracture_events_buffer.is_empty()) { return; }
+    *device.buffer_host_address_as<FractureEventBuffer>(fracture_events_buffer).value() = FractureEventBuffer{};
+  }
+  // re-upload the (host-authoritative) VoxelShape records after the orchestrator fixed
+  // grid_origins from the derived readback (the prims pass reads grid_origin)
+  void upload_voxel_shapes(std::vector<VoxelShape> const &shapes);
 
 private:
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
@@ -225,6 +250,9 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_SURF;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_INERTIA;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_PRIMS;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_CARVE;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_FLOOD_INIT;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_FLOOD_STEP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BBBLBVHGH;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CBBLBVHGH;
@@ -342,6 +370,7 @@ private:
   daxa::BufferId voxel_sdf = {};
   daxa::BufferId voxel_sdf_scratch[2] = {}; // squared-distance fields (solid/empty) for the GPU EDT
   daxa::BufferId voxel_derived = {};        // VoxelShapeDerived per shape (GPU mass-property reduce)
+  daxa::BufferId fracture_events_buffer = {}; // host-visible impact->host fracture bridge
 
   // Simulation configuration. AVBD is the default solver (user decision after the A/B
   // campaign: rests flush at pen~0 vs 13mm Baumgarte sink, true zero residual velocity,

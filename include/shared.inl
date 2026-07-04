@@ -376,6 +376,11 @@ struct RigidBody
   daxa_f32mat3x3 inv_inertia;
   daxa_f32 restitution;
   daxa_f32 friction;
+  // FRACTURE (MVP): impact-impulse threshold (kg*m/s) above which this body fractures at
+  // the contact. 0 = unbreakable (every legacy scene body). The classifier is the impact
+  // pass: it already computes each contact row's stopping impulse, so a fracture event is
+  // one comparison there.
+  daxa_f32 fracture_impulse;
   // TODO: Add more rigid body properties
   // daxa_f32 drag;
   // daxa_f32 angular_drag;
@@ -583,6 +588,29 @@ static const daxa_f32 PI = 3.14159265359f;
 static const daxa_f32 COLLISION_GUARD = 1e-3f;
 static const daxa_u32 AABB_CORNER_COUNT = 8;
 
+// FRACTURE (MVP): one impact strong enough to break a body. Latched by the impact pass
+// (which already computes each row's stopping impulse); consumed by the host orchestrator
+// (carve + connected components + fragment respawn). World-space contact data.
+static const daxa_u32 BB_MAX_FRACTURE_EVENTS = 8;
+struct FractureEvent
+{
+  daxa_u32 body_id;      // PERSISTENT body id (rows reorder every step)
+  daxa_f32 impulse;      // max fired-row impulse on this body (kg*m/s)
+  daxa_f32vec3 position; // contact point, world
+  daxa_f32vec3 normal;   // manifold normal, world
+};
+// DEDICATED host-visible bridge buffer (pick_state pattern), addressed through
+// SimConfig::fracture_events_addr. NOT inside SimConfig: the sim config is re-uploaded
+// from the host template EVERY STEP (that is how sim_flags propagate), which would wipe
+// any event state stored there - measured: a serial written by the impact pass survived
+// exactly one step. This buffer is written ONLY by the impact pass (GPU) and read/reset
+// ONLY by the host; the monotonic serial ring survives multi-step catch-up bursts.
+struct FractureEventBuffer
+{
+  daxa_u32 serial; // monotonic; slot = serial % BB_MAX_FRACTURE_EVENTS
+  FractureEvent events[BB_MAX_FRACTURE_EVENTS];
+};
+
 struct GlobalCollisionInfo
 {
   daxa_u32 collision_count;
@@ -718,6 +746,10 @@ struct SimConfig
   daxa_u64 voxel_occupancy_addr;
   daxa_u64 voxel_surface_addr;
   daxa_u64 voxel_sdf_addr;
+  // FRACTURE event bridge (FractureEventBuffer): comes from the host template every step
+  // like the pool addresses above, so the per-step sim-config re-upload REFRESHES it
+  // instead of wiping the events (which live in the dedicated buffer, not here)
+  daxa_u64 fracture_events_addr;
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
   [mutating] bool has_flag(SimFlag flag)
   {
@@ -1285,6 +1317,20 @@ struct VoxelShapeDerived
   daxa_u32 count;              // solid cells
   daxa_f32vec3 com;            // center of mass (world units from the grid min corner)
   daxa_f32mat3x3 unit_inertia; // about the CoM, own-cube term included
+};
+
+// FRACTURE kernels (voxel_sdf.slang): carve + connected-components labelling, raw
+// addresses like the pool-build passes (one-off dispatches from the host orchestrator).
+// Labels live in the EDT scratch buffer (voxel_sdf_scratch[0] as u32s - both are
+// fracture-rate one-off users, never concurrent).
+struct VoxelFracturePushConstants
+{
+  daxa_u64 occupancy_addr;
+  daxa_u64 labels_addr;      // u32 per cell of the target shape
+  daxa_u32vec3 cell_dims;
+  daxa_u32 occ_offset;
+  daxa_f32vec3 carve_center; // grid units (cell coords)
+  daxa_f32 carve_radius;     // grid units
 };
 
 // GENERATE HIERARCHY LBVH
