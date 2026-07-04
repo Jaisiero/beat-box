@@ -1100,6 +1100,16 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   daxa_f32 inv_m1 = dyn1 ? r1->inv_mass : 0.0f; // sleeping/static side acts as an anchor
   daxa_f32 inv_m2 = dyn2 ? r2->inv_mass : 0.0f;
 
+  // SEQUENTIAL row relaxation (this kernel is single-thread per manifold): each row's
+  // impulse is computed against velocities that already include the previous rows'
+  // impulses. Computing every row from the SAME pre-apply velocities over-corrects by up
+  // to the row count when contacts coincide (a corner catch emits 2-4 near-coincident
+  // rows), which REFLECTED the full approach speed (~11 m/s straight back up, e=0) once
+  // the approach side started firing. IMP_APPLY still applies the stored impulses to the
+  // real bodies; these locals only order the solve.
+  daxa_f32vec3 lv1 = r1->velocity, lw1 = r1->omega;
+  daxa_f32vec3 lv2 = r2->velocity, lw2 = r2->omega;
+
   for (daxa_u32 j = 0u; j < cc; ++j)
   {
     m->contacts[j].normal_mass = 0.0f; // scratch must be defined for IMP_APPLY either way
@@ -1120,8 +1130,8 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     {
       continue;
     }
-    // post-step (reconstructed) relative normal velocity
-    daxa_f32vec3 vrel = (r2->velocity + cross(r2->omega, rb)) - (r1->velocity + cross(r1->omega, ra));
+    // post-step (reconstructed) relative normal velocity, INCLUDING prior rows' impulses
+    daxa_f32vec3 vrel = (lv2 + cross(lw2, rb)) - (lv1 + cross(lw1, ra));
     daxa_f32 vn = dot(n, vrel);
     // E1: restitution. The target post-impact SEPARATING velocity is e*approach = -e*vn_pre
     // (vn_pre < 0 for a real approach, gated above), so e=0 is fully inelastic (target 0). The
@@ -1132,8 +1142,17 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     daxa_f32 e = clamp(max(r1->restitution, r2->restitution), 0.0f, 1.0f);
     daxa_f32 target = -e * vn_pre; // >= 0
     daxa_f32 dvn = vn - target;
-    bool fire = (e <= 0.0f) ? (dvn > 1.0e-4f) : (abs(dvn) > 1.0e-4f);
-    if (!fire) // already at the target separating velocity
+    // fire on BOTH sides of the target (hard-impact "teleport" fix). The old e=0 rule only
+    // trimmed leftover SEPARATION (dvn > 0) - but on the impact frame itself the alpha-blind
+    // main solve barely resolves the overlap, so vn is still APPROACHING and the row never
+    // fired: the un-consumed momentum then lived on as the dual's lambda spike (stopping
+    // ~10 m/s builds lambda ~ -150k in one frame), which the post-stab's force law
+    // min(k*C+lam, 0) discharges POSITIONALLY to its equilibrium C = -lam/k ~ +0.9 m -> the
+    // one-frame floor-impact blast. Removing the remaining approach velocity here makes the
+    // touchdown perfectly inelastic AT THE CONTACT INSTANT (a corner catch stops dead, then
+    // topples naturally); resting/sliding rows never reach this code (approach gate ~2*g*dt).
+    bool fire = abs(dvn) > 1.0e-4f;
+    if (!fire) // already at the target post-impact velocity
     {
       continue;
     }
@@ -1145,7 +1164,18 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     {
       continue;
     }
-    m->contacts[j].normal_mass = -dvn / K; // trims over-rebound (attractive) or injects the bounce (repulsive)
+    daxa_f32 p_imp = -dvn / K;
+    m->contacts[j].normal_mass = p_imp; // trims over-rebound / leftover approach, injects e>0 bounce
+    // relax the local velocities so the NEXT row sees this row's impulse (see header note)
+    daxa_f32vec3 imp = p_imp * n;
+    if (dyn1) { lv1 -= inv_m1 * imp; lw1 -= mul(inv_i1, cross(ra, imp)); }
+    if (dyn2) { lv2 += inv_m2 * imp; lw2 += mul(inv_i2, cross(rb, imp)); }
+    // and RESET this row's dual: a fired row is an IMPACT, not a load - its lambda is the
+    // one-step stopping force (a momentum spike), not the steady contact force the warm
+    // start should carry. Kept, it re-discharges as the positional blast above (or, gated,
+    // as a next-frame velocity bounce through the main sweeps - both falsified live). The
+    // ramp rebuilds within a frame exactly as for any fresh contact; loads never fire.
+    m->contacts[j].normal_impulse = 0.0f;
   }
 }
 
