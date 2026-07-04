@@ -527,6 +527,7 @@ const auto entry_voxel_surface_build = "entry_voxel_surface_build";
 const auto entry_voxel_inertia_reduce = "entry_voxel_inertia_reduce";
 const auto entry_voxel_prims_build = "entry_voxel_prims_build";
 const auto entry_voxel_carve = "entry_voxel_carve";
+const auto entry_voxel_voronoi_assign = "entry_voxel_voronoi_assign";
 const auto entry_voxel_flood_init = "entry_voxel_flood_init";
 const auto entry_voxel_flood_step = "entry_voxel_flood_step";
 const auto voxel_sdf_init_pipeline_name = "Voxel SDF Init";
@@ -536,6 +537,7 @@ const auto voxel_surface_build_pipeline_name = "Voxel Surface Build";
 const auto voxel_inertia_reduce_pipeline_name = "Voxel Inertia Reduce";
 const auto voxel_prims_build_pipeline_name = "Voxel Prims Build";
 const auto voxel_carve_pipeline_name = "Voxel Carve";
+const auto voxel_voronoi_assign_pipeline_name = "Voxel Voronoi Assign";
 const auto voxel_flood_init_pipeline_name = "Voxel Flood Init";
 const auto voxel_flood_step_pipeline_name = "Voxel Flood Step";
 
@@ -987,6 +989,21 @@ struct VoxelCarveInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(VoxelFracturePushConstants),
       .name = voxel_carve_pipeline_name,
+  };
+};
+
+struct VoxelVoronoiAssignInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{voxel_sdf_shader_file_string},
+      .compile_options = {
+          .entry_point = entry_voxel_voronoi_assign,
+          .required_subgroup_size = SUBGROUP_SIZE,
+      },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(VoxelFracturePushConstants),
+      .name = voxel_voronoi_assign_pipeline_name,
   };
 };
 

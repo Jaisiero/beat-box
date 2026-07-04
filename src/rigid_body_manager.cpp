@@ -28,6 +28,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_VSB_INERTIA = task_manager->create_compute(VoxelInertiaReduceInfo{}.info);
     pipeline_VSB_PRIMS = task_manager->create_compute(VoxelPrimsBuildInfo{}.info);
     pipeline_VFR_CARVE = task_manager->create_compute(VoxelCarveInfo{}.info);
+    pipeline_VFR_VORONOI = task_manager->create_compute(VoxelVoronoiAssignInfo{}.info);
     pipeline_VFR_FLOOD_INIT = task_manager->create_compute(VoxelFloodInitInfo{}.info);
     pipeline_VFR_FLOOD_STEP = task_manager->create_compute(VoxelFloodStepInfo{}.info);
     pipeline_RBLBVHGH = task_manager->create_compute(RigidBodyGenerateHierarchyLinearBVHInfo{}.info);
@@ -280,6 +281,13 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
           .name = "fracture_events",
       });
       *device.buffer_host_address_as<FractureEventBuffer>(fracture_events_buffer).value() = FractureEventBuffer{};
+      // FRACTURE Voronoi sites: host writes up to BB_MAX_FRACTURE_SITES grid-space positions
+      // per event; the voronoi-assign kernel reads them
+      fracture_sites_buffer = device.create_buffer({
+          .size = sizeof(daxa_f32vec4) * BB_MAX_FRACTURE_SITES,
+          .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+          .name = "fracture_sites",
+      });
     }
     *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[i]).value() = SimConfig{
         .solver_type = renderer_manager->get_solver(),
@@ -1916,6 +1924,7 @@ void RigidBodyManager::destroy()
   }
   if (!voxel_derived.is_empty()) { device.destroy_buffer(voxel_derived); voxel_derived = {}; }
   if (!fracture_events_buffer.is_empty()) { device.destroy_buffer(fracture_events_buffer); fracture_events_buffer = {}; }
+  if (!fracture_sites_buffer.is_empty()) { device.destroy_buffer(fracture_sites_buffer); fracture_sites_buffer = {}; }
 
   initialized = false;
 }
@@ -2300,18 +2309,31 @@ void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shap
 }
 
 void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 carve_center_grid, daxa_f32 carve_radius_grid,
+                                       std::vector<daxa_f32vec4> const &sites, daxa_f32 voronoi_radius_grid,
                                        std::vector<daxa_u32> &out_occ_words, std::vector<daxa_u32> &out_labels)
 {
   if (!initialized) { return; }
   daxa_u32 const cells = shape.dims.x * shape.dims.y * shape.dims.z;
   daxa_u32 const words = (cells + 31u) / 32u;
+  daxa_u32 const site_count = std::min<daxa_u32>((daxa_u32)sites.size(), BB_MAX_FRACTURE_SITES);
+  bool const use_voronoi = site_count > 0u;
+  if (use_voronoi)
+  {
+    std::memcpy(device.buffer_host_address_as<daxa_f32vec4>(fracture_sites_buffer).value(),
+                sites.data(), site_count * sizeof(daxa_f32vec4));
+  }
   VoxelFracturePushConstants pc = {
       .occupancy_addr = device.device_address(voxel_occupancy).value(),
       .labels_addr = device.device_address(voxel_sdf_scratch[0]).value(),
+      .site_labels_addr = device.device_address(voxel_sdf_scratch[1]).value(),
+      .site_pos_addr = device.device_address(fracture_sites_buffer).value(),
       .cell_dims = shape.dims,
       .occ_offset = shape.occ_offset,
       .carve_center = carve_center_grid,
       .carve_radius = carve_radius_grid,
+      .voronoi_radius = voronoi_radius_grid,
+      .site_count = site_count,
+      .use_voronoi = use_voronoi ? 1u : 0u,
   };
   auto rec = device.create_command_recorder({});
   auto const barrier = [&rec]() {
@@ -2324,6 +2346,14 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 car
   if (carve_radius_grid > 0.0f)
   {
     rec.set_pipeline(*pipeline_VFR_CARVE);
+    rec.push_constant(pc);
+    rec.dispatch({.x = groups, .y = 1, .z = 1});
+    barrier();
+  }
+  if (use_voronoi)
+  {
+    // nearest-site assignment (reads the post-carve occupancy) before the flood
+    rec.set_pipeline(*pipeline_VFR_VORONOI);
     rec.push_constant(pc);
     rec.dispatch({.x = groups, .y = 1, .z = 1});
     barrier();

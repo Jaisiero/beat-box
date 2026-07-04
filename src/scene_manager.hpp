@@ -661,9 +661,9 @@ public:
   }
 
   void push_voxel_body(VoxelShapeBuild const &s, daxa_f32vec3 pos, Quaternion rot, daxa_u32 mat, f32 friction,
-                       f32 fracture_impulse = 0.0f)
+                       f32 fracture_impulse = 0.0f, daxa_u32 fracture_material = 0u)
   {
-    rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY), .primitive_count = s.primitive_count, .primitive_offset = 0, .shape_index = s.shape_id, .position = pos, .rotation = rot, .minimum = s.minimum, .maximum = s.maximum, .mass = s.mass, .inv_mass = 1.0f / s.mass, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = s.inv_inertia, .restitution = 0.0f, .friction = friction, .fracture_impulse = fracture_impulse});
+    rigid_bodies.push_back({.flags = (RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY), .primitive_count = s.primitive_count, .primitive_offset = 0, .shape_index = s.shape_id, .position = pos, .rotation = rot, .minimum = s.minimum, .maximum = s.maximum, .mass = s.mass, .inv_mass = 1.0f / s.mass, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = s.inv_inertia, .restitution = 0.0f, .friction = friction, .fracture_impulse = fracture_impulse, .fracture_material = fracture_material});
     rigid_bodies.back().material_index = mat;
   }
 
@@ -1000,6 +1000,51 @@ public:
     }
   }
 
+  // FRACTURE material showcase: STONE vs WOOD. Two pairs of identical beams, same strength,
+  // same anvil drop - the ONLY difference is fracture_material, so the fragment PATTERN is
+  // isolated: stone (grey) shatters into an isotropic cloud of chunks; wood (brown) splits
+  // into a few long shards running along the grain (its longest axis). Voronoi-seeded.
+  void scene_10() {
+    materials = {
+      { .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),    .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },   // 0 floor
+      { .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),    .emission = daxa_f32vec3(18.0f, 18.0f, 18.0f) },// 1 light
+      { .albedo = daxa_f32vec3(0.62f, 0.64f, 0.67f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },   // 2 stone grey
+      { .albedo = daxa_f32vec3(0.55f, 0.32f, 0.13f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },   // 3 wood brown
+      { .albedo = daxa_f32vec3(0.30f, 0.08f, 0.06f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },   // 4 static anvil
+    };
+    auto const Q = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    auto const I0 = daxa_mat3_from_glm_mat3(glm::mat3(0));
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Q, .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.7f});
+    auto light = RigidBody{.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 24.0f, 14.0f), .rotation = Q, .minimum = daxa_f32vec3(-11.0f, -0.2f, -6.0f), .maximum = daxa_f32vec3(11.0f, 0.2f, 6.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.6f};
+    light.material_index = 1u;
+    rigid_bodies.push_back(light);
+
+    f32 const vs = 0.5f;
+    f32 const density = 2.0f;
+    // a chunky block (10 x 4 x 4 = 160 voxels, 5 x 2 x 2 world), grain (longest axis) = x =
+    // screen-horizontal, so wood shards run visibly side-on. The 4x4 cross-section gives the
+    // Voronoi room to make a real isotropic cloud for stone (a thin beam's cells were too
+    // small and got culled as debris).
+    auto beam = build_voxel_shape(glm::uvec3(10, 4, 4), vs, density,
+        [](u32, u32, u32) { return true; });
+    f32 const strength = 70.0f; // both materials break fully; only the fragment PATTERN differs
+
+    // one WOOD column + one STONE column, well separated (the 7-long beams must not overlap
+    // at spawn) and staggered in height so the two impacts land one at a time (a fracture
+    // respawn disturbs any impact in flight). mat kind: 0 = stone, 1 = wood.
+    struct Col { f32 x; daxa_u32 mat_idx; daxa_u32 kind; f32 drop_y; };
+    Col const cols[2] = {
+        {-6.0f, 3u, 1u, 10.0f},  // wood (brown)
+        { 6.0f, 2u, 0u, 15.0f},  // stone (grey)
+    };
+    for (auto const &c : cols)
+    {
+      rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(c.x, 0.75f, 14.0f), .rotation = Q, .minimum = daxa_f32vec3(-0.7f, -0.75f, -0.9f), .maximum = daxa_f32vec3(0.7f, 0.75f, 0.9f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.7f});
+      rigid_bodies.back().material_index = 4u; // anvil
+      push_voxel_body(beam, daxa_f32vec3(c.x, c.drop_y, 14.0f), Q, c.mat_idx, 0.7f, strength, c.kind);
+    }
+  }
+
   // F3: data-driven scene from a text file (BB_SCENE_FILE=path). One dynamic cube per line:
   //   px py pz [half_extent] [mass] [restitution] [friction]   (# comments and blank lines ignored)
   // A floor + an emissive light panel are added automatically; the common load_scene() post-pass fills
@@ -1300,7 +1345,8 @@ public:
                                              (lp.z - shape.grid_origin.z) / vs);
     // impulse-scaled crater: a harder hit breaks more (radius in cells; clamped so a big
     // overshoot chips instead of pulverizing - the pulverization clamp refuses total loss)
-    f32 const carve_r = std::clamp(1.0f + 0.6f * (ev.impulse / body.fracture_impulse), 1.6f, 2.6f);
+    f32 const overkill = ev.impulse / std::max(body.fracture_impulse, 1e-3f); // >=1 (it fired)
+    f32 const carve_r = std::clamp(1.0f + 0.6f * overkill, 1.6f, 2.6f);
 
     // capture per-voxel mass + parent kinematics BEFORE anything changes
     daxa_u32 const old_count = (daxa_u32)voxel_shape_prims[shape_i].size();
@@ -1310,9 +1356,51 @@ public:
                              glm::vec3(-shape.grid_origin.x, -shape.grid_origin.y, -shape.grid_origin.z),
                              body.position, body.rotation, body.velocity, body.omega};
 
-    // GPU: carve + connected-component labels; tiny readbacks for the bookkeeping
+    // VORONOI FRAGMENT SEEDING (material-driven). The impact zone (within vor_r of the hit)
+    // is partitioned along these sites -> many fragments; beyond it stays one piece. Harder
+    // hits shatter a bigger zone. STONE = an isotropic cloud (chunks); WOOD = sites strung
+    // along the grain (the longest grid axis) -> long shards. Deterministic per event (seed
+    // = body id + impulse bits) so the showcase is reproducible without touching scene RNG.
+    f32 const vor_r = std::clamp(carve_r * (1.4f + 0.5f * overkill), carve_r + 1.0f, 6.0f);
+    std::vector<daxa_f32vec4> sites;
+    {
+      daxa_u32 salt = 0u; std::memcpy(&salt, &ev.impulse, sizeof(salt));
+      std::mt19937 rng(body.id * 2654435761u ^ salt);
+      std::uniform_real_distribution<f32> u(-1.0f, 1.0f);
+      if (body.fracture_material == 1u) // WOOD: long shards ALONG the grain
+      {
+        // grain = the longest grid axis; shards RUN along it, so the sites (= Voronoi cell
+        // seeds) spread across the PERPENDICULAR cross-section, all at ~the impact's grain
+        // coordinate. Each cell then extends along the grain → a long sliver.
+        u32 const grain = (dims.x >= dims.y && dims.x >= dims.z) ? 0u : (dims.y >= dims.z ? 1u : 2u);
+        u32 const p1 = (grain + 1u) % 3u, p2 = (grain + 2u) % 3u;
+        u32 const K = std::clamp<u32>((u32)std::lround(overkill * 1.2), 2u, 6u);
+        f32 const gc[3] = {grid_c.x, grid_c.y, grid_c.z};
+        for (u32 i = 0u; i < K; ++i)
+        {
+          f32 const ang = 6.2831853f * (f32)i / (f32)K;
+          f32 p[3] = {gc[0], gc[1], gc[2]};
+          p[p1] += std::cos(ang) * vor_r * 0.6f + u(rng) * 0.4f; // spread across the section
+          p[p2] += std::sin(ang) * vor_r * 0.6f + u(rng) * 0.4f;
+          p[grain] += u(rng) * 0.4f;                              // shards stay grain-aligned
+          sites.push_back(daxa_f32vec4(p[0], p[1], p[2], 0.0f));
+        }
+      }
+      else // STONE: isotropic cloud of chunks
+      {
+        u32 const K = std::clamp<u32>((u32)std::lround(overkill * 3.0), 3u, 12u);
+        for (u32 i = 0u; i < K; ++i)
+        {
+          f32 d[3];
+          do { d[0] = u(rng); d[1] = u(rng); d[2] = u(rng); } while (d[0]*d[0] + d[1]*d[1] + d[2]*d[2] > 1.0f);
+          sites.push_back(daxa_f32vec4(grid_c.x + d[0]*vor_r*0.8f, grid_c.y + d[1]*vor_r*0.8f, grid_c.z + d[2]*vor_r*0.8f, 0.0f));
+        }
+      }
+    }
+
+    // GPU: carve + Voronoi assign + constrained connected-component labels; tiny readbacks
     std::vector<daxa_u32> occ_words, labels;
-    rigid_body_manager->carve_and_label(shape, grid_c, carve_r, occ_words, labels);
+    rigid_body_manager->carve_and_label(shape, grid_c, carve_r, sites, vor_r, occ_words, labels);
 
     // component census (labels are min cell indices -> deterministic identities)
     std::map<daxa_u32, daxa_u32> comp_counts;
@@ -1331,6 +1419,12 @@ public:
     std::sort(comps.begin(), comps.end(), [](auto const &a, auto const &b) {
       return a.second != b.second ? a.second > b.second : a.first < b.first;
     });
+    // DEBRIS THRESHOLD: Voronoi shatter produces stray 1-2 voxel slivers whose inertia is
+    // near-degenerate — they wedge and read as standing interpenetration (deep200), and
+    // clutter the body/pool budget. Drop them below MIN_FRAG voxels: their occupancy is not
+    // written to any shape, so they simply vanish (dust). The largest component (comps[0])
+    // is ALWAYS kept regardless of size, so a body never disappears entirely.
+    daxa_u32 const MIN_FRAG = 3u;
 
     auto write_component = [&](daxa_u32 occ_offset, daxa_u32 label) {
       for (daxa_u32 w = 0u; w < words; ++w) { voxel_occ_cpu[occ_offset + w] = 0u; }
@@ -1349,6 +1443,7 @@ public:
     // the rest become fragment shapes + bodies (same dims: no re-indexing, tiny slices)
     for (size_t k = 1; k < comps.size(); ++k)
     {
+      if (comps[k].second < MIN_FRAG) { continue; } // debris: too small to be its own body
       if (pools_full() || rigid_bodies.size() >= MAX_RIGID_BODY_COUNT)
       {
         std::cerr << "FRACTURE: pools/bodies full, fragment dropped" << std::endl;
@@ -1562,7 +1657,8 @@ public:
         case 6: scene_6(); break; // deterministic stability probe (rests + stacks; fresh/pen 0/single-digit)
         case 7: scene_7(); break; // box pool: 432 cubes rain into the pit (all must settle and sleep)
         case 8: scene_8(); break; // single-cube free-fall A/B (AVBD vs TGS time-to-floor)
-        case 9: scene_9(); break; // FRACTURE showcase: strength-coded towers + projectiles
+        case 9: scene_9(); break; // FRACTURE showcase: strength-coded beams on anvils
+        case 10: scene_10(); break; // FRACTURE material showcase: stone (chunks) vs wood (shards)
         default: scene_6(); break;
       }
     }
@@ -1718,7 +1814,7 @@ public:
     {
       return false;
     }
-    if (n < 1 || n > 9)
+    if (n < 1 || n > 10)
     {
       std::cerr << "SCENE: ignoring out-of-range scene " << n << std::endl;
       return false;

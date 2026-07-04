@@ -1,2 +1,4 @@
 # F9 live dump: px py pz [h m e fr qx qy qz qw] / vox <shape> px py pz qx qy qz qw
-0 5.99727 14 0.5 5 0 0.6 0 0 0 1
+vox l -9 8.99727 14 0 0 0 1
+vox l 0 13.9973 14 0 0 0 1
+vox l 9 18.9973 14 0 0 0 1

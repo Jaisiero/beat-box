@@ -183,9 +183,13 @@ void InputManager::on_key(i32 key, i32 action)
   case GLFW_KEY_F9:
     if (action == GLFW_PRESS) { status_mngr->request_dump(); }
     break;
-  // F10: fracture showcase (scene 9). F9 is the pose dump, so the 9th scene lands on F10.
+  // F10: fracture strength showcase (scene 9). F9 is the pose dump, so scene 9 lands on F10.
   case GLFW_KEY_F10:
     if (action == GLFW_PRESS) { status_mngr->request_scene(9); status_mngr->reset_accumulation_count(); }
+    break;
+  // F11: fracture material showcase (scene 10) — stone chunks vs wood shards
+  case GLFW_KEY_F11:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(10); status_mngr->reset_accumulation_count(); }
     break;
   case GLFW_KEY_7:
     if (action == GLFW_PRESS)

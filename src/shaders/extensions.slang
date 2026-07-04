@@ -37,7 +37,8 @@ void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
   dst->inv_inertia[2][2] = src->inv_inertia[2][2];
   dst->restitution = src->restitution;
   dst->friction = src->friction;
-  dst->fracture_impulse = src->fracture_impulse; // fracture threshold rides the reorder too
+  dst->fracture_impulse = src->fracture_impulse;   // fracture threshold rides the reorder too
+  dst->fracture_material = src->fracture_material;  // ... and its material kind (fragment pattern)
 }
 
 // review v2 #5: Contact and Manifold are POD, so a whole-struct assignment copies EVERY field

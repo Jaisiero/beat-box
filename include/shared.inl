@@ -376,11 +376,15 @@ struct RigidBody
   daxa_f32mat3x3 inv_inertia;
   daxa_f32 restitution;
   daxa_f32 friction;
-  // FRACTURE (MVP): impact-impulse threshold (kg*m/s) above which this body fractures at
-  // the contact. 0 = unbreakable (every legacy scene body). The classifier is the impact
-  // pass: it already computes each contact row's stopping impulse, so a fracture event is
-  // one comparison there.
+  // FRACTURE: impact-impulse threshold (kg*m/s) above which this body fractures at the
+  // contact. 0 = unbreakable (every legacy scene body). The classifier is the impact pass:
+  // it already computes each contact row's stopping impulse, so a fracture event is one
+  // comparison there.
   daxa_f32 fracture_impulse;
+  // FRACTURE material kind, drives the fragment PATTERN (host reads it when seeding Voronoi
+  // sites): 0 = stone (isotropic cloud of sites -> many chunks), 1 = wood (few sites strung
+  // along the grain / longest grid axis -> long shards). Strength stays independent above.
+  daxa_u32 fracture_material;
   // TODO: Add more rigid body properties
   // daxa_f32 drag;
   // daxa_f32 angular_drag;
@@ -909,9 +913,13 @@ static const daxa::u32 BIT_SHIFT = BITS / ITERATIONS; // 8
 
 static const daxa_u32 BB_MAX_RIGID_BODY_COUNT = 1024;
 // voxel shapes (prototype scale: grids up to ~32 per axis)
-static const daxa_u32 BB_MAX_VOXEL_SHAPE_COUNT = 64;
+// raised for FRACTURE: each Voronoi shatter spawns many fragment shapes (each an
+// independent shape slice), so the shape pool + its derived buffer must hold them. The
+// occ/surf/sdf pools are shared byte pools with headroom; the append-only fracture path
+// guards them loudly (FRACTURE: pools full). Recycling dead slots = phase 2.
+static const daxa_u32 BB_MAX_VOXEL_SHAPE_COUNT = 512;
 static const daxa_u32 BB_MAX_VOXEL_OCC_U32S = 16384;   // shared occupancy bit pool (u32s)
-static const daxa_u32 BB_MAX_VOXEL_SURF_COUNT = 16384; // shared surface-voxel pool (packed u32)
+static const daxa_u32 BB_MAX_VOXEL_SURF_COUNT = 32768; // shared surface-voxel pool (packed u32)
 static const daxa_u32 BB_MAX_VOXEL_SDF_F32S = 65536;   // shared NODE signed-distance pool (f32,
                                                         // (dims+1)^3 nodes per shape)
 // MEASURED BUDGETS (opt round 2, F2 philosophy - budget to observed reality, keep the
@@ -1319,18 +1327,28 @@ struct VoxelShapeDerived
   daxa_f32mat3x3 unit_inertia; // about the CoM, own-cube term included
 };
 
-// FRACTURE kernels (voxel_sdf.slang): carve + connected-components labelling, raw
-// addresses like the pool-build passes (one-off dispatches from the host orchestrator).
-// Labels live in the EDT scratch buffer (voxel_sdf_scratch[0] as u32s - both are
-// fracture-rate one-off users, never concurrent).
+// FRACTURE kernels (voxel_sdf.slang): carve + Voronoi assign + connected-components
+// labelling, raw addresses like the pool-build passes (one-off dispatches from the host
+// orchestrator). Labels live in the EDT scratch buffer (voxel_sdf_scratch[0] as u32s) and
+// per-cell Voronoi site indices in scratch[1] - all fracture-rate one-off users, never
+// concurrent with the EDT build.
+static const daxa_u32 BB_MAX_FRACTURE_SITES = 32;
 struct VoxelFracturePushConstants
 {
   daxa_u64 occupancy_addr;
-  daxa_u64 labels_addr;      // u32 per cell of the target shape
+  daxa_u64 labels_addr;      // u32 per cell of the target shape (connected-component label)
+  daxa_u64 site_labels_addr; // u32 per cell: nearest Voronoi site index (scratch[1]); the
+                             // flood only merges neighbors sharing a site, so fragments =
+                             // connected regions of one Voronoi cell
+  daxa_u64 site_pos_addr;    // BB_MAX_FRACTURE_SITES float4 site positions (xyz grid, w unused)
   daxa_u32vec3 cell_dims;
   daxa_u32 occ_offset;
   daxa_f32vec3 carve_center; // grid units (cell coords)
   daxa_f32 carve_radius;     // grid units
+  daxa_f32 voronoi_radius;   // cells within this of carve_center get a site; beyond = one
+                             // shared "remainder" cell so only the impact zone shatters
+  daxa_u32 site_count;       // number of active sites (0 = no Voronoi: legacy 2-way split)
+  daxa_u32 use_voronoi;      // flood-step honors site boundaries when nonzero
 };
 
 // GENERATE HIERARCHY LBVH
