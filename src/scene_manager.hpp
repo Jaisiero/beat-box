@@ -1119,7 +1119,7 @@ public:
       float px, py, pz; float h = 0.5f, m = 5.0f, e = 0.0f, fr = 0.6f, tmp;
       if (!(ss >> px >> py >> pz)) { continue; }
       if (ss >> tmp) h = tmp;  if (ss >> tmp) m = tmp;  if (ss >> tmp) e = tmp;  if (ss >> tmp) fr = tmp;
-      // optional rotation (F9 live dumps append it): px py pz h m e fr qx qy qz qw
+      // optional rotation (F12 live dumps append it): px py pz h m e fr qx qy qz qw
       Quaternion cq = Q;
       float cqx, cqy, cqz, cqw;
       if (ss >> cqx >> cqy >> cqz >> cqw) { cq = Quaternion(cqx, cqy, cqz, cqw).normalize(); }
@@ -1146,18 +1146,18 @@ public:
     std::cout << "[SCENE] BB_SCENE_DUMP wrote " << n << " bodies to '" << path << "'" << std::endl;
   }
 
-  // F9: dump the LIVE GPU poses (current-parity rigid body buffer) in BB_SCENE_FILE format.
+  // F12: dump the LIVE GPU poses (current-parity rigid body buffer) in BB_SCENE_FILE format.
   // Voxel bodies dump as `vox <name> pos quat` (shape_index 1/2/3 = l/cross/frame, the same
   // order scene_5 and the file loader build them); cubes dump with their rotation appended.
-  // This is the capture half of the repro loop: see the bad configuration -> F9 -> load the
+  // This is the capture half of the repro loop: see the bad configuration -> F12 -> load the
   // file headless with BB_SCENE_FILE and debug the exact state. CPU-side by design (debug
   // tooling; the sim itself stays GPU-resident).
   void dump_scene_live(std::string const &path)
   {
     daxa_u32 const count = rigid_body_count;
-    if (count == 0u) { std::cerr << "F9 dump: no bodies" << std::endl; return; }
+    if (count == 0u) { std::cerr << "F12 dump: no bodies" << std::endl; return; }
     daxa::BufferId src = accel_struct_mngr->get_rigid_body_buffer();
-    if (src.is_empty()) { std::cerr << "F9 dump: rigid body buffer not ready" << std::endl; return; }
+    if (src.is_empty()) { std::cerr << "F12 dump: rigid body buffer not ready" << std::endl; return; }
     auto const size = static_cast<daxa::usize>(count) * sizeof(RigidBody);
     daxa::BufferId staging = device.create_buffer({
         .size = size,
@@ -1175,11 +1175,11 @@ public:
     std::ofstream out(path, std::ios::trunc);
     if (!out)
     {
-      std::cerr << "F9 dump: cannot open '" << path << "'" << std::endl;
+      std::cerr << "F12 dump: cannot open '" << path << "'" << std::endl;
       device.destroy_buffer(staging);
       return;
     }
-    out << "# F9 live dump: px py pz [h m e fr qx qy qz qw] / vox <shape> px py pz qx qy qz qw\n";
+    out << "# F12 live dump: px py pz [h m e fr qx qy qz qw] / vox <shape> px py pz qx qy qz qw\n";
     daxa_u32 n = 0u;
     for (daxa_u32 i = 0u; i < count; ++i)
     {
@@ -1201,7 +1201,7 @@ public:
       ++n;
     }
     device.destroy_buffer(staging);
-    std::cout << "[SCENE] F9 live dump wrote " << n << " bodies to '" << path << "'" << std::endl;
+    std::cout << "[SCENE] F12 live dump wrote " << n << " bodies to '" << path << "'" << std::endl;
   }
 
   // ================================ FRACTURE (MVP) ================================
@@ -1240,7 +1240,7 @@ public:
 
   // Pull the LIVE GPU body states into the host vector (the host holds the SPAWN state by
   // design - see reset()). Without this, the fracture respawn would teleport the whole
-  // scene back to its initial placement. Same mechanism as the F9 live dump.
+  // scene back to its initial placement. Same mechanism as the F12 live dump.
   bool sync_live_bodies()
   {
     daxa_u32 const count = rigid_body_count;
@@ -1609,7 +1609,7 @@ public:
       return false;
     }
 
-    // Headless scene selection: BB_SCENE=N picks the launch scene ONCE (startup only, so F1-F8
+    // Headless scene selection: BB_SCENE=N picks the launch scene ONCE (startup only, so F1-F10
     // switch_scene() still works). Lets a headless run / A-B measure any scene, not just the default.
     {
       static bool bb_scene_applied = false;
@@ -1636,11 +1636,11 @@ public:
     // campaign). Change the constant to explore different pilings.
     gen = std::mt19937(0xBEA7B0C5u);
 
-    // Scene dispatch by current_scene (set at startup default + switched at runtime via F1-F8).
+    // Scene dispatch by current_scene (set at startup default + switched at runtime via F1-F10).
     // scene_1 .. scene_8 are compile-time builders; switch_scene() resets the host state so a
     // different builder can repopulate the shared vectors.
     // F3: BB_SCENE_FILE=path loads a data-driven scene from a text file instead of a compile-time
-    // builder (no rebuild needed to iterate on a repro scene). F1-F8 still switch the built-in scenes.
+    // builder (no rebuild needed to iterate on a repro scene). F1-F10 still switch the built-in scenes.
     if (char const *scene_file = bb_getenv("BB_SCENE_FILE"))
     {
       scene_from_file(scene_file);
@@ -1804,10 +1804,10 @@ public:
     return true;
   }
 
-  // Switch to a different scene at runtime (F1-F8): tear down the host-side scene state, rebuild
+  // Switch to a different scene at runtime (F1-F10): tear down the host-side scene state, rebuild
   // from scene_N(), and pause (like reset). The scene_N() builders push_back into the shared
   // vectors and assume them empty + load_scene() accumulates ids/counts/lights, so everything that
-  // accumulates must be cleared here before re-running load_scene(). n is 1..8.
+  // accumulates must be cleared here before re-running load_scene(). n is 1..10.
   bool switch_scene(int n)
   {
     if (!initialized)
@@ -1897,7 +1897,7 @@ private:
   daxa_u32 id_generator = 0;
   daxa_u32 rigid_body_count = 0;
   daxa_u32 rigid_body_active_count = 0;
-  // active scene (1..8); load_scene() dispatches on it, switch_scene() (F1-F8) changes it. Default
+  // active scene (1..10); load_scene() dispatches on it, switch_scene() (F1-F10) changes it. Default
   // is scene_7 (the 432-cube rain pool) — the pre-switch hardcoded boot scene, which the harness
   // and benchmarks assume. Change this initializer to pick a different launch scene.
   int current_scene = 7;

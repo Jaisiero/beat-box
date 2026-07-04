@@ -178,18 +178,18 @@ void InputManager::on_key(i32 key, i32 action)
   case GLFW_KEY_F8:
     if (action == GLFW_PRESS) { status_mngr->request_scene(8); status_mngr->reset_accumulation_count(); }
     break;
-  // F9: dump the LIVE GPU poses to scene_dump.txt (BB_SCENE_FILE format, incl. voxel bodies
-  // with rotation) - capture the exact configuration on screen for offline reproduction
+  // F9: fracture strength showcase (scene 9)
   case GLFW_KEY_F9:
-    if (action == GLFW_PRESS) { status_mngr->request_dump(); }
-    break;
-  // F10: fracture strength showcase (scene 9). F9 is the pose dump, so scene 9 lands on F10.
-  case GLFW_KEY_F10:
     if (action == GLFW_PRESS) { status_mngr->request_scene(9); status_mngr->reset_accumulation_count(); }
     break;
-  // F11: fracture material showcase (scene 10) — stone chunks vs wood shards
-  case GLFW_KEY_F11:
+  // F10: fracture material showcase (scene 10) — stone chunks vs wood shards
+  case GLFW_KEY_F10:
     if (action == GLFW_PRESS) { status_mngr->request_scene(10); status_mngr->reset_accumulation_count(); }
+    break;
+  // F12: dump the LIVE GPU poses to scene_dump.txt (BB_SCENE_FILE format, incl. voxel bodies
+  // with rotation) - capture the exact configuration on screen for offline reproduction
+  case GLFW_KEY_F12:
+    if (action == GLFW_PRESS) { status_mngr->request_dump(); }
     break;
   case GLFW_KEY_7:
     if (action == GLFW_PRESS)

@@ -355,7 +355,7 @@ int RendererManager::render()
   daxa_u64 assert_after = 60u;
   if (const char *e = std::getenv("BB_ASSERT_AFTER")) assert_after = static_cast<daxa_u64>(std::atoll(e));
   int metrics_exit_code = 0;
-  // BB_DUMP_AT_SECONDS=N: headless F9 - dump the LIVE poses once, N seconds into the run
+  // BB_DUMP_AT_SECONDS=N: headless F12 - dump the LIVE poses once, N seconds into the run
   // (no window focus needed; SendKeys-based captures race against the user's foreground)
   double dump_at_s = -1.0;
   if (const char *e = std::getenv("BB_DUMP_AT_SECONDS")) dump_at_s = std::atof(e);
@@ -404,7 +404,7 @@ int RendererManager::render()
       force_sim_step = true;
     }
 
-    // live scene dump request (F9): capture the CURRENT GPU poses to a scene file at this
+    // live scene dump request (F12): capture the CURRENT GPU poses to a scene file at this
     // frame boundary (safe to one-off copy + wait here; it's a debug capture path)
     if (status_manager->consume_dump()) {
       scene_manager->dump_scene_live("scene_dump.txt");
