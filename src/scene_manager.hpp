@@ -18,6 +18,57 @@
 
 BB_NAMESPACE_BEGIN
 
+// FRACTURE memory pool (phase 1): a bucket free-list of OFFSETS into a shared backing
+// vector. Fracture fragments inherit the parent's dims, so freed slices come back in a
+// handful of repeating sizes - a per-size free stack recycles them with O(1) alloc/free
+// and zero fragmentation within a size class. The backing vector only ever grows to the
+// high-water mark; freed ranges become holes reused in place (never read by any live
+// shape, so stale hole data is harmless). Phase 2 swaps this for a coalescing free-list
+// to support variable-dimension (cropped-to-bbox) fragments. Offsets, not pointers, so it
+// survives the vector reallocating on growth.
+struct BucketPool
+{
+  daxa_u32 high_water = 0;                                  // next fresh offset (== backing size)
+  std::map<daxa_u32, std::vector<daxa_u32>> free_by_size;   // size class -> reusable offsets
+  daxa_u32 live_bytes = 0;                                  // sum of live allocation sizes (diagnostic)
+
+  // returns an offset for `size` slots, or MAX_U32 if the cap would be exceeded. ok reports success.
+  daxa_u32 alloc(daxa_u32 size, daxa_u32 cap, bool &ok)
+  {
+    live_bytes += size;
+    auto it = free_by_size.find(size);
+    if (it != free_by_size.end() && !it->second.empty())
+    {
+      daxa_u32 off = it->second.back();
+      it->second.pop_back();
+      ok = true;
+      return off;
+    }
+    if (high_water + size > cap) { ok = false; live_bytes -= size; return 0xFFFFFFFFu; }
+    daxa_u32 off = high_water;
+    high_water += size;
+    ok = true;
+    return off;
+  }
+  void free(daxa_u32 off, daxa_u32 size)
+  {
+    free_by_size[size].push_back(off);
+    live_bytes -= size;
+  }
+  bool can_alloc(daxa_u32 size, daxa_u32 cap) const
+  {
+    auto it = free_by_size.find(size);
+    if (it != free_by_size.end() && !it->second.empty()) { return true; }
+    return high_water + size <= cap;
+  }
+  void reset()
+  {
+    high_water = 0;
+    live_bytes = 0;
+    free_by_size.clear();
+  }
+};
+
 // getenv wrapper that silences MSVC C4996 for a read-only env lookup (this header is included by TUs
 // that don't #define _CRT_SECURE_NO_WARNINGS).
 inline char const *bb_getenv(char const *key)
@@ -1238,6 +1289,70 @@ public:
     daxa_f32vec3 parent_omega;
   };
 
+  // sync the pool high-water marks to the post-load vector sizes ONCE (the load path is a
+  // plain bump append; the allocators take over only for the runtime fracture path). Done
+  // lazily on the first fracture so it captures every load/switch_scene rebuild.
+  void sync_pools_if_needed()
+  {
+    if (pools_synced_) { return; }
+    occ_pool_.reset();  occ_pool_.high_water = (daxa_u32)voxel_occ_cpu.size();  occ_pool_.live_bytes = occ_pool_.high_water;
+    surf_pool_.reset(); surf_pool_.high_water = (daxa_u32)voxel_surf_cpu.size(); surf_pool_.live_bytes = surf_pool_.high_water;
+    sdf_pool_.reset();  sdf_pool_.high_water = (daxa_u32)voxel_sdf_cpu.size();  sdf_pool_.live_bytes = sdf_pool_.high_water;
+    free_shape_slots_.clear();
+    pools_synced_ = true;
+  }
+
+  // allocate `size` slots from a byte pool, growing (fresh) or clearing (reused hole) the
+  // backing vector to hold the returned offset. Returns MAX_U32 if the cap is exceeded.
+  template <class T>
+  daxa_u32 pool_alloc(std::vector<T> &vec, BucketPool &pool, daxa_u32 size, daxa_u32 cap, T fill)
+  {
+    bool ok = false;
+    daxa_u32 const off = pool.alloc(size, cap, ok);
+    if (!ok) { return 0xFFFFFFFFu; }
+    if ((size_t)off + size > vec.size()) { vec.resize((size_t)off + size, fill); }        // fresh: grow
+    else { std::fill(vec.begin() + off, vec.begin() + off + size, fill); }                 // reused hole: clear
+    return off;
+  }
+
+  // reserve a VoxelShape index (+ its parallel per-shape vectors), reusing a retired slot
+  // when available. The caller fills voxel_shape_cpu[idx] / prims / shape_private.
+  daxa_u32 alloc_shape_slot()
+  {
+    if (!free_shape_slots_.empty())
+    {
+      daxa_u32 const idx = free_shape_slots_.back();
+      free_shape_slots_.pop_back();
+      return idx;
+    }
+    voxel_shape_cpu.emplace_back();
+    voxel_shape_prims.emplace_back();
+    shape_private.push_back(false);
+    if (voxel_derived_cpu.size() < voxel_shape_cpu.size()) { voxel_derived_cpu.emplace_back(); }
+    return (daxa_u32)voxel_shape_cpu.size() - 1u;
+  }
+
+  // free a shape's byte-pool slices + its index back to the free lists (the slot's vectors
+  // are left in place; a future alloc_shape_slot reuses the index and overwrites them).
+  void retire_shape(daxa_u32 shape_i)
+  {
+    if (shape_i >= voxel_shape_cpu.size()) { return; }
+    VoxelShape const &s = voxel_shape_cpu[shape_i];
+    daxa_u32 const cells = s.dims.x * s.dims.y * s.dims.z;
+    daxa_u32 const words = (cells + 31u) / 32u;
+    daxa_u32 const nodes = (s.dims.x + 1u) * (s.dims.y + 1u) * (s.dims.z + 1u);
+    daxa_u32 const surf_slots = (daxa_u32)voxel_shape_prims[shape_i].size(); // fragment reserved = solid count... see note
+    occ_pool_.free(s.occ_offset, words);
+    sdf_pool_.free(s.sdf_offset, nodes);
+    // surf slices were reserved at `cells` for fracture shapes and `count` for load shapes;
+    // free by the size actually reserved. Fracture shapes (the only ones retired in phase 1)
+    // reserved `cells`, so free that. (Guarded: never frees a load shape here.)
+    surf_pool_.free(s.surf_offset, cells);
+    (void)surf_slots;
+    free_shape_slots_.push_back(shape_i);
+    voxel_shape_prims[shape_i].clear();
+  }
+
   // Pull the LIVE GPU body states into the host vector (the host holds the SPAWN state by
   // design - see reset()). Without this, the fracture respawn would teleport the whole
   // scene back to its initial placement. Same mechanism as the F12 live dump.
@@ -1294,11 +1409,14 @@ public:
     daxa_u32 const cells = dims.x * dims.y * dims.z;
     daxa_u32 const words = (cells + 31u) / 32u;
     daxa_u32 const nodes = (dims.x + 1u) * (dims.y + 1u) * (dims.z + 1u);
+    // capacity check against the recycling allocators (a freed hole of the right size
+    // counts as available, so a steady shatter-and-cull loop never trips this)
     auto pools_full = [&]() {
-      return voxel_shape_cpu.size() >= BB_MAX_VOXEL_SHAPE_COUNT ||
-             voxel_occ_cpu.size() + words > BB_MAX_VOXEL_OCC_U32S ||
-             voxel_surf_cpu.size() + cells > BB_MAX_VOXEL_SURF_COUNT ||
-             voxel_sdf_cpu.size() + nodes > BB_MAX_VOXEL_SDF_F32S;
+      bool const shape_ok = !free_shape_slots_.empty() || voxel_shape_cpu.size() < BB_MAX_VOXEL_SHAPE_COUNT;
+      return !(shape_ok &&
+               occ_pool_.can_alloc(words, BB_MAX_VOXEL_OCC_U32S) &&
+               surf_pool_.can_alloc(cells, BB_MAX_VOXEL_SURF_COUNT) &&
+               sdf_pool_.can_alloc(nodes, BB_MAX_VOXEL_SDF_F32S));
     };
 
     // CLONE-ON-FIRST-FRACTURE: load shapes are SHARED between bodies (scene_5 reuses one L
@@ -1312,20 +1430,20 @@ public:
         return false;
       }
       VoxelShape ns = voxel_shape_cpu[shape_i];
-      ns.occ_offset = (u32)voxel_occ_cpu.size();
-      ns.surf_offset = (u32)voxel_surf_cpu.size();
-      ns.sdf_offset = (u32)voxel_sdf_cpu.size();
-      std::vector<daxa_u32> occ_copy(voxel_occ_cpu.begin() + voxel_shape_cpu[shape_i].occ_offset,
-                                     voxel_occ_cpu.begin() + voxel_shape_cpu[shape_i].occ_offset + words);
-      voxel_occ_cpu.insert(voxel_occ_cpu.end(), occ_copy.begin(), occ_copy.end());
-      voxel_surf_cpu.resize(voxel_surf_cpu.size() + cells, 0u);
-      voxel_sdf_cpu.resize(voxel_sdf_cpu.size() + nodes, 0.0f);
-      voxel_shape_cpu.push_back(ns);
-      shape_private.push_back(true);
-      voxel_shape_prims.push_back(std::vector<Aabb>(voxel_shape_prims[shape_i].size(),
-                                                    Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0))));
-      body.shape_index = (u32)voxel_shape_cpu.size(); // 1-based
-      shape_i = (u32)voxel_shape_cpu.size() - 1u;
+      daxa_u32 const parent_prim_count = (daxa_u32)voxel_shape_prims[shape_i].size();
+      // snapshot the parent occupancy BEFORE allocating (pool_alloc may grow/realloc the vec)
+      std::vector<daxa_u32> occ_copy(voxel_occ_cpu.begin() + ns.occ_offset,
+                                     voxel_occ_cpu.begin() + ns.occ_offset + words);
+      ns.occ_offset = pool_alloc(voxel_occ_cpu, occ_pool_, words, BB_MAX_VOXEL_OCC_U32S, 0u);
+      ns.surf_offset = pool_alloc(voxel_surf_cpu, surf_pool_, cells, BB_MAX_VOXEL_SURF_COUNT, 0u);
+      ns.sdf_offset = pool_alloc(voxel_sdf_cpu, sdf_pool_, nodes, BB_MAX_VOXEL_SDF_F32S, 0.0f);
+      std::copy(occ_copy.begin(), occ_copy.end(), voxel_occ_cpu.begin() + ns.occ_offset);
+      daxa_u32 const nsi = alloc_shape_slot();
+      voxel_shape_cpu[nsi] = ns;
+      shape_private[nsi] = true;
+      voxel_shape_prims[nsi] = std::vector<Aabb>(parent_prim_count, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0)));
+      body.shape_index = nsi + 1u; // 1-based
+      shape_i = nsi;
       // the GPU pool doesn't have the clone yet: re-upload occupancy + records so the
       // carve kernel sees it (small pools; fracture-rate one-off)
       std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer()).value(),
@@ -1450,20 +1568,18 @@ public:
         break;
       }
       VoxelShape fs = shape;
-      fs.occ_offset = (u32)voxel_occ_cpu.size();
-      fs.surf_offset = (u32)voxel_surf_cpu.size();
-      fs.sdf_offset = (u32)voxel_sdf_cpu.size();
-      voxel_occ_cpu.resize(voxel_occ_cpu.size() + words, 0u);
-      voxel_surf_cpu.resize(voxel_surf_cpu.size() + cells, 0u);
-      voxel_sdf_cpu.resize(voxel_sdf_cpu.size() + nodes, 0.0f);
+      fs.occ_offset = pool_alloc(voxel_occ_cpu, occ_pool_, words, BB_MAX_VOXEL_OCC_U32S, 0u);
+      fs.surf_offset = pool_alloc(voxel_surf_cpu, surf_pool_, cells, BB_MAX_VOXEL_SURF_COUNT, 0u);
+      fs.sdf_offset = pool_alloc(voxel_sdf_cpu, sdf_pool_, nodes, BB_MAX_VOXEL_SDF_F32S, 0.0f);
       write_component(fs.occ_offset, comps[k].first);
-      voxel_shape_cpu.push_back(fs);
-      shape_private.push_back(true);
-      voxel_shape_prims.push_back(std::vector<Aabb>(comps[k].second, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0))));
+      daxa_u32 const fsi = alloc_shape_slot();
+      voxel_shape_cpu[fsi] = fs;
+      shape_private[fsi] = true;
+      voxel_shape_prims[fsi] = std::vector<Aabb>(comps[k].second, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0)));
 
       RigidBody frag = body; // inherit material/friction/restitution/strength/pose
       frag.id = id_generator++;
-      frag.shape_index = (u32)voxel_shape_cpu.size();
+      frag.shape_index = fsi + 1u;
       frag.primitive_count = comps[k].second;
       frag.primitive_offset = 0u;
       frag.island_index = MAX_U32;
@@ -1586,6 +1702,7 @@ public:
       n = BB_MAX_FRACTURE_EVENTS;
     }
     fracture_serial_seen = serial;
+    sync_pools_if_needed(); // capture the post-load high-water once, before the first alloc
     // live GPU state first: the respawn re-uploads the whole host vector
     if (!sync_live_bodies()) { return; }
     bool any = false;
@@ -1838,6 +1955,9 @@ public:
     voxel_derived_cpu.clear();
     shape_private.clear();
     fracture_serial_seen = 0;
+    occ_pool_.reset(); surf_pool_.reset(); sdf_pool_.reset();
+    free_shape_slots_.clear();
+    pools_synced_ = false; // re-sync to the new scene's post-load high-water on its first fracture
     rigid_body_manager->reset_fracture_events(); // stale serials from the old scene reference dead ids
     id_generator = 0;
     rigid_body_count = 0;
@@ -1917,6 +2037,14 @@ private:
   // last-consumed event serial (the GPU ring is never cleared)
   std::vector<bool> shape_private;
   daxa_u32 fracture_serial_seen = 0;
+  // FRACTURE memory pools (phase 1): recycle freed shape slices instead of append-only
+  // growth. high_water is synced to the post-load vector sizes so the LOAD path stays a
+  // plain bump (untouched, zero regression); only the fracture path allocs/frees through
+  // these. free_shape_slots_ recycles VoxelShape indices (and the parallel per-shape
+  // vectors) of retired shapes.
+  BucketPool occ_pool_, surf_pool_, sdf_pool_;
+  std::vector<daxa_u32> free_shape_slots_;
+  bool pools_synced_ = false;
 
   // Active rigid body buffer
   daxa::BufferId active_rigid_body_buffer;
