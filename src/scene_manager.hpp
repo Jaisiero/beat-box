@@ -942,6 +942,64 @@ public:
     rigid_bodies.back().material_index = 2u; // green
   }
 
+  // FRACTURE SHOWCASE: three voxel structures with material strength coded by color, each
+  // bombarded by a heavy projectile. Left green = weak (shatters), middle yellow = medium
+  // (cracks), right violet = strong (withstands the same hit). Projectiles are staggered in
+  // height so the impacts cascade in sequence. Strengths were CALIBRATED from the measured
+  // per-contact stopping-impulse demand at these masses/heights (see [FRACTURE] logs).
+  void scene_9() {
+    materials = {
+      { .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),   .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },  // 0 floor
+      { .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),   .emission = daxa_f32vec3(18.0f, 18.0f, 18.0f) }, // 1 light
+      { .albedo = daxa_f32vec3(0.15f, 0.95f, 0.15f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },  // 2 weak green
+      { .albedo = daxa_f32vec3(0.98f, 0.85f, 0.10f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },  // 3 medium yellow
+      { .albedo = daxa_f32vec3(0.60f, 0.10f, 0.95f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },  // 4 strong violet
+      { .albedo = daxa_f32vec3(0.55f, 0.57f, 0.60f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },  // 5 projectile steel
+      { .albedo = daxa_f32vec3(0.30f, 0.08f, 0.06f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },  // 6 static dark red
+    };
+
+    auto const Q = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    auto const I0 = daxa_mat3_from_glm_mat3(glm::mat3(0));
+    auto const I1 = daxa_mat3_from_glm_mat3(glm::mat3(1));
+    // floor (top at y=0) + wide emissive panel overhead
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Q, .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.7f});
+    auto light = RigidBody{.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 24.0f, 14.0f), .rotation = Q, .minimum = daxa_f32vec3(-11.0f, -0.2f, -6.0f), .maximum = daxa_f32vec3(11.0f, 0.2f, 6.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.6f};
+    light.material_index = 1u;
+    rigid_bodies.push_back(light);
+
+    f32 const vs = 0.5f;
+    f32 const density = 2.0f;
+    // thin BEAM (14 x 2 x 3 = 84 voxels, 7 x 1 x 1.5 world units). Each beam is DROPPED flat
+    // onto a small static ANVIL centered under it. A fracture fires with high demand only
+    // when the voxel body ITSELF slams an immovable object (something hitting a free-standing
+    // beam just makes it yield - measured demand ~5); the anvil concentrates the whole ~12
+    // m/s stop at the beam's center, and the crater punches clean through the thin (1-unit)
+    // beam → it SNAPS into a left and a right half that fall off the anvil (a real
+    // connected-components split). com at the geometric center → half-height 0.5.
+    auto beam = build_voxel_shape(glm::uvec3(14, 2, 3), vs, density,
+        [](u32, u32, u32) { return true; });
+
+    // three columns along x. strengths CALIBRATED to the measured anvil-drop demand: weak
+    // snaps and the halves re-shatter, medium snaps once, strong takes the hit and holds.
+    struct Col { f32 x; daxa_u32 mat; f32 strength; f32 drop_y; };
+    Col const cols[3] = {
+        {-9.0f, 2u, 18.0f,   9.0f},  // weak green
+        { 0.0f, 3u, 70.0f,  14.0f},  // medium yellow
+        { 9.0f, 4u, 250.0f, 19.0f},  // strong violet
+    };
+    for (auto const &c : cols)
+    {
+      // static anvil (dark red) poking up under the beam center — concentrates the impact
+      rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(c.x, 0.75f, 14.0f), .rotation = Q, .minimum = daxa_f32vec3(-0.7f, -0.75f, -0.9f), .maximum = daxa_f32vec3(0.7f, 0.75f, 0.9f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.7f});
+      rigid_bodies.back().material_index = 6u;
+      // beam dropped flat from a STAGGERED height (impacts land one at a time — a fracture
+      // respawn does a global AS+sim refresh that would disturb another impact in flight).
+      // All drops clear the ~12 m/s terminal clamp, so impact hardness is EQUAL across
+      // columns and the only variable is strength.
+      push_voxel_body(beam, daxa_f32vec3(c.x, c.drop_y, 14.0f), Q, c.mat, 0.7f, c.strength);
+    }
+  }
+
   // F3: data-driven scene from a text file (BB_SCENE_FILE=path). One dynamic cube per line:
   //   px py pz [half_extent] [mass] [restitution] [friction]   (# comments and blank lines ignored)
   // A floor + an emissive light panel are added automatically; the common load_scene() post-pass fills
@@ -1504,6 +1562,7 @@ public:
         case 6: scene_6(); break; // deterministic stability probe (rests + stacks; fresh/pen 0/single-digit)
         case 7: scene_7(); break; // box pool: 432 cubes rain into the pit (all must settle and sleep)
         case 8: scene_8(); break; // single-cube free-fall A/B (AVBD vs TGS time-to-floor)
+        case 9: scene_9(); break; // FRACTURE showcase: strength-coded towers + projectiles
         default: scene_6(); break;
       }
     }
@@ -1659,7 +1718,7 @@ public:
     {
       return false;
     }
-    if (n < 1 || n > 8)
+    if (n < 1 || n > 9)
     {
       std::cerr << "SCENE: ignoring out-of-range scene " << n << std::endl;
       return false;
