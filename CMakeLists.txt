@@ -58,14 +58,21 @@ endif()
 
 # Copy runtime shader sources/includes to the build output directory so the
 # pipeline manager can compile shaders when the executable is launched there.
+# PURGE the destinations first: copy_directory never removes foreign/stale files, and a
+# leftover file in the destination can SHADOW the real one through relative includes
+# (measured: a stale simulation/extensions.slang from an old tree silently supplied
+# copy_rigid_body_fields to every exe-dir launch for two weeks).
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -rf
+    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/include"
+    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/src/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${PROJECT_SOURCE_DIR}/include"
     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/include"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${PROJECT_SOURCE_DIR}/src/shaders"
     "$<TARGET_FILE_DIR:${PROJECT_NAME}>/src/shaders"
-    COMMENT "Copying runtime shader sources and includes to target directory..."
+    COMMENT "Copying runtime shader sources and includes to target directory (destinations purged first)..."
 )
 
 # Copy assets to the build output directory so they are available when running from there

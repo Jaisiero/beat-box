@@ -20,12 +20,14 @@
 $ErrorActionPreference = "Stop"
 $repo = Split-Path $PSScriptRoot -Parent
 
-$exe = Join-Path $repo "build\Release\RelWithDebInfo\beat-box.exe"
-if (-not (Test-Path $exe)) {
-  $exe = Get-ChildItem -Path (Join-Path $repo "build") -Filter "beat-box.exe" -Recurse -EA SilentlyContinue |
-         Select-Object -First 1 -ExpandProperty FullName
-}
+# ALWAYS pick the NEWEST built exe. The old hardcoded RelWithDebInfo preference silently
+# ran a stale binary once that config stopped being rebuilt - every gauntlet "PASS" then
+# validated old code while the actively developed Release build went untested.
+$exe = Get-ChildItem -Path (Join-Path $repo "build") -Filter "beat-box.exe" -Recurse -EA SilentlyContinue |
+       Sort-Object LastWriteTime -Descending |
+       Select-Object -First 1 -ExpandProperty FullName
 if (-not $exe -or -not (Test-Path $exe)) { Write-Error "beat-box.exe not found — build first."; exit 99 }
+Write-Host ("gauntlet exe: {0} ({1})" -f $exe, (Get-Item $exe).LastWriteTime)
 
 # scene table: calibrated deep200 limit + a short description (run time is uniform)
 $scenes = @(
