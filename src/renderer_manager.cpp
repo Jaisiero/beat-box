@@ -275,13 +275,22 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
     return false;
   }
 
+  // set_image/set_buffer WIPE daxa's cross-execution sync state (pre_graph_queue_bits and
+  // the general-layout flag) - the graph then re-initializes the image with src_access={}
+  // i.e. WITHOUT waiting for the previous frame's access, and records the correct state
+  // after every execution precisely so the next one can chain on it. Re-setting the SAME
+  // resource every frame defeats that: the trace could overwrite rt_target while the
+  // previous frame's upscale blit still reads it (tile-torn silhouettes during camera
+  // motion, only with BB_RENDER_SCALE<1 - at scale 1.0 the trace writes the rotating
+  // swapchain image). Only set when the backing resource actually changed (resize/reload).
+  // The swapchain image rotates every frame and its sync is acquire/present semaphores.
   task_swapchain_image.set_image(swapchain_image);
-  task_camera_buffer.set_buffer(cam_mngr.camera_buffer);
-  task_ray_tracing_config.set_buffer(ray_tracing_config_buffer[get_frame_index()]);
-  task_ray_tracing_config_host.set_buffer(ray_tracing_config_host_buffer[get_frame_index()]);
-  task_accumulation_buffer.set_image(accumulation_buffer);
-  task_rt_target.set_image(rt_target_image);
-  task_stbn_texture.set_image(image_manager->get_spatiotemporal_blue_noise_image());
+  if (task_camera_buffer.id() != cam_mngr.camera_buffer) { task_camera_buffer.set_buffer(cam_mngr.camera_buffer); }
+  if (task_ray_tracing_config.id() != ray_tracing_config_buffer[get_frame_index()]) { task_ray_tracing_config.set_buffer(ray_tracing_config_buffer[get_frame_index()]); }
+  if (task_ray_tracing_config_host.id() != ray_tracing_config_host_buffer[get_frame_index()]) { task_ray_tracing_config_host.set_buffer(ray_tracing_config_host_buffer[get_frame_index()]); }
+  if (task_accumulation_buffer.id() != accumulation_buffer) { task_accumulation_buffer.set_image(accumulation_buffer); }
+  if (task_rt_target.id() != rt_target_image) { task_rt_target.set_image(rt_target_image); }
+  if (task_stbn_texture.id() != image_manager->get_spatiotemporal_blue_noise_image()) { task_stbn_texture.set_image(image_manager->get_spatiotemporal_blue_noise_image()); }
 
   return true;
 }
