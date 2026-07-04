@@ -9,12 +9,8 @@ struct CameraManager{
 
   // Device
   daxa::Device &device;
-  // Camera buffer, DOUBLE-BUFFERED by frame parity: it is host-written every frame while
-  // the PREVIOUS frame's trace may still be in flight reading it. A single buffer races
-  // that read - during a camera drag some RT workgroups see the old matrix and some the
-  // new one, tearing silhouettes into tiles. Same convention as every other per-frame
-  // host-written buffer in the engine.
-  daxa::BufferId camera_buffer[DOUBLE_BUFFERING];
+  // Camera buffer
+  daxa::BufferId camera_buffer;
   // Camera
   Camera camera;
   // boolean to check if the camera manager is initialized
@@ -31,14 +27,11 @@ struct CameraManager{
   bool create(char const *camera_name) {
     if(initialized) return false;
 
-    for (daxa_u32 f = 0u; f < DOUBLE_BUFFERING; ++f)
-    {
-      camera_buffer[f] = device.create_buffer({
-          .size = sizeof(CameraView),
-          .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
-          .name = std::string(camera_name) + std::to_string(f),
-      });
-    }
+    camera_buffer = device.create_buffer({
+        .size = sizeof(CameraView),
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+        .name = camera_name,
+    });
 
     reset_camera(camera);
 
@@ -50,15 +43,13 @@ struct CameraManager{
   void destroy() {
     if(!initialized) return;
 
-    for (daxa_u32 f = 0u; f < DOUBLE_BUFFERING; ++f) { device.destroy_buffer(camera_buffer[f]); }
+    device.destroy_buffer(camera_buffer);
 
     initialized = false;
   }
   
   
-  // frame_index: this frame's parity - the write must go to the buffer the OTHER frame
-  // is not reading (the caller binds the same parity via task_camera_buffer)
-  void update(daxa::Extent2D const& extent, daxa_u32 frame_index) {
+  void update(daxa::Extent2D const& extent) {
     // TODO: Update scene
 
     // Update camera
@@ -72,7 +63,7 @@ struct CameraManager{
         .proj = get_projection_matrix(camera, true),
     };
 
-    device.buffer_host_address_as<CameraView>(camera_buffer[frame_index % DOUBLE_BUFFERING]).value()[0] = camera_view;
+    device.buffer_host_address_as<CameraView>(camera_buffer).value()[0] = camera_view;
   }
 
 };
