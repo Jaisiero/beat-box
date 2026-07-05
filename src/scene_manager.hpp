@@ -1882,15 +1882,19 @@ public:
     auto _now = [] { return std::chrono::high_resolution_clock::now(); };
     auto _ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     auto _t0 = _now();
-    // 1. pools upload (the host vectors are authoritative again)
+    // 1. pools upload. Only the HOST-authoritative buffers are uploaded: shape RECORDS (dims /
+    //    offsets / grid_origin) and OCCUPANCY (emit_cropped writes the bitmask on the host).
+    //    The SDF and SURFACE-LIST buffers are GPU-AUTHORITATIVE - they are computed only by
+    //    build_voxel_pools_gpu (the host voxel_sdf_cpu/voxel_surf_cpu are zero-filled pool
+    //    placeholders unless BB_SDF_VERIFY populates the oracle). Uploading those host zeros here
+    //    used to WIPE every shape's GPU-computed SDF/surface; the INCREMENTAL rebuild then only
+    //    restored the ~dirty shapes, leaving every UNCHANGED shape with a zero SDF -> its voxel
+    //    narrow phase found no surface -> the body fell through the floor. So do NOT upload them:
+    //    unchanged shapes keep their valid GPU SDF/surface, dirty shapes are rebuilt below.
     std::memcpy(device.buffer_host_address_as<VoxelShape>(rigid_body_manager->get_voxel_shapes_buffer()).value(),
                 voxel_shape_cpu.data(), voxel_shape_cpu.size() * sizeof(VoxelShape));
     std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer()).value(),
                 voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
-    std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_surface_buffer()).value(),
-                voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
-    std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
-                voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
     // 2. GPU rebuild chain (SDF + surface + inertia), INCREMENTAL: only the shapes created
     // this batch (the fixed bodies' shapes) changed geometry; the rest are already correct on
     // the GPU. A cull-only respawn (empty fixes) rebuilds nothing.
