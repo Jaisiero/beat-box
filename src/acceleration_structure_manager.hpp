@@ -4,6 +4,7 @@
 #include "task_manager.hpp"
 #include "free_list_pool.hpp" // incremental-AS BLAS/prim region allocator
 #include <functional>
+#include <cstring>
 
 BB_NAMESPACE_BEGIN
 
@@ -52,6 +53,11 @@ struct AccelerationStructureManager
   // scratch buffer here (GPU-first; the CPU-filled ranges are only the verify oracle).
   bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
                            std::function<void(daxa::BufferId)> const &post_primitive_upload = {});
+  // Incremental sibling of build_accel_structs (see the member note by blas_region_pool_): same
+  // dense prim layout + full re-upload, but (re)builds only the BLAS whose prim content changed,
+  // keeping every unchanged body's baked BLAS. Falls back to the full build until seeded by one.
+  bool update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
+                                        std::function<void(daxa::BufferId)> const &post_primitive_upload = {});
   void update_TLAS();
   // Zero the incremental upload counters so the next build_accel_structs() re-fills from offset 0
   // (used by scene reset/reload). Without this the counts accumulate and the 2nd reload exceeds the
@@ -64,6 +70,9 @@ struct AccelerationStructureManager
     primitive_scratch_offset = 0;
     previous_primitive_count = 0;
     proc_blas_buffer_offset = 0;
+    // force the next build_accel_structs to be a full build that re-seeds the incremental
+    // state (a scene reset/switch invalidates every per-body BLAS + the region pool).
+    incremental_ready_ = false;
   }
   bool update_TLAS_resources(daxa::BufferId dispatch_buffer);
   void update_AS_buffers();
@@ -133,18 +142,39 @@ private:
   // Sub-allocated buffer for the BLAS
   std::vector<daxa::BlasId> proc_blas = {};
 
-  // INCREMENTAL AS (phase 2b): per-body-id BLAS + region tracking so a fracture rebuilds only
-  // the handful of changed bodies instead of every BLAS. body_blas_[id] is the live BLAS of
-  // body id ({} = none); the region vectors record its proc_blas_buffer / primitive_buffer
-  // slices for freeing. blas_region_pool_ / prim_region_pool_ are FreeListPools over those
-  // buffers (bytes / Aabb-count units); a fracture frees retired+changed bodies' regions and
-  // allocs fresh ones, keeping unchanged bodies' BLAS in place.
-  std::vector<daxa::BlasId> body_blas_;                 // [MAX_RIGID_BODY_COUNT]
+  // INCREMENTAL AS (phase 2b): per-body-id BLAS so a fracture rebuilds only the handful of
+  // changed bodies' BLAS instead of every one. Prims stay dense/contiguous and are fully
+  // re-uploaded each respawn (cheap): a BLAS bakes its geometry at build time and does not
+  // reference the source buffer afterward, so an UNCHANGED body keeps its baked BLAS even as
+  // prim offsets shift -- the intersection shader re-reads aabbs[primitive_offset + i], and the
+  // full re-upload rewrites each body's identical prim content at its new offset, so the read
+  // stays consistent with what the BLAS was built from. Only the BLAS BUFFER needs stable
+  // per-body regions (an unchanged BLAS can't move: TLAS instances hold its device address),
+  // hence blas_region_pool_. Dirty is auto-detected by a content hash of each body's prim span
+  // (robust across all respawn callers -- fracture, spawn, cull -- with no caller cooperation).
+  std::vector<daxa::BlasId> body_blas_;                 // [MAX_RIGID_BODY_COUNT], {} = none
   std::vector<std::pair<u64, u64>> body_blas_region_;   // (byte offset, aligned byte size)
-  std::vector<std::pair<u32, u32>> body_prim_region_;   // (Aabb offset, count)
+  std::vector<u64> body_built_hash_;                    // content hash the live BLAS was built from
   FreeListPool blas_region_pool_;                       // over proc_blas_buffer (bytes)
-  FreeListPool prim_region_pool_;                       // over primitive_buffer (Aabb count)
-  bool incremental_ready_ = false;                      // seeded by the first full build
+  bool incremental_ready_ = false;                      // seeded by the last full build
+  // FNV-1a over a body's prim span [off, off+count) -- any geometry change flips it. count is
+  // folded in so a re-sized span is always caught even on a (negligible) 64-bit float collision.
+  static u64 hash_prim_span(std::vector<Aabb> const &prims, u32 off, u32 count)
+  {
+    u64 h = 1469598103934665603ull;
+    auto mix = [&](u32 v) { h = (h ^ v) * 1099511628211ull; };
+    mix(count);
+    for (u32 k = 0; k < count; ++k)
+    {
+      Aabb const &a = prims[off + k];
+      f32 const f[6] = {a.minimum.x, a.minimum.y, a.minimum.z, a.maximum.x, a.maximum.y, a.maximum.z};
+      for (f32 x : f) { u32 b; std::memcpy(&b, &x, 4); mix(b); }
+    }
+    return h;
+  }
+  // The last full build (build_accel_structs) seeds the incremental state from proc_blas so the
+  // first fracture can diff against it; a fresh full build / reset clears it.
+  void seed_incremental_state(std::vector<RigidBody> const &rigid_bodies, std::vector<Aabb> const &primitives);
 
   // Buffer for the LBVH BLAS
   daxa::BlasId lbvh_blas[DOUBLE_BUFFERING] = {};

@@ -1913,14 +1913,29 @@ public:
     //    retired tombstones drop out and reused/new fragments join - all in one place
     rebuild_active_bookkeeping();
     auto _t1 = _now(); // pools+rebuild+derived+fixup+prims done
-    // 7. full AS rebuild + sim refresh (the reset() tail, minus the pause)
-    accel_struct_mngr->reset_for_reload();
-    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook()))
+    // 7. AS rebuild + sim refresh (the reset() tail, minus the pause). INCREMENTAL by default:
+    //    only the bodies whose geometry changed this fracture get their BLAS rebuilt; the ~hundreds
+    //    of untouched bodies keep their baked BLAS (the dominant respawn cost). BB_AS_FULL forces
+    //    the old full rebuild (reset + build all) for A/B comparison. The incremental path manages
+    //    its own upload counters, so it must NOT be preceded by reset_for_reload (that clears the
+    //    baseline and would force a full build every time).
+    static bool const _as_full = bb_getenv("BB_AS_FULL") != nullptr;
+    bool _ok;
+    if (_as_full)
+    {
+      accel_struct_mngr->reset_for_reload();
+      _ok = accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook());
+    }
+    else
+    {
+      _ok = accel_struct_mngr->update_accel_structs_incremental(rigid_bodies, aabb, voxel_prims_hook());
+    }
+    if (!_ok)
     {
       std::cerr << "FRACTURE: AS rebuild failed!" << std::endl;
       return;
     }
-    auto _t1b = _now(); // build_accel_structs (CPU: destroy+create+size-query) done
+    auto _t1b = _now(); // AS structs (CPU: dirty-diff + create/size-query for changed bodies) done
     accel_struct_mngr->build_AS();
     auto _t2 = _now(); // build_AS (GPU build + wait_idle) done
     rigid_body_manager->update_sim();
