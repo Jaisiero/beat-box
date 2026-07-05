@@ -18,54 +18,114 @@
 
 BB_NAMESPACE_BEGIN
 
-// FRACTURE memory pool (phase 1): a bucket free-list of OFFSETS into a shared backing
-// vector. Fracture fragments inherit the parent's dims, so freed slices come back in a
-// handful of repeating sizes - a per-size free stack recycles them with O(1) alloc/free
-// and zero fragmentation within a size class. The backing vector only ever grows to the
-// high-water mark; freed ranges become holes reused in place (never read by any live
-// shape, so stale hole data is harmless). Phase 2 swaps this for a coalescing free-list
-// to support variable-dimension (cropped-to-bbox) fragments. Offsets, not pointers, so it
-// survives the vector reallocating on growth.
-struct BucketPool
+// FRACTURE memory pool (phase 2): a coalescing FREE-LIST of OFFSETS into a shared backing
+// vector. Unlike the phase-1 bucket allocator (a per-size free stack, which could only reuse
+// a hole for an EXACTLY-equal request), this handles arbitrary sizes: alloc is first-fit
+// with split (a large hole yields the exact front and keeps the remainder free), free merges
+// adjacent ranges (coalescing) so scattered holes recombine into large ones, and the top of
+// the pool shrinks when its tail is freed. That variable-size support is what lets fragments
+// be cropped to their real bbox (tight footprint + tight sim bounds). Offsets, not pointers,
+// so it survives the backing vector reallocating on growth. free_ranges: offset -> size,
+// kept sorted (std::map) and always fully coalesced (verify() enforces both).
+struct FreeListPool
 {
-  daxa_u32 high_water = 0;                                  // next fresh offset (== backing size)
-  std::map<daxa_u32, std::vector<daxa_u32>> free_by_size;   // size class -> reusable offsets
-  daxa_u32 live_bytes = 0;                                  // sum of live allocation sizes (diagnostic)
+  daxa_u32 high_water = 0;              // one-past the last used slot (== backing vector size)
+  std::map<daxa_u32, daxa_u32> free_ranges; // offset -> size, sorted + coalesced
+  daxa_u32 live_bytes = 0;             // sum of live allocation sizes (diagnostic)
 
-  // returns an offset for `size` slots, or MAX_U32 if the cap would be exceeded. ok reports success.
+  // returns an offset for `size` slots, or MAX_U32 if capacity is exhausted (no fitting hole
+  // and no room to bump). ok reports success.
   daxa_u32 alloc(daxa_u32 size, daxa_u32 cap, bool &ok)
   {
-    live_bytes += size;
-    auto it = free_by_size.find(size);
-    if (it != free_by_size.end() && !it->second.empty())
+    if (size == 0u) { ok = true; return high_water; } // degenerate: no bytes needed
+    // first-fit over the sorted free ranges
+    for (auto it = free_ranges.begin(); it != free_ranges.end(); ++it)
     {
-      daxa_u32 off = it->second.back();
-      it->second.pop_back();
-      ok = true;
-      return off;
+      if (it->second >= size)
+      {
+        daxa_u32 const off = it->first;
+        daxa_u32 const rem = it->second - size;
+        free_ranges.erase(it);
+        if (rem > 0u) { free_ranges[off + size] = rem; } // keep the remainder free
+        live_bytes += size;
+        ok = true;
+        return off;
+      }
     }
-    if (high_water + size > cap) { ok = false; live_bytes -= size; return 0xFFFFFFFFu; }
-    daxa_u32 off = high_water;
+    if (high_water + size > cap) { ok = false; return 0xFFFFFFFFu; }
+    daxa_u32 const off = high_water;
     high_water += size;
+    live_bytes += size;
     ok = true;
     return off;
   }
   void free(daxa_u32 off, daxa_u32 size)
   {
-    free_by_size[size].push_back(off);
+    if (size == 0u) { return; }
     live_bytes -= size;
+    daxa_u32 lo = off, hi = off + size;
+    // merge with the range immediately BEFORE (if it ends exactly at lo)
+    if (!free_ranges.empty())
+    {
+      auto it = free_ranges.lower_bound(off);
+      if (it != free_ranges.begin())
+      {
+        auto prev = std::prev(it);
+        if (prev->first + prev->second == lo) { lo = prev->first; free_ranges.erase(prev); }
+      }
+    }
+    // merge with the range immediately AFTER (if it starts exactly at hi)
+    {
+      auto it = free_ranges.find(hi);
+      if (it != free_ranges.end()) { hi = it->first + it->second; free_ranges.erase(it); }
+    }
+    if (hi == high_water) { high_water = lo; }        // freed the tail: shrink instead of holing
+    else { free_ranges[lo] = hi - lo; }                // otherwise record the merged hole
   }
   bool can_alloc(daxa_u32 size, daxa_u32 cap) const
   {
-    auto it = free_by_size.find(size);
-    if (it != free_by_size.end() && !it->second.empty()) { return true; }
+    if (size == 0u) { return true; }
+    for (auto const &r : free_ranges) { if (r.second >= size) { return true; } }
     return high_water + size <= cap;
   }
   void reset()
   {
     high_water = 0;
     live_bytes = 0;
-    free_by_size.clear();
+    free_ranges.clear();
+  }
+  daxa_u32 largest_free_block() const
+  {
+    daxa_u32 m = 0u;
+    for (auto const &r : free_ranges) { m = std::max(m, r.second); }
+    return m;
+  }
+  // SELF-CHECK (BB_POOL_VERIFY): free ranges must be sorted, in-bounds, and FULLY COALESCED
+  // (no two touching), and the byte accounting must close: Sigma(free) + live == high_water.
+  // Returns "" on success, else a description of the first broken invariant.
+  std::string verify_free() const
+  {
+    daxa_u32 sum_free = 0u, prev_end = 0u;
+    bool first = true;
+    for (auto const &r : free_ranges)
+    {
+      if (r.second == 0u) { return "zero-size free range at " + std::to_string(r.first); }
+      if (r.first + r.second > high_water) { return "free range past high_water at " + std::to_string(r.first); }
+      if (!first && r.first <= prev_end)
+      {
+        return "unsorted or un-coalesced free ranges near " + std::to_string(r.first) +
+               " (prev end " + std::to_string(prev_end) + ")";
+      }
+      first = false;
+      prev_end = r.first + r.second;
+      sum_free += r.second;
+    }
+    if (sum_free + live_bytes != high_water)
+    {
+      return "accounting mismatch: free " + std::to_string(sum_free) + " + live " +
+             std::to_string(live_bytes) + " != high_water " + std::to_string(high_water);
+    }
+    return "";
   }
 };
 
@@ -585,8 +645,11 @@ public:
     // the CPU fill below runs only as the BB_SDF_VERIFY oracle. The pool slice is reserved
     // at the worst case (every solid cell on the surface) so offsets never depend on the env.
     static bool const sdf_verify_oracle = bb_getenv("BB_SDF_VERIFY") != nullptr;
+    // reserve the surf slice at `bit_count` (total cells), NOT `count` (solid voxels): the
+    // fracture path reserves `cells` per shape, so keeping load consistent means every shape
+    // frees the same size it reserved (the free-list accounting + retire_shape depend on it).
     u32 const surf_offset = (u32)voxel_surf_cpu.size();
-    voxel_surf_cpu.resize(surf_offset + count, 0u);
+    voxel_surf_cpu.resize(surf_offset + bit_count, 0u);
     u32 surf_n = 0;
     glm::mat3 inertia(0.0f);
     std::vector<Aabb> prims;
@@ -1305,7 +1368,7 @@ public:
   // allocate `size` slots from a byte pool, growing (fresh) or clearing (reused hole) the
   // backing vector to hold the returned offset. Returns MAX_U32 if the cap is exceeded.
   template <class T>
-  daxa_u32 pool_alloc(std::vector<T> &vec, BucketPool &pool, daxa_u32 size, daxa_u32 cap, T fill)
+  daxa_u32 pool_alloc(std::vector<T> &vec, FreeListPool &pool, daxa_u32 size, daxa_u32 cap, T fill)
   {
     bool ok = false;
     daxa_u32 const off = pool.alloc(size, cap, ok);
@@ -1332,6 +1395,59 @@ public:
     return (daxa_u32)voxel_shape_cpu.size() - 1u;
   }
 
+  // FULL POOL VERIFICATION (BB_POOL_VERIFY): the per-pool self-check (coalescing + byte
+  // accounting) PLUS a cross-check that every LIVE shape's slice is in bounds and mutually
+  // DISJOINT and disjoint from every free hole - the worst bug (two shapes aliasing memory)
+  // lives here. Called after each fracture/cull; aborts loudly at the first violation so a
+  // corruption is caught at the exact operation instead of surfacing as garbage geometry.
+  void verify_pools(char const *where)
+  {
+    auto fail = [&](std::string const &msg) {
+      std::cerr << "[POOL-VERIFY] FAIL @ " << where << ": " << msg << std::endl;
+      std::abort();
+    };
+    for (auto const &pr : {std::pair<FreeListPool *, char const *>{&occ_pool_, "occ"},
+                           {&surf_pool_, "surf"}, {&sdf_pool_, "sdf"}})
+    {
+      std::string const e = pr.first->verify_free();
+      if (!e.empty()) { fail(std::string(pr.second) + ": " + e); }
+    }
+    // gather each pool's live intervals from the live shapes (skip dims=0 dead slots)
+    std::vector<std::pair<daxa_u32, daxa_u32>> occ_iv, surf_iv, sdf_iv;
+    for (daxa_u32 si = 0u; si < voxel_shape_cpu.size(); ++si)
+    {
+      VoxelShape const &s = voxel_shape_cpu[si];
+      if (s.dims.x == 0u) { continue; }
+      daxa_u32 const cells = s.dims.x * s.dims.y * s.dims.z;
+      occ_iv.emplace_back(s.occ_offset, (cells + 31u) / 32u);
+      surf_iv.emplace_back(s.surf_offset, cells); // fracture shapes reserved `cells` for surf
+      sdf_iv.emplace_back(s.sdf_offset, (s.dims.x + 1u) * (s.dims.y + 1u) * (s.dims.z + 1u));
+    }
+    auto check = [&](std::vector<std::pair<daxa_u32, daxa_u32>> &iv, FreeListPool &p, char const *name) {
+      std::sort(iv.begin(), iv.end());
+      daxa_u32 live_sum = 0u;
+      for (size_t i = 0; i < iv.size(); ++i)
+      {
+        if (iv[i].first + iv[i].second > p.high_water) { fail(std::string(name) + ": live slice past high_water at " + std::to_string(iv[i].first)); }
+        if (i > 0 && iv[i].first < iv[i - 1].first + iv[i - 1].second) { fail(std::string(name) + ": OVERLAPPING live slices near " + std::to_string(iv[i].first)); }
+        // a live slice must not intersect any free hole
+        auto it = p.free_ranges.lower_bound(iv[i].first);
+        if (it != p.free_ranges.begin()) { auto pv = std::prev(it); if (pv->first + pv->second > iv[i].first) { fail(std::string(name) + ": live slice intersects a free hole at " + std::to_string(iv[i].first)); } }
+        if (it != p.free_ranges.end() && it->first < iv[i].first + iv[i].second) { fail(std::string(name) + ": live slice intersects a free hole at " + std::to_string(iv[i].first)); }
+        live_sum += iv[i].second;
+      }
+      if (live_sum != p.live_bytes) { fail(std::string(name) + ": live-slice sum " + std::to_string(live_sum) + " != pool live_bytes " + std::to_string(p.live_bytes)); }
+    };
+    check(occ_iv, occ_pool_, "occ");
+    check(surf_iv, surf_pool_, "surf");
+    check(sdf_iv, sdf_pool_, "sdf");
+  }
+  bool pool_verify_on()
+  {
+    static bool const on = bb_getenv("BB_POOL_VERIFY") != nullptr;
+    return on;
+  }
+
   // free a shape's byte-pool slices + its index back to the free lists (the slot's vectors
   // are left in place; a future alloc_shape_slot reuses the index and overwrites them).
   void retire_shape(daxa_u32 shape_i)
@@ -1341,18 +1457,13 @@ public:
     daxa_u32 const cells = s.dims.x * s.dims.y * s.dims.z;
     daxa_u32 const words = (cells + 31u) / 32u;
     daxa_u32 const nodes = (s.dims.x + 1u) * (s.dims.y + 1u) * (s.dims.z + 1u);
-    daxa_u32 const surf_slots = (daxa_u32)voxel_shape_prims[shape_i].size(); // fragment reserved = solid count... see note
     occ_pool_.free(s.occ_offset, words);
     sdf_pool_.free(s.sdf_offset, nodes);
+    surf_pool_.free(s.surf_offset, cells); // surf reserved at `cells` for every shape (load + fracture)
     // sentinel: a freed slot's stale record must NOT be re-processed by the GPU pool rebuild
     // (its offsets may already belong to a reused slot -> corruption). dims=0 marks it dead;
     // build_voxel_pools_gpu skips it, and alloc_shape_slot overwrites dims on reuse.
     voxel_shape_cpu[shape_i].dims = daxa_u32vec3(0, 0, 0);
-    // surf slices were reserved at `cells` for fracture shapes and `count` for load shapes;
-    // free by the size actually reserved. Fracture shapes (the only ones retired in phase 1)
-    // reserved `cells`, so free that. (Guarded: never frees a load shape here.)
-    surf_pool_.free(s.surf_offset, cells);
-    (void)surf_slots;
     free_shape_slots_.push_back(shape_i);
     voxel_shape_prims[shape_i].clear();
   }
@@ -1754,6 +1865,7 @@ public:
     rigid_body_manager->update_active_rigid_body_list();
     status_manager->next_frame();
     accel_struct_mngr->update_TLAS();
+    if (pool_verify_on()) { verify_pools("respawn"); }
     std::cout << "[FRACTURE] respawn: " << rigid_body_count << " bodies, "
               << voxel_shape_cpu.size() << " shapes" << std::endl;
   }
@@ -2157,7 +2269,7 @@ private:
   // plain bump (untouched, zero regression); only the fracture path allocs/frees through
   // these. free_shape_slots_ recycles VoxelShape indices (and the parallel per-shape
   // vectors) of retired shapes.
-  BucketPool occ_pool_, surf_pool_, sdf_pool_;
+  FreeListPool occ_pool_, surf_pool_, sdf_pool_;
   std::vector<daxa_u32> free_shape_slots_;
   std::vector<daxa_u32> free_body_slots_; // retired (tombstoned) rigid_bodies indices, reused by new fragments
   bool pools_synced_ = false;
