@@ -1634,10 +1634,12 @@ public:
     daxa_f32vec3 const grid_c = daxa_f32vec3((lp.x - shape.grid_origin.x) / vs,
                                              (lp.y - shape.grid_origin.y) / vs,
                                              (lp.z - shape.grid_origin.z) / vs);
-    // impulse-scaled crater: a harder hit breaks more (radius in cells; clamped so a big
-    // overshoot chips instead of pulverizing - the pulverization clamp refuses total loss)
+    // impulse-scaled shatter size: a harder hit breaks a bigger zone (radius in cells; clamped
+    // so a big overshoot chips instead of shattering everything). CONSERVATION: the impact no
+    // longer CARVES a crater (that vaporized voxels = lost mass). shatter_r now only sizes the
+    // Voronoi partition zone; every voxel is preserved and reassigned to a fragment.
     f32 const overkill = ev.impulse / std::max(body.fracture_impulse, 1e-3f); // >=1 (it fired)
-    f32 const carve_r = std::clamp(1.0f + 0.6f * overkill, 1.6f, 2.6f);
+    f32 const shatter_r = std::clamp(1.0f + 0.6f * overkill, 1.6f, 2.6f);
 
     // capture per-voxel mass + parent kinematics BEFORE anything changes
     daxa_u32 const old_count = (daxa_u32)voxel_shape_prims[shape_i].size();
@@ -1652,7 +1654,7 @@ public:
     // hits shatter a bigger zone. STONE = an isotropic cloud (chunks); WOOD = sites strung
     // along the grain (the longest grid axis) -> long shards. Deterministic per event (seed
     // = body id + impulse bits) so the showcase is reproducible without touching scene RNG.
-    f32 const vor_r = std::clamp(carve_r * (1.4f + 0.5f * overkill), carve_r + 1.0f, 6.0f);
+    f32 const vor_r = std::clamp(shatter_r * (1.4f + 0.5f * overkill), shatter_r + 1.0f, 6.0f);
     std::vector<daxa_f32vec4> sites;
     {
       daxa_u32 salt = 0u; std::memcpy(&salt, &ev.impulse, sizeof(salt));
@@ -1689,9 +1691,11 @@ public:
       }
     }
 
-    // GPU: carve + Voronoi assign + constrained connected-component labels; tiny readbacks
+    // GPU: Voronoi assign + constrained connected-component labels; tiny readbacks. carve
+    // radius 0 => NO material removed (conservation): the shape is only PARTITIONED, so the
+    // union of all component labels == the original solid set (nothing vanishes).
     std::vector<daxa_u32> occ_words, labels;
-    rigid_body_manager->carve_and_label(shape, grid_c, carve_r, sites, vor_r, occ_words, labels);
+    rigid_body_manager->carve_and_label(shape, grid_c, 0.0f, sites, vor_r, occ_words, labels);
 
     // component census (labels are min cell indices -> deterministic identities)
     std::map<daxa_u32, daxa_u32> comp_counts;
@@ -1701,22 +1705,73 @@ public:
     }
     if (comp_counts.empty())
     {
-      // full pulverization: clamp (MVP keeps bodies alive). The host slice is untouched,
-      // so the respawn upload restores the GPU slice = the carve is refused.
-      std::cerr << "FRACTURE: body " << ev.body_id << " would pulverize entirely; carve refused" << std::endl;
+      // with the carve gone this is unreachable for a solid shape (every voxel is labelled),
+      // but keep the guard: respawn restores the untouched GPU slice = the split is refused.
+      std::cerr << "FRACTURE: body " << ev.body_id << " produced no components; refused" << std::endl;
       return true; // respawn anyway to restore the GPU slice
     }
+
+    // CONSERVATION MERGE. The carve is gone, so every solid voxel carries a component label and
+    // their union == the original solid set. But the Voronoi partition can still leave stray
+    // sub-MIN_FRAG slivers at cell boundaries. Instead of DROPPING them (that would destroy those
+    // voxels AND spawn degenerate 1-2 voxel bodies that tunnel through the floor), reassign each
+    // sliver's voxels to the nearest KEPT component by centroid. Mass is then exactly preserved
+    // and the fragment set stays clean (no degenerate bodies). Done on the host labels[] before
+    // the census/bbox/emit passes below, which all read the merged result.
+    daxa_u32 const MIN_FRAG = 3u;
+    {
+      daxa_u32 const dx = dims.x, dy = dims.y;
+      struct Cen { double x = 0, y = 0, z = 0; daxa_u32 n = 0; };
+      std::map<daxa_u32, Cen> cen;
+      for (daxa_u32 c = 0u; c < cells; ++c)
+      {
+        daxa_u32 const l = labels[c];
+        if (l == MAX_U32) { continue; }
+        auto &e = cen[l];
+        e.x += (double)(c % dx); e.y += (double)((c / dx) % dy); e.z += (double)(c / (dx * dy)); ++e.n;
+      }
+      // targets = components big enough to stand alone; if NONE reach MIN_FRAG (a body smaller
+      // than the threshold), keep only the largest so it stays one whole piece.
+      daxa_u32 largest_label = MAX_U32, largest_n = 0u;
+      for (auto const &[l, e] : cen) { if (e.n > largest_n) { largest_n = e.n; largest_label = l; } }
+      std::vector<std::pair<daxa_u32, glm::vec3>> targets;
+      for (auto const &[l, e] : cen)
+        if (e.n >= MIN_FRAG) { targets.emplace_back(l, glm::vec3(e.x / e.n, e.y / e.n, e.z / e.n)); }
+      if (targets.empty() && largest_label != MAX_U32)
+      {
+        auto const &e = cen[largest_label];
+        targets.emplace_back(largest_label, glm::vec3(e.x / e.n, e.y / e.n, e.z / e.n));
+      }
+      // remap each sliver -> nearest target (kept components map to themselves)
+      std::map<daxa_u32, daxa_u32> remap;
+      for (auto const &[l, e] : cen)
+      {
+        if (e.n >= MIN_FRAG) { remap[l] = l; continue; }
+        glm::vec3 const cc((f32)(e.x / e.n), (f32)(e.y / e.n), (f32)(e.z / e.n));
+        daxa_u32 best = targets.front().first; double bestd = 1e30;
+        for (auto const &[tl, tc] : targets) { double const d = glm::dot(cc - tc, cc - tc); if (d < bestd) { bestd = d; best = tl; } }
+        remap[l] = best;
+      }
+      for (daxa_u32 c = 0u; c < cells; ++c) { daxa_u32 const l = labels[c]; if (l != MAX_U32) { labels[c] = remap[l]; } }
+    }
+    // re-census after the merge (comps/bbox/emit below all read the merged labels)
+    comp_counts.clear();
+    for (daxa_u32 c = 0u; c < cells; ++c) { if (labels[c] != MAX_U32) { ++comp_counts[labels[c]]; } }
+
+    // CONSERVATION INVARIANT: with no carve, every original solid voxel must land in exactly one
+    // component, so the component counts sum back to the parent's solid voxel count. A mismatch
+    // means the flood-fill left some solid unlabelled (voxel lost) -> surface it loudly.
+    {
+      daxa_u32 total = 0u; for (auto const &cc : comp_counts) { total += cc.second; }
+      if (total != old_count)
+        std::cerr << "FRACTURE-WARN: voxel conservation off: components sum " << total << " != solid "
+                  << old_count << " (body " << ev.body_id << ")" << std::endl;
+    }
+
     std::vector<std::pair<daxa_u32, daxa_u32>> comps(comp_counts.begin(), comp_counts.end());
     std::sort(comps.begin(), comps.end(), [](auto const &a, auto const &b) {
       return a.second != b.second ? a.second > b.second : a.first < b.first;
     });
-    // DEBRIS THRESHOLD: Voronoi shatter produces stray 1-2 voxel slivers whose inertia is
-    // near-degenerate — they wedge and read as standing interpenetration (deep200), and
-    // clutter the body/pool budget. Drop them below MIN_FRAG voxels: their occupancy is not
-    // written to any shape, so they simply vanish (dust). The largest component (comps[0])
-    // is ALWAYS kept regardless of size, so a body never disappears entirely.
-    daxa_u32 const MIN_FRAG = 3u;
-
     // PHASE 2b CROP: each component is re-packed into a grid CROPPED to its bounding box, so
     // its pool slices + sim bounds are sized to the real extent (a 3-voxel chunk of a 10x4x4
     // block becomes a 3x2x2 shape, not a mostly-empty 10x4x4). Precompute every component's
@@ -1778,10 +1833,11 @@ public:
     body.primitive_count = comps[0].second;
     { FragFix ff = parent_ctx; ff.body = ev.body_id; ff.crop_off = crop0; fixes.push_back(ff); }
 
-    // the rest become new fragment bodies on their own cropped shapes
+    // the rest become new fragment bodies on their own cropped shapes. Every component here is a
+    // kept target (the conservation merge folded all sub-MIN_FRAG slivers into their neighbours),
+    // so nothing is skipped: total voxel count out == total in.
     for (size_t k = 1; k < comps.size(); ++k)
     {
-      if (comps[k].second < MIN_FRAG) { continue; } // debris: too small to be its own body
       if (rigid_bodies.size() >= MAX_RIGID_BODY_COUNT && free_body_slots_.empty())
       {
         std::cerr << "FRACTURE: body cap reached, fragment dropped" << std::endl;
