@@ -2032,7 +2032,8 @@ bool RigidBodyManager::update_sim()
 void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shapes,
                                              std::vector<daxa_f32> const &cpu_sdf_reference,
                                              std::vector<daxa_u32> const &cpu_surf_reference,
-                                             std::vector<VoxelShapeDerived> const &cpu_derived_reference)
+                                             std::vector<VoxelShapeDerived> const &cpu_derived_reference,
+                                             std::vector<daxa_u32> const *dirty)
 {
   if (!initialized || shapes.empty()) { return; }
   auto const occ_addr = device.device_address(voxel_occupancy).value();
@@ -2043,6 +2044,14 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
   auto const surf_addr = device.device_address(voxel_surface).value();
   auto const derived_addr = device.device_address(voxel_derived).value();
 
+  // INCREMENTAL (phase 2b-AS): rebuild only the shapes that changed this fracture, not all
+  // of them - a fracture touches ~5 shapes out of dozens, and an unchanged shape's SDF /
+  // surface / inertia are already correct on the GPU. dirty=nullptr => rebuild all (load).
+  std::vector<daxa_u32> idx;
+  if (dirty) { idx = *dirty; }
+  else { idx.resize(shapes.size()); for (daxa_u32 i = 0u; i < (daxa_u32)shapes.size(); ++i) { idx[i] = i; } }
+  if (idx.empty()) { return; }
+
   auto rec = device.create_command_recorder({});
   auto const barrier = [&rec]() {
     rec.pipeline_barrier({
@@ -2050,8 +2059,9 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
         .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE,
     });
   };
-  for (daxa_u32 si = 0u; si < (daxa_u32)shapes.size(); ++si)
+  for (daxa_u32 si : idx)
   {
+    if (si >= shapes.size()) { continue; }
     auto const &s = shapes[si];
     if (s.dims.x == 0u) { continue; } // retired/free shape slot (dims=0 sentinel) - skip
     daxa_u32 const nx = s.dims.x + 1u, ny = s.dims.y + 1u, nz = s.dims.z + 1u;

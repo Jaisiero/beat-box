@@ -149,10 +149,13 @@ struct RigidBodyManager{
   // uploading shapes+occupancy; re-callable on future runtime shape edits (destruction).
   // cpu_*_reference: when BB_SDF_VERIFY is set, GPU results are read back and compared
   // against the CPU brute force (kept as the debug oracle per the GPU-first directive).
+  // dirty (phase 2b-AS): when non-null, rebuild ONLY those shape indices (a fracture touches
+  // a handful; the rest are already correct on the GPU). nullptr = rebuild all (load path).
   void build_voxel_pools_gpu(std::vector<VoxelShape> const &shapes,
                              std::vector<daxa_f32> const &cpu_sdf_reference,
                              std::vector<daxa_u32> const &cpu_surf_reference,
-                             std::vector<VoxelShapeDerived> const &cpu_derived_reference);
+                             std::vector<VoxelShapeDerived> const &cpu_derived_reference,
+                             std::vector<daxa_u32> const *dirty = nullptr);
   // GPU build of every voxel BODY's BLAS AABB range, written straight into the AS
   // manager's primitive scratch buffer (called between its host upload and the BLAS
   // build). bodies = (shape index, first-Aabb offset) per voxel body, in body order.

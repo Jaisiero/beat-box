@@ -1938,8 +1938,19 @@ public:
                 voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
     std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
                 voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
-    // 2. GPU rebuild chain (SDF + surface + inertia for every shape - tiny at these sizes)
-    rigid_body_manager->build_voxel_pools_gpu(voxel_shape_cpu, voxel_sdf_cpu, voxel_surf_cpu, voxel_derived_cpu);
+    // 2. GPU rebuild chain (SDF + surface + inertia), INCREMENTAL: only the shapes created
+    // this batch (the fixed bodies' shapes) changed geometry; the rest are already correct on
+    // the GPU. A cull-only respawn (empty fixes) rebuilds nothing.
+    std::vector<daxa_u32> dirty_shapes;
+    dirty_shapes.reserve(fixes.size());
+    for (auto const &fx : fixes)
+    {
+      if (fx.body < rigid_bodies.size() && rigid_bodies[fx.body].shape_index != 0u)
+      {
+        dirty_shapes.push_back(rigid_bodies[fx.body].shape_index - 1u);
+      }
+    }
+    rigid_body_manager->build_voxel_pools_gpu(voxel_shape_cpu, voxel_sdf_cpu, voxel_surf_cpu, voxel_derived_cpu, &dirty_shapes);
     // 3. the GPU mass-property reduce is the AUTHORITY for the affected records
     std::vector<VoxelShapeDerived> derived;
     rigid_body_manager->read_voxel_derived((daxa_u32)voxel_shape_cpu.size(), derived);
