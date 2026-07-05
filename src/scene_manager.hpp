@@ -16,6 +16,7 @@
 #include <set>       // fracture: per-batch body dedup
 #include <algorithm> // fracture: component ordering
 #include <array>     // fracture: per-component bbox
+#include <chrono>    // respawn timing probe
 
 BB_NAMESPACE_BEGIN
 
@@ -1929,6 +1930,12 @@ public:
   // the mini-reload: pools up, GPU rebuild chain, derived readback -> final records, AS + sim refresh
   void respawn_after_fracture(std::vector<FragFix> const &fixes)
   {
+    // BB_RESPAWN_TIMING: coarse per-phase respawn timing (env-gated tooling for the
+    // incremental-AS work; zero cost when off).
+    static bool const _t = bb_getenv("BB_RESPAWN_TIMING") != nullptr;
+    auto _now = [] { return std::chrono::high_resolution_clock::now(); };
+    auto _ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+    auto _t0 = _now();
     // 1. pools upload (the host vectors are authoritative again)
     std::memcpy(device.buffer_host_address_as<VoxelShape>(rigid_body_manager->get_voxel_shapes_buffer()).value(),
                 voxel_shape_cpu.data(), voxel_shape_cpu.size() * sizeof(VoxelShape));
@@ -2015,6 +2022,7 @@ public:
     // 6. rebuild the active-body bookkeeping (counts + id set) from the live vector, so
     //    retired tombstones drop out and reused/new fragments join - all in one place
     rebuild_active_bookkeeping();
+    auto _t1 = _now(); // pools+rebuild+derived+fixup+prims done
     // 7. full AS rebuild + sim refresh (the reset() tail, minus the pause)
     accel_struct_mngr->reset_for_reload();
     if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook()))
@@ -2023,6 +2031,7 @@ public:
       return;
     }
     accel_struct_mngr->build_AS();
+    auto _t2 = _now(); // AS (BLAS) rebuild done
     rigid_body_manager->update_sim();
     rigid_body_manager->update_active_rigid_body_list();
     status_manager->next_frame();
@@ -2030,6 +2039,7 @@ public:
     rigid_body_manager->update_active_rigid_body_list();
     status_manager->next_frame();
     accel_struct_mngr->update_TLAS();
+    if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " AS(blas)=" << _ms(_t1,_t2) << " sim+tlas=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
     if (pool_verify_on()) { verify_pools("respawn"); }
     std::cout << "[FRACTURE] respawn: " << rigid_body_count << " bodies, "
               << voxel_shape_cpu.size() << " shapes" << std::endl;
