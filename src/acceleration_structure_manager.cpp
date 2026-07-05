@@ -1,3 +1,4 @@
+#define _CRT_SECURE_NO_WARNINGS // std::getenv (BB_POOL_VERIFY / BB_RESPAWN_TIMING) on MSVC
 #include "acceleration_structure_manager.hpp"
 #include "renderer_manager.hpp"
 #include "gui_manager.hpp"
