@@ -100,6 +100,14 @@ int main()
       status_manager->switch_simulating();
       std::cout << "[AUTOSTART] simulating ON" << std::endl;
     }
+    if (std::getenv("BB_NO_SLEEP")) {
+      rigid_body_manager->clear_sim_flags(SimFlag::SLEEPING_ENABLED);
+      std::cout << "[AUTOSTART] SLEEPING DISABLED (repro: a stuck/buzzing pair stays observable instead of sleeping away)" << std::endl;
+    }
+    if (std::getenv("BB_NO_WARMSTART")) {
+      rigid_body_manager->clear_sim_flags(SimFlag::WARM_STARTING);
+      std::cout << "[AUTOSTART] WARM_STARTING DISABLED (A/B: is the rest-tremor caused by warm-start churn or the base solver?)" << std::endl;
+    }
     if (std::getenv("BB_DETERMINISTIC")) {
       rigid_body_manager->set_sim_flags(SimFlag::DETERMINISTIC);
       std::cout << "[AUTOSTART] DETERMINISTIC mode ON (post-stab skipped -> cross-launch reproducible)" << std::endl;

@@ -754,7 +754,13 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
           // tangent directions saturate independently -> the contact torque jitters -> the
           // user's "nervous rotational jitter". The cone keeps the friction force on a disc
           // of radius mu*|F_n| -> rotationally stable, matching the official solver.
-          daxa_f32 bound = mu * abs(lam);
+          // friction bound uses the ACTUAL normal force f = min(k*C + lam, 0), not just the
+          // accumulated impulse lam. At a converged rest contact f == lam (identical), but a
+          // body held up mostly by the penalty term (k*C) while its warm-started lam has decayed
+          // to ~0 - e.g. a light fracture fragment whose floor contact re-keys as it slides -
+          // otherwise gets bound = mu*0 = 0 and slides frictionlessly forever. Bounding by |f|
+          // ties friction to the real support force, killing that frictionless drift.
+          daxa_f32 bound = mu * abs(f);
           daxa_f32vec3 td0 = m->tangent_vectors[0];
           daxa_f32vec3 td1 = m->tangent_vectors[1];
           daxa_f32vec3 ar1_0, ar2_0, ar1_1, ar2_1;

@@ -2,6 +2,7 @@
 
 #include "defines.hpp"
 #include "math.hpp"
+#include "free_list_pool.hpp" // FRACTURE memory pools (shared with the AS manager)
 #include "camera_manager.hpp"
 #include "rigid_body_manager.hpp"
 #include "acceleration_structure_manager.hpp"
@@ -19,117 +20,6 @@
 #include <chrono>    // respawn timing probe
 
 BB_NAMESPACE_BEGIN
-
-// FRACTURE memory pool (phase 2): a coalescing FREE-LIST of OFFSETS into a shared backing
-// vector. Unlike the phase-1 bucket allocator (a per-size free stack, which could only reuse
-// a hole for an EXACTLY-equal request), this handles arbitrary sizes: alloc is first-fit
-// with split (a large hole yields the exact front and keeps the remainder free), free merges
-// adjacent ranges (coalescing) so scattered holes recombine into large ones, and the top of
-// the pool shrinks when its tail is freed. That variable-size support is what lets fragments
-// be cropped to their real bbox (tight footprint + tight sim bounds). Offsets, not pointers,
-// so it survives the backing vector reallocating on growth. free_ranges: offset -> size,
-// kept sorted (std::map) and always fully coalesced (verify() enforces both).
-struct FreeListPool
-{
-  daxa_u32 high_water = 0;              // one-past the last used slot (== backing vector size)
-  std::map<daxa_u32, daxa_u32> free_ranges; // offset -> size, sorted + coalesced
-  daxa_u32 live_bytes = 0;             // sum of live allocation sizes (diagnostic)
-
-  // returns an offset for `size` slots, or MAX_U32 if capacity is exhausted (no fitting hole
-  // and no room to bump). ok reports success.
-  daxa_u32 alloc(daxa_u32 size, daxa_u32 cap, bool &ok)
-  {
-    if (size == 0u) { ok = true; return high_water; } // degenerate: no bytes needed
-    // first-fit over the sorted free ranges
-    for (auto it = free_ranges.begin(); it != free_ranges.end(); ++it)
-    {
-      if (it->second >= size)
-      {
-        daxa_u32 const off = it->first;
-        daxa_u32 const rem = it->second - size;
-        free_ranges.erase(it);
-        if (rem > 0u) { free_ranges[off + size] = rem; } // keep the remainder free
-        live_bytes += size;
-        ok = true;
-        return off;
-      }
-    }
-    if (high_water + size > cap) { ok = false; return 0xFFFFFFFFu; }
-    daxa_u32 const off = high_water;
-    high_water += size;
-    live_bytes += size;
-    ok = true;
-    return off;
-  }
-  void free(daxa_u32 off, daxa_u32 size)
-  {
-    if (size == 0u) { return; }
-    live_bytes -= size;
-    daxa_u32 lo = off, hi = off + size;
-    // merge with the range immediately BEFORE (if it ends exactly at lo)
-    if (!free_ranges.empty())
-    {
-      auto it = free_ranges.lower_bound(off);
-      if (it != free_ranges.begin())
-      {
-        auto prev = std::prev(it);
-        if (prev->first + prev->second == lo) { lo = prev->first; free_ranges.erase(prev); }
-      }
-    }
-    // merge with the range immediately AFTER (if it starts exactly at hi)
-    {
-      auto it = free_ranges.find(hi);
-      if (it != free_ranges.end()) { hi = it->first + it->second; free_ranges.erase(it); }
-    }
-    if (hi == high_water) { high_water = lo; }        // freed the tail: shrink instead of holing
-    else { free_ranges[lo] = hi - lo; }                // otherwise record the merged hole
-  }
-  bool can_alloc(daxa_u32 size, daxa_u32 cap) const
-  {
-    if (size == 0u) { return true; }
-    for (auto const &r : free_ranges) { if (r.second >= size) { return true; } }
-    return high_water + size <= cap;
-  }
-  void reset()
-  {
-    high_water = 0;
-    live_bytes = 0;
-    free_ranges.clear();
-  }
-  daxa_u32 largest_free_block() const
-  {
-    daxa_u32 m = 0u;
-    for (auto const &r : free_ranges) { m = std::max(m, r.second); }
-    return m;
-  }
-  // SELF-CHECK (BB_POOL_VERIFY): free ranges must be sorted, in-bounds, and FULLY COALESCED
-  // (no two touching), and the byte accounting must close: Sigma(free) + live == high_water.
-  // Returns "" on success, else a description of the first broken invariant.
-  std::string verify_free() const
-  {
-    daxa_u32 sum_free = 0u, prev_end = 0u;
-    bool first = true;
-    for (auto const &r : free_ranges)
-    {
-      if (r.second == 0u) { return "zero-size free range at " + std::to_string(r.first); }
-      if (r.first + r.second > high_water) { return "free range past high_water at " + std::to_string(r.first); }
-      if (!first && r.first <= prev_end)
-      {
-        return "unsorted or un-coalesced free ranges near " + std::to_string(r.first) +
-               " (prev end " + std::to_string(prev_end) + ")";
-      }
-      first = false;
-      prev_end = r.first + r.second;
-      sum_free += r.second;
-    }
-    if (sum_free + live_bytes != high_water)
-    {
-      return "accounting mismatch: free " + std::to_string(sum_free) + " + live " +
-             std::to_string(live_bytes) + " != high_water " + std::to_string(high_water);
-    }
-    return "";
-  }
-};
 
 // getenv wrapper that silences MSVC C4996 for a read-only env lookup (this header is included by TUs
 // that don't #define _CRT_SECURE_NO_WARNINGS).
@@ -1744,10 +1634,12 @@ public:
     daxa_f32vec3 const grid_c = daxa_f32vec3((lp.x - shape.grid_origin.x) / vs,
                                              (lp.y - shape.grid_origin.y) / vs,
                                              (lp.z - shape.grid_origin.z) / vs);
-    // impulse-scaled crater: a harder hit breaks more (radius in cells; clamped so a big
-    // overshoot chips instead of pulverizing - the pulverization clamp refuses total loss)
+    // impulse-scaled shatter size: a harder hit breaks a bigger zone (radius in cells; clamped
+    // so a big overshoot chips instead of shattering everything). CONSERVATION: the impact no
+    // longer CARVES a crater (that vaporized voxels = lost mass). shatter_r now only sizes the
+    // Voronoi partition zone; every voxel is preserved and reassigned to a fragment.
     f32 const overkill = ev.impulse / std::max(body.fracture_impulse, 1e-3f); // >=1 (it fired)
-    f32 const carve_r = std::clamp(1.0f + 0.6f * overkill, 1.6f, 2.6f);
+    f32 const shatter_r = std::clamp(1.0f + 0.6f * overkill, 1.6f, 2.6f);
 
     // capture per-voxel mass + parent kinematics BEFORE anything changes
     daxa_u32 const old_count = (daxa_u32)voxel_shape_prims[shape_i].size();
@@ -1762,7 +1654,7 @@ public:
     // hits shatter a bigger zone. STONE = an isotropic cloud (chunks); WOOD = sites strung
     // along the grain (the longest grid axis) -> long shards. Deterministic per event (seed
     // = body id + impulse bits) so the showcase is reproducible without touching scene RNG.
-    f32 const vor_r = std::clamp(carve_r * (1.4f + 0.5f * overkill), carve_r + 1.0f, 6.0f);
+    f32 const vor_r = std::clamp(shatter_r * (1.4f + 0.5f * overkill), shatter_r + 1.0f, 6.0f);
     std::vector<daxa_f32vec4> sites;
     {
       daxa_u32 salt = 0u; std::memcpy(&salt, &ev.impulse, sizeof(salt));
@@ -1799,9 +1691,11 @@ public:
       }
     }
 
-    // GPU: carve + Voronoi assign + constrained connected-component labels; tiny readbacks
+    // GPU: Voronoi assign + constrained connected-component labels; tiny readbacks. carve
+    // radius 0 => NO material removed (conservation): the shape is only PARTITIONED, so the
+    // union of all component labels == the original solid set (nothing vanishes).
     std::vector<daxa_u32> occ_words, labels;
-    rigid_body_manager->carve_and_label(shape, grid_c, carve_r, sites, vor_r, occ_words, labels);
+    rigid_body_manager->carve_and_label(shape, grid_c, 0.0f, sites, vor_r, occ_words, labels);
 
     // component census (labels are min cell indices -> deterministic identities)
     std::map<daxa_u32, daxa_u32> comp_counts;
@@ -1811,22 +1705,73 @@ public:
     }
     if (comp_counts.empty())
     {
-      // full pulverization: clamp (MVP keeps bodies alive). The host slice is untouched,
-      // so the respawn upload restores the GPU slice = the carve is refused.
-      std::cerr << "FRACTURE: body " << ev.body_id << " would pulverize entirely; carve refused" << std::endl;
+      // with the carve gone this is unreachable for a solid shape (every voxel is labelled),
+      // but keep the guard: respawn restores the untouched GPU slice = the split is refused.
+      std::cerr << "FRACTURE: body " << ev.body_id << " produced no components; refused" << std::endl;
       return true; // respawn anyway to restore the GPU slice
     }
+
+    // CONSERVATION MERGE. The carve is gone, so every solid voxel carries a component label and
+    // their union == the original solid set. But the Voronoi partition can still leave stray
+    // sub-MIN_FRAG slivers at cell boundaries. Instead of DROPPING them (that would destroy those
+    // voxels AND spawn degenerate 1-2 voxel bodies that tunnel through the floor), reassign each
+    // sliver's voxels to the nearest KEPT component by centroid. Mass is then exactly preserved
+    // and the fragment set stays clean (no degenerate bodies). Done on the host labels[] before
+    // the census/bbox/emit passes below, which all read the merged result.
+    daxa_u32 const MIN_FRAG = 3u;
+    {
+      daxa_u32 const dx = dims.x, dy = dims.y;
+      struct Cen { double x = 0, y = 0, z = 0; daxa_u32 n = 0; };
+      std::map<daxa_u32, Cen> cen;
+      for (daxa_u32 c = 0u; c < cells; ++c)
+      {
+        daxa_u32 const l = labels[c];
+        if (l == MAX_U32) { continue; }
+        auto &e = cen[l];
+        e.x += (double)(c % dx); e.y += (double)((c / dx) % dy); e.z += (double)(c / (dx * dy)); ++e.n;
+      }
+      // targets = components big enough to stand alone; if NONE reach MIN_FRAG (a body smaller
+      // than the threshold), keep only the largest so it stays one whole piece.
+      daxa_u32 largest_label = MAX_U32, largest_n = 0u;
+      for (auto const &[l, e] : cen) { if (e.n > largest_n) { largest_n = e.n; largest_label = l; } }
+      std::vector<std::pair<daxa_u32, glm::vec3>> targets;
+      for (auto const &[l, e] : cen)
+        if (e.n >= MIN_FRAG) { targets.emplace_back(l, glm::vec3(e.x / e.n, e.y / e.n, e.z / e.n)); }
+      if (targets.empty() && largest_label != MAX_U32)
+      {
+        auto const &e = cen[largest_label];
+        targets.emplace_back(largest_label, glm::vec3(e.x / e.n, e.y / e.n, e.z / e.n));
+      }
+      // remap each sliver -> nearest target (kept components map to themselves)
+      std::map<daxa_u32, daxa_u32> remap;
+      for (auto const &[l, e] : cen)
+      {
+        if (e.n >= MIN_FRAG) { remap[l] = l; continue; }
+        glm::vec3 const cc((f32)(e.x / e.n), (f32)(e.y / e.n), (f32)(e.z / e.n));
+        daxa_u32 best = targets.front().first; double bestd = 1e30;
+        for (auto const &[tl, tc] : targets) { double const d = glm::dot(cc - tc, cc - tc); if (d < bestd) { bestd = d; best = tl; } }
+        remap[l] = best;
+      }
+      for (daxa_u32 c = 0u; c < cells; ++c) { daxa_u32 const l = labels[c]; if (l != MAX_U32) { labels[c] = remap[l]; } }
+    }
+    // re-census after the merge (comps/bbox/emit below all read the merged labels)
+    comp_counts.clear();
+    for (daxa_u32 c = 0u; c < cells; ++c) { if (labels[c] != MAX_U32) { ++comp_counts[labels[c]]; } }
+
+    // CONSERVATION INVARIANT: with no carve, every original solid voxel must land in exactly one
+    // component, so the component counts sum back to the parent's solid voxel count. A mismatch
+    // means the flood-fill left some solid unlabelled (voxel lost) -> surface it loudly.
+    {
+      daxa_u32 total = 0u; for (auto const &cc : comp_counts) { total += cc.second; }
+      if (total != old_count)
+        std::cerr << "FRACTURE-WARN: voxel conservation off: components sum " << total << " != solid "
+                  << old_count << " (body " << ev.body_id << ")" << std::endl;
+    }
+
     std::vector<std::pair<daxa_u32, daxa_u32>> comps(comp_counts.begin(), comp_counts.end());
     std::sort(comps.begin(), comps.end(), [](auto const &a, auto const &b) {
       return a.second != b.second ? a.second > b.second : a.first < b.first;
     });
-    // DEBRIS THRESHOLD: Voronoi shatter produces stray 1-2 voxel slivers whose inertia is
-    // near-degenerate — they wedge and read as standing interpenetration (deep200), and
-    // clutter the body/pool budget. Drop them below MIN_FRAG voxels: their occupancy is not
-    // written to any shape, so they simply vanish (dust). The largest component (comps[0])
-    // is ALWAYS kept regardless of size, so a body never disappears entirely.
-    daxa_u32 const MIN_FRAG = 3u;
-
     // PHASE 2b CROP: each component is re-packed into a grid CROPPED to its bounding box, so
     // its pool slices + sim bounds are sized to the real extent (a 3-voxel chunk of a 10x4x4
     // block becomes a 3x2x2 shape, not a mostly-empty 10x4x4). Precompute every component's
@@ -1888,10 +1833,11 @@ public:
     body.primitive_count = comps[0].second;
     { FragFix ff = parent_ctx; ff.body = ev.body_id; ff.crop_off = crop0; fixes.push_back(ff); }
 
-    // the rest become new fragment bodies on their own cropped shapes
+    // the rest become new fragment bodies on their own cropped shapes. Every component here is a
+    // kept target (the conservation merge folded all sub-MIN_FRAG slivers into their neighbours),
+    // so nothing is skipped: total voxel count out == total in.
     for (size_t k = 1; k < comps.size(); ++k)
     {
-      if (comps[k].second < MIN_FRAG) { continue; } // debris: too small to be its own body
       if (rigid_bodies.size() >= MAX_RIGID_BODY_COUNT && free_body_slots_.empty())
       {
         std::cerr << "FRACTURE: body cap reached, fragment dropped" << std::endl;
@@ -1936,15 +1882,19 @@ public:
     auto _now = [] { return std::chrono::high_resolution_clock::now(); };
     auto _ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     auto _t0 = _now();
-    // 1. pools upload (the host vectors are authoritative again)
+    // 1. pools upload. Only the HOST-authoritative buffers are uploaded: shape RECORDS (dims /
+    //    offsets / grid_origin) and OCCUPANCY (emit_cropped writes the bitmask on the host).
+    //    The SDF and SURFACE-LIST buffers are GPU-AUTHORITATIVE - they are computed only by
+    //    build_voxel_pools_gpu (the host voxel_sdf_cpu/voxel_surf_cpu are zero-filled pool
+    //    placeholders unless BB_SDF_VERIFY populates the oracle). Uploading those host zeros here
+    //    used to WIPE every shape's GPU-computed SDF/surface; the INCREMENTAL rebuild then only
+    //    restored the ~dirty shapes, leaving every UNCHANGED shape with a zero SDF -> its voxel
+    //    narrow phase found no surface -> the body fell through the floor. So do NOT upload them:
+    //    unchanged shapes keep their valid GPU SDF/surface, dirty shapes are rebuilt below.
     std::memcpy(device.buffer_host_address_as<VoxelShape>(rigid_body_manager->get_voxel_shapes_buffer()).value(),
                 voxel_shape_cpu.data(), voxel_shape_cpu.size() * sizeof(VoxelShape));
     std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer()).value(),
                 voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
-    std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_surface_buffer()).value(),
-                voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
-    std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
-                voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
     // 2. GPU rebuild chain (SDF + surface + inertia), INCREMENTAL: only the shapes created
     // this batch (the fixed bodies' shapes) changed geometry; the rest are already correct on
     // the GPU. A cull-only respawn (empty fixes) rebuilds nothing.
@@ -2023,15 +1973,31 @@ public:
     //    retired tombstones drop out and reused/new fragments join - all in one place
     rebuild_active_bookkeeping();
     auto _t1 = _now(); // pools+rebuild+derived+fixup+prims done
-    // 7. full AS rebuild + sim refresh (the reset() tail, minus the pause)
-    accel_struct_mngr->reset_for_reload();
-    if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook()))
+    // 7. AS rebuild + sim refresh (the reset() tail, minus the pause). INCREMENTAL by default:
+    //    only the bodies whose geometry changed this fracture get their BLAS rebuilt; the ~hundreds
+    //    of untouched bodies keep their baked BLAS (the dominant respawn cost). BB_AS_FULL forces
+    //    the old full rebuild (reset + build all) for A/B comparison. The incremental path manages
+    //    its own upload counters, so it must NOT be preceded by reset_for_reload (that clears the
+    //    baseline and would force a full build every time).
+    static bool const _as_full = bb_getenv("BB_AS_FULL") != nullptr;
+    bool _ok;
+    if (_as_full)
+    {
+      accel_struct_mngr->reset_for_reload();
+      _ok = accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook());
+    }
+    else
+    {
+      _ok = accel_struct_mngr->update_accel_structs_incremental(rigid_bodies, aabb, voxel_prims_hook());
+    }
+    if (!_ok)
     {
       std::cerr << "FRACTURE: AS rebuild failed!" << std::endl;
       return;
     }
+    auto _t1b = _now(); // AS structs (CPU: dirty-diff + create/size-query for changed bodies) done
     accel_struct_mngr->build_AS();
-    auto _t2 = _now(); // AS (BLAS) rebuild done
+    auto _t2 = _now(); // build_AS (GPU build + wait_idle) done
     rigid_body_manager->update_sim();
     rigid_body_manager->update_active_rigid_body_list();
     status_manager->next_frame();
@@ -2039,7 +2005,7 @@ public:
     rigid_body_manager->update_active_rigid_body_list();
     status_manager->next_frame();
     accel_struct_mngr->update_TLAS();
-    if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " AS(blas)=" << _ms(_t1,_t2) << " sim+tlas=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
+    if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " blas_cpu=" << _ms(_t1,_t1b) << " blas_gpu=" << _ms(_t1b,_t2) << " sim+tlas=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
     if (pool_verify_on()) { verify_pools("respawn"); }
     std::cout << "[FRACTURE] respawn: " << rigid_body_count << " bodies, "
               << voxel_shape_cpu.size() << " shapes" << std::endl;

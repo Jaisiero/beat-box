@@ -1,6 +1,8 @@
+#define _CRT_SECURE_NO_WARNINGS // std::getenv (BB_POOL_VERIFY / BB_RESPAWN_TIMING) on MSVC
 #include "acceleration_structure_manager.hpp"
 #include "renderer_manager.hpp"
 #include "gui_manager.hpp"
+#include <cstdlib> // std::getenv (BB_RESPAWN_TIMING incremental-AS diagnostic)
 
 BB_NAMESPACE_BEGIN
 
@@ -148,9 +150,11 @@ void AccelerationStructureManager::destroy()
       device.destroy_buffer(rigid_body_buffer[f]);
     device.destroy_buffer(primitive_scratch_buffer);
     device.destroy_buffer(primitive_buffer);
-    for (auto blas : proc_blas)
+    // INCREMENTAL-AS: body_blas_ is the live set (incremental may hold handles not in proc_blas);
+    // it is the single destruction owner (see build_accel_structs). Empty on a never-built manager.
+    for (auto &blas : body_blas_)
     {
-      device.destroy_blas(blas);
+      if (!blas.is_empty()) { device.destroy_blas(blas); blas = {}; }
     }
     if (!placeholder_blas.is_empty())
     {
@@ -313,11 +317,20 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   // the stale handles alias the reused buffer memory, task_blas binds a stale proc_blas.front()
   // (the first scene's body-0 BLAS), and shutdown double-destroys them. No-op on the initial
   // startup build (proc_blas empty). Safe here: callers run at a synchronized frame boundary.
-  for (auto blas : proc_blas)
+  //
+  // INCREMENTAL-AS ownership: body_blas_ is the single source of truth for BLAS destruction
+  // (it holds the live set after any incremental update, which may DIFFER from proc_blas -- the
+  // incremental path destroys/creates handles without touching proc_blas). Destroy via body_blas_
+  // here (and in destroy()), not proc_blas, so a full rebuild after fractures frees the real live
+  // handles and never double-frees a stale one. proc_blas is then just this build's transient list.
+  for (auto &blas : body_blas_)
   {
-    device.destroy_blas(blas);
+    if (!blas.is_empty()) { device.destroy_blas(blas); blas = {}; }
   }
   proc_blas.clear();
+  // a full build re-lays every BLAS from offset 0 (reset_for_reload rewound proc_blas_buffer_offset);
+  // the region pool must start empty so its allocations match that fresh dense bump.
+  blas_region_pool_.reset();
 
   /// Alignments:
   auto get_aligned = [&](u64 operand, u64 granularity) -> u64
@@ -475,6 +488,252 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   // Set Task TLAS
   task_tlas.set_tlas(tlas[renderer_manager->get_sim_frame_index()]);
 
+  // INCREMENTAL-AS: capture this full build as the baseline the next fracture diffs against.
+  seed_incremental_state(rigid_bodies, primitives);
+
+  return true;
+}
+
+// Record the just-completed full build as the incremental baseline: body i's BLAS is proc_blas[i],
+// its buffer region is the bump slice [start, start+aligned_size), and its prim-span content hash
+// is the diff key. proc_blas_buffer_offset is the dense bump end, so seed the region pool's
+// high_water to it with no holes (fully packed). After this, update_accel_structs_incremental can
+// rebuild only the bodies whose hash changes.
+void AccelerationStructureManager::seed_incremental_state(std::vector<RigidBody> const &rigid_bodies,
+                                                          std::vector<Aabb> const &primitives)
+{
+  u32 const n = static_cast<u32>(rigid_bodies.size());
+  if (body_blas_.size() < n) { body_blas_.resize(n); }
+  if (body_blas_region_.size() < n) { body_blas_region_.resize(n); }
+  if (body_built_hash_.size() < n) { body_built_hash_.resize(n); }
+
+  auto get_aligned = [](u64 operand, u64 granularity) -> u64
+  { return ((operand + (granularity - 1)) & ~(granularity - 1)); };
+
+  u64 off = 0;
+  for (u32 i = 0; i < n; ++i)
+  {
+    u64 const sz = get_aligned(blas_build_sizes.at(i).acceleration_structure_size, ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT);
+    body_blas_[i] = proc_blas[i];
+    body_blas_region_[i] = {off, sz};
+    body_built_hash_[i] = hash_prim_span(primitives, rigid_bodies[i].primitive_offset, rigid_bodies[i].primitive_count);
+    off += sz;
+  }
+  // any slot beyond the current scene must not carry a stale handle/region into the next diff
+  for (u32 i = n; i < body_blas_.size(); ++i) { body_blas_[i] = {}; body_blas_region_[i] = {0, 0}; body_built_hash_[i] = 0; }
+
+  // seed the region pool as fully packed up to the bump end (matches proc_blas_buffer_offset)
+  blas_region_pool_.reset();
+  blas_region_pool_.high_water = static_cast<daxa_u32>(off);
+  blas_region_pool_.live_bytes = static_cast<daxa_u32>(off);
+  incremental_ready_ = true;
+}
+
+// INCREMENTAL AS. Lays out prims densely and re-uploads them in full (cheap) exactly like the full
+// build, then (re)builds ONLY the BLAS whose prim-span content hash changed since the last build,
+// keeping every unchanged body's baked BLAS in place. Reuses AS_build_TG (its BLAS task builds
+// whatever is in blas_build_infos, so filling it with just the dirty subset builds just those) and
+// the per-frame TLAS instance/transform refresh. The dominant respawn cost (build all N BLAS)
+// collapses to building the handful of changed bodies. See the header member note for why this is
+// correct (BLAS bakes geometry; the shader re-reads aabbs[primitive_offset+i] from the re-uploaded
+// identical content). Falls back to a full build until one has seeded the baseline.
+bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies,
+                                                                    std::vector<Aabb> const &primitives,
+                                                                    std::function<void(daxa::BufferId)> const &post_primitive_upload)
+{
+  if (!initialized)
+  {
+    std::cerr << "ERROR: AccelerationStructureManager is not initialized inside update_accel_structs_incremental!" << std::endl;
+    return false;
+  }
+  // No baseline yet (fresh load / post-reset) -> do a full build, which seeds it.
+  if (!incremental_ready_)
+  {
+    return build_accel_structs(rigid_bodies, primitives, post_primitive_upload);
+  }
+
+  u32 const rigid_body_count = static_cast<u32>(rigid_bodies.size());
+  u32 const primitive_count = static_cast<u32>(primitives.size());
+  if (rigid_body_count > MAX_RIGID_BODY_COUNT || primitive_count > MAX_PRIMITIVE_COUNT)
+  {
+    std::cerr << "ERROR: incremental AS exceeded max rigid bodies (" << rigid_body_count << "/" << MAX_RIGID_BODY_COUNT
+              << ") or primitives (" << primitive_count << "/" << MAX_PRIMITIVE_COUNT << ")!" << std::endl;
+    return false;
+  }
+  if (body_blas_.size() < rigid_body_count) { body_blas_.resize(rigid_body_count); }
+  if (body_blas_region_.size() < rigid_body_count) { body_blas_region_.resize(rigid_body_count); }
+  if (body_built_hash_.size() < rigid_body_count) { body_built_hash_.resize(rigid_body_count); }
+
+  auto get_aligned = [](u64 operand, u64 granularity) -> u64
+  { return ((operand + (granularity - 1)) & ~(granularity - 1)); };
+
+  // 1. UNIT-QUATERNION INVARIANT (identical to the full build; the TLAS instance transform and the
+  //    ray tracer's quaternion sandwich both rely on |q| == 1).
+  for (size_t i = 0; i < rigid_bodies.size(); ++i)
+  {
+    auto &rb = rigid_bodies[i];
+    daxa_f32 m2 = rb.rotation.v.x * rb.rotation.v.x + rb.rotation.v.y * rb.rotation.v.y +
+                  rb.rotation.v.z * rb.rotation.v.z + rb.rotation.w * rb.rotation.w;
+    rb.rotation = (m2 > 1.0e-12f) ? rb.rotation.normalize() : Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+  }
+
+  // 2. DENSE PRIM LAYOUT + FULL RE-UPLOAD (exactly the full build's model): copy every prim to the
+  //    scratch, run the GPU voxel-prims hook, and assign each body a sequential primitive_offset.
+  //    AS_build_TG's copy task then blits [0, primitive_scratch_offset) into primitive_buffer at
+  //    previous_primitive_count(0). Cheap; keeps unchanged bodies' content consistent at their
+  //    (possibly shifted) offsets so their baked BLAS still intersects correctly.
+  std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
+  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer); }
+
+  previous_primitive_count = 0;
+  previous_rigid_body_count = 0;
+  u32 acc = 0;
+  for (u32 i = 0; i < rigid_body_count; ++i)
+  {
+    rigid_bodies[i].primitive_offset = acc;
+    acc += rigid_bodies[i].primitive_count;
+  }
+  current_primitive_count = acc;
+  current_rigid_body_count = rigid_body_count;
+  primitive_scratch_offset = primitive_count * sizeof(Aabb);
+  rigid_body_scratch_offset = static_cast<u64>(rigid_body_count) * sizeof(RigidBody);
+
+  // 3. BLAS: (re)build only the dirty bodies; keep the rest. blas_geometries is resized upfront and
+  //    indexed by BODY id so the Spans stashed in blas_build_infos never dangle (no vector realloc).
+  blas_build_infos.clear();
+  blas_build_infos.reserve(rigid_body_count);
+  blas_build_sizes.clear();
+  blas_build_sizes.reserve(rigid_body_count);
+  blas_geometries.clear();
+  blas_geometries.resize(rigid_body_count);
+  proc_blas_scratch_offset = 0;
+
+  u32 dirty_count = 0;
+  for (u32 i = 0; i < rigid_body_count; ++i)
+  {
+    auto &rigid_body = rigid_bodies[i];
+    u64 const hash = hash_prim_span(primitives, rigid_body.primitive_offset, rigid_body.primitive_count);
+    bool const dirty = body_blas_[i].is_empty() || hash != body_built_hash_[i];
+
+    if (dirty)
+    {
+      // free the stale BLAS + its buffer region (coalesces back into the pool for reuse)
+      if (!body_blas_[i].is_empty())
+      {
+        device.destroy_blas(body_blas_[i]);
+        blas_region_pool_.free(static_cast<daxa_u32>(body_blas_region_[i].first), static_cast<daxa_u32>(body_blas_region_[i].second));
+        body_blas_[i] = {};
+      }
+
+      blas_geometries.at(i).push_back({
+          .data = device.device_address(primitive_buffer).value() + static_cast<u64>(rigid_body.primitive_offset) * sizeof(Aabb),
+          .stride = sizeof(Aabb),
+          .count = rigid_body.primitive_count,
+          .flags = daxa::GeometryFlagBits::OPAQUE,
+      });
+      blas_build_infos.push_back({
+          .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_TRACE,
+          .dst_blas = {},
+          .geometries = daxa::Span<const daxa::BlasAabbGeometryInfo>(blas_geometries.at(i).data(), blas_geometries.at(i).size()),
+          .scratch_data = {},
+      });
+      blas_build_sizes.push_back(device.blas_build_sizes(blas_build_infos.back()));
+
+      // scratch region for this build (reset to 0 above; each dirty build bumps a fresh slice)
+      auto scratch_offset = get_aligned(blas_build_sizes.back().build_scratch_size, acceleration_structure_scratch_offset_alignment);
+      if (proc_blas_scratch_offset + scratch_offset > BLAS_POOL_BUDGET)
+      {
+        std::cerr << "ERROR: incremental AS exceeded BLAS scratch budget! Current: " << (proc_blas_scratch_offset + scratch_offset)
+                  << ", Limit: " << BLAS_POOL_BUDGET << std::endl;
+        return false;
+      }
+      blas_build_infos.back().scratch_data = device.device_address(proc_blas_scratch_buffer).value() + proc_blas_scratch_offset;
+      proc_blas_scratch_offset += scratch_offset;
+
+      // persistent buffer region from the free-list (256-aligned size keeps every offset aligned)
+      auto const as_size = blas_build_sizes.back().acceleration_structure_size;
+      auto const aligned = get_aligned(as_size, ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT);
+      bool ok = false;
+      daxa_u32 const region_off = blas_region_pool_.alloc(static_cast<daxa_u32>(aligned), BLAS_POOL_BUDGET, ok);
+      if (!ok)
+      {
+        std::cerr << "ERROR: incremental AS exhausted the BLAS buffer pool (need " << aligned
+                  << ", largest free " << blas_region_pool_.largest_free_block() << ", limit " << BLAS_POOL_BUDGET << ")!" << std::endl;
+        return false;
+      }
+      body_blas_region_[i] = {region_off, aligned};
+      body_blas_[i] = device.create_blas_from_buffer(
+          {{.size = as_size, .name = "blas" + std::to_string(i)}, proc_blas_buffer, region_off});
+      blas_build_infos.back().dst_blas = body_blas_[i];
+      body_built_hash_[i] = hash;
+      ++dirty_count;
+    }
+
+    // instance for EVERY body (dirty or not): transform is refreshed per-frame by the TLAS update
+    // pass, but seed it here; the BLAS address is this body's current (kept or rebuilt) handle.
+    blas_instances_data[i] = {
+        .transform = rigid_body.get_instance_transform(),
+        .instance_custom_index = i,
+        .mask = 0xFF,
+        .instance_shader_binding_table_record_offset = 0,
+        .flags = {},
+        .blas_device_address = device.device_address(body_blas_[i]).value(),
+    };
+  }
+
+  // copy rigid bodies to the scratch (AS_build_TG blits them into the rigid-body buffer)
+  std::memcpy(device.buffer_host_address_as<RigidBody>(rigid_body_scratch_buffer).value(), rigid_bodies.data(), rigid_body_count * sizeof(RigidBody));
+
+  // bind the BLAS task to a live handle (any non-empty body BLAS; placeholder only if empty scene)
+  {
+    daxa::BlasId bound = placeholder_blas;
+    for (u32 i = 0; i < rigid_body_count; ++i) { if (!body_blas_[i].is_empty()) { bound = body_blas_[i]; break; } }
+    task_blas.set_blas(bound);
+  }
+
+  // TLAS over all instances (same as the full build)
+  tlas_info[0] = {
+      .data = device.device_address(blas_instances_buffer).value(),
+      .count = rigid_body_count,
+      .is_data_array_of_pointers = false,
+      .flags = {},
+  };
+  tlas_build_info = {
+      .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_BUILD,
+      .dst_tlas = {},
+      .instances = tlas_info,
+      .scratch_data = device.device_address(proc_tlas_scratch_buffer).value(),
+  };
+  tlas_build_sizes = device.tlas_build_sizes(tlas_build_info);
+  if (!tlas_within_budget("update_accel_structs_incremental")) { return false; }
+  tlas_build_info.scratch_data = device.device_address(proc_tlas_scratch_buffer).value();
+  tlas_build_info.dst_tlas = tlas[renderer_manager->get_sim_frame_index()];
+  task_tlas.set_tlas(tlas[renderer_manager->get_sim_frame_index()]);
+
+  // BLAS-region invariant (gated by BB_POOL_VERIFY, same switch the fracture pools use): the pool's
+  // free ranges must stay sorted/coalesced and account exactly (Sigma free + live == high_water). A
+  // violation means a region overlap -> a rebuilt BLAS could stomp a live one -> device-lost, so
+  // surface it loudly here rather than as a GPU crash later. Also assert no live region exceeds the
+  // buffer budget.
+  if (std::getenv("BB_POOL_VERIFY"))
+  {
+    std::string const err = blas_region_pool_.verify_free();
+    if (!err.empty())
+    {
+      std::cerr << "ERROR: [BB_POOL_VERIFY] blas_region_pool_ invariant broken after incremental AS: " << err << std::endl;
+      std::abort();
+    }
+    if (blas_region_pool_.high_water > BLAS_POOL_BUDGET)
+    {
+      std::cerr << "ERROR: [BB_POOL_VERIFY] blas_region_pool_ high_water " << blas_region_pool_.high_water
+                << " exceeds budget " << BLAS_POOL_BUDGET << std::endl;
+      std::abort();
+    }
+  }
+
+  if (std::getenv("BB_RESPAWN_TIMING")) { std::cout << "[INCR-AS] dirty=" << dirty_count << "/" << rigid_body_count
+                                                    << " blas_pool_live=" << blas_region_pool_.live_bytes
+                                                    << " hw=" << blas_region_pool_.high_water << std::endl; }
   return true;
 }
 
