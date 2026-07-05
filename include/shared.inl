@@ -1000,16 +1000,6 @@ static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
 // displacement to <=200mm (under the 0.25m extraction cap), so cubes don't bury deep. Resting and
 // settling bodies (<1 m/s) and the canonical scenes are well under the cap, so they are untouched.
 static const daxa_f32 BB_MAX_LINEAR_SPEED = 12.0f;
-// REST DAMPING (entry_avbd_finalize): velocity-dependent micro-dissipation that bleeds the base
-// solver's rest-tremor so settled bodies reach the sleep threshold instead of buzzing (~1 m/s) and
-// jittering forever. The damp factor lerps from _LIN/_ANG at zero speed to 1.0 (no damp) at _VEL/
-// _OMEGA, so ONLY slow (settling) motion is damped - fast falls/impacts/throws are untouched, keeping
-// bounce + free-fall timing intact. Tunable: lower _LIN/_ANG = stronger; raise _VEL/_OMEGA = damps a
-// wider speed band. Skipped in DETERMINISTIC mode.
-static const daxa_f32 BB_REST_DAMP_VEL = 2.0f;    // m/s: linear speed above which damping fades to 0
-static const daxa_f32 BB_REST_DAMP_LIN = 0.90f;   // linear factor at ~0 speed (0.90 = -10%/step)
-static const daxa_f32 BB_REST_DAMP_OMEGA = 3.0f;  // rad/s: spin above which angular damping fades to 0
-static const daxa_f32 BB_REST_DAMP_ANG = 0.88f;   // angular factor at ~0 spin
 static const daxa_f32 BB_AVBD_BETA = 100000.0f; // (iter16+2e5 convergence experiment 2026-06-16
                                                 // FALSIFIED: deep contact is UNLOADED lambda~0, so
                                                 // stiffer k did NOT extract it; pen stuck ~208mm,

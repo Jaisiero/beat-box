@@ -212,21 +212,6 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   daxa_f32 sign = dq.w < 0.0f ? -1.0f : 1.0f;
   r->omega = dq.v * (2.0f * sign * inv_dt);
 
-  // REST DAMPING (velocity-dependent micro-dissipation). The base AVBD solver has a residual
-  // rest-tremor: a settled pile never quite converges, so bodies buzz at ~1 m/s and stay above the
-  // sleep threshold -> visible jitter/"saltitos" (confirmed independent of warm-start by A/B). Bleed
-  // it here on the velocity CARRIED to next step. The damp factor RAMPS with speed: near-zero speed
-  // gets the full factor (kills the tremor so bodies reach rest and sleep), while fast motion (falls,
-  // impacts, throws >= BB_REST_DAMP_VEL) gets ~none, so bounce/dynamics and free-fall timing are
-  // preserved. Skips DETERMINISTIC mode (post-stab-skipped runs must stay bit-reproducible).
-  if (!sim_config->has_flag(SimFlag::DETERMINISTIC))
-  {
-    daxa_f32 vt = saturate(length(r->velocity) / BB_REST_DAMP_VEL);
-    r->velocity *= lerp(BB_REST_DAMP_LIN, 1.0f, vt);
-    daxa_f32 wt = saturate(length(r->omega) / BB_REST_DAMP_OMEGA);
-    r->omega *= lerp(BB_REST_DAMP_ANG, 1.0f, wt);
-  }
-
   // DETERMINISM CHECKPOINT (debug): hash the post-main-solve pose here (impact + post-stab have
   // not moved it yet), mirroring the end-of-step gauge in entry_rigid_body_update. Comparing cp vs
   // poshash between two runs localizes whether the divergence enters the main solve or after it.
