@@ -2,6 +2,7 @@
 
 #include "defines.hpp"
 #include "math.hpp"
+#include "free_list_pool.hpp" // FRACTURE memory pools (shared with the AS manager)
 #include "camera_manager.hpp"
 #include "rigid_body_manager.hpp"
 #include "acceleration_structure_manager.hpp"
@@ -19,117 +20,6 @@
 #include <chrono>    // respawn timing probe
 
 BB_NAMESPACE_BEGIN
-
-// FRACTURE memory pool (phase 2): a coalescing FREE-LIST of OFFSETS into a shared backing
-// vector. Unlike the phase-1 bucket allocator (a per-size free stack, which could only reuse
-// a hole for an EXACTLY-equal request), this handles arbitrary sizes: alloc is first-fit
-// with split (a large hole yields the exact front and keeps the remainder free), free merges
-// adjacent ranges (coalescing) so scattered holes recombine into large ones, and the top of
-// the pool shrinks when its tail is freed. That variable-size support is what lets fragments
-// be cropped to their real bbox (tight footprint + tight sim bounds). Offsets, not pointers,
-// so it survives the backing vector reallocating on growth. free_ranges: offset -> size,
-// kept sorted (std::map) and always fully coalesced (verify() enforces both).
-struct FreeListPool
-{
-  daxa_u32 high_water = 0;              // one-past the last used slot (== backing vector size)
-  std::map<daxa_u32, daxa_u32> free_ranges; // offset -> size, sorted + coalesced
-  daxa_u32 live_bytes = 0;             // sum of live allocation sizes (diagnostic)
-
-  // returns an offset for `size` slots, or MAX_U32 if capacity is exhausted (no fitting hole
-  // and no room to bump). ok reports success.
-  daxa_u32 alloc(daxa_u32 size, daxa_u32 cap, bool &ok)
-  {
-    if (size == 0u) { ok = true; return high_water; } // degenerate: no bytes needed
-    // first-fit over the sorted free ranges
-    for (auto it = free_ranges.begin(); it != free_ranges.end(); ++it)
-    {
-      if (it->second >= size)
-      {
-        daxa_u32 const off = it->first;
-        daxa_u32 const rem = it->second - size;
-        free_ranges.erase(it);
-        if (rem > 0u) { free_ranges[off + size] = rem; } // keep the remainder free
-        live_bytes += size;
-        ok = true;
-        return off;
-      }
-    }
-    if (high_water + size > cap) { ok = false; return 0xFFFFFFFFu; }
-    daxa_u32 const off = high_water;
-    high_water += size;
-    live_bytes += size;
-    ok = true;
-    return off;
-  }
-  void free(daxa_u32 off, daxa_u32 size)
-  {
-    if (size == 0u) { return; }
-    live_bytes -= size;
-    daxa_u32 lo = off, hi = off + size;
-    // merge with the range immediately BEFORE (if it ends exactly at lo)
-    if (!free_ranges.empty())
-    {
-      auto it = free_ranges.lower_bound(off);
-      if (it != free_ranges.begin())
-      {
-        auto prev = std::prev(it);
-        if (prev->first + prev->second == lo) { lo = prev->first; free_ranges.erase(prev); }
-      }
-    }
-    // merge with the range immediately AFTER (if it starts exactly at hi)
-    {
-      auto it = free_ranges.find(hi);
-      if (it != free_ranges.end()) { hi = it->first + it->second; free_ranges.erase(it); }
-    }
-    if (hi == high_water) { high_water = lo; }        // freed the tail: shrink instead of holing
-    else { free_ranges[lo] = hi - lo; }                // otherwise record the merged hole
-  }
-  bool can_alloc(daxa_u32 size, daxa_u32 cap) const
-  {
-    if (size == 0u) { return true; }
-    for (auto const &r : free_ranges) { if (r.second >= size) { return true; } }
-    return high_water + size <= cap;
-  }
-  void reset()
-  {
-    high_water = 0;
-    live_bytes = 0;
-    free_ranges.clear();
-  }
-  daxa_u32 largest_free_block() const
-  {
-    daxa_u32 m = 0u;
-    for (auto const &r : free_ranges) { m = std::max(m, r.second); }
-    return m;
-  }
-  // SELF-CHECK (BB_POOL_VERIFY): free ranges must be sorted, in-bounds, and FULLY COALESCED
-  // (no two touching), and the byte accounting must close: Sigma(free) + live == high_water.
-  // Returns "" on success, else a description of the first broken invariant.
-  std::string verify_free() const
-  {
-    daxa_u32 sum_free = 0u, prev_end = 0u;
-    bool first = true;
-    for (auto const &r : free_ranges)
-    {
-      if (r.second == 0u) { return "zero-size free range at " + std::to_string(r.first); }
-      if (r.first + r.second > high_water) { return "free range past high_water at " + std::to_string(r.first); }
-      if (!first && r.first <= prev_end)
-      {
-        return "unsorted or un-coalesced free ranges near " + std::to_string(r.first) +
-               " (prev end " + std::to_string(prev_end) + ")";
-      }
-      first = false;
-      prev_end = r.first + r.second;
-      sum_free += r.second;
-    }
-    if (sum_free + live_bytes != high_water)
-    {
-      return "accounting mismatch: free " + std::to_string(sum_free) + " + live " +
-             std::to_string(live_bytes) + " != high_water " + std::to_string(high_water);
-    }
-    return "";
-  }
-};
 
 // getenv wrapper that silences MSVC C4996 for a read-only env lookup (this header is included by TUs
 // that don't #define _CRT_SECURE_NO_WARNINGS).
@@ -2030,8 +1920,9 @@ public:
       std::cerr << "FRACTURE: AS rebuild failed!" << std::endl;
       return;
     }
+    auto _t1b = _now(); // build_accel_structs (CPU: destroy+create+size-query) done
     accel_struct_mngr->build_AS();
-    auto _t2 = _now(); // AS (BLAS) rebuild done
+    auto _t2 = _now(); // build_AS (GPU build + wait_idle) done
     rigid_body_manager->update_sim();
     rigid_body_manager->update_active_rigid_body_list();
     status_manager->next_frame();
@@ -2039,7 +1930,7 @@ public:
     rigid_body_manager->update_active_rigid_body_list();
     status_manager->next_frame();
     accel_struct_mngr->update_TLAS();
-    if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " AS(blas)=" << _ms(_t1,_t2) << " sim+tlas=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
+    if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " blas_cpu=" << _ms(_t1,_t1b) << " blas_gpu=" << _ms(_t1b,_t2) << " sim+tlas=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
     if (pool_verify_on()) { verify_pools("respawn"); }
     std::cout << "[FRACTURE] respawn: " << rigid_body_count << " bodies, "
               << voxel_shape_cpu.size() << " shapes" << std::endl;
