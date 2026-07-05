@@ -2,6 +2,7 @@
 
 #include "defines.hpp"
 #include "task_manager.hpp"
+#include "free_list_pool.hpp" // incremental-AS BLAS/prim region allocator
 #include <functional>
 
 BB_NAMESPACE_BEGIN
@@ -131,6 +132,19 @@ private:
   daxa::BufferId proc_blas_buffer = {};
   // Sub-allocated buffer for the BLAS
   std::vector<daxa::BlasId> proc_blas = {};
+
+  // INCREMENTAL AS (phase 2b): per-body-id BLAS + region tracking so a fracture rebuilds only
+  // the handful of changed bodies instead of every BLAS. body_blas_[id] is the live BLAS of
+  // body id ({} = none); the region vectors record its proc_blas_buffer / primitive_buffer
+  // slices for freeing. blas_region_pool_ / prim_region_pool_ are FreeListPools over those
+  // buffers (bytes / Aabb-count units); a fracture frees retired+changed bodies' regions and
+  // allocs fresh ones, keeping unchanged bodies' BLAS in place.
+  std::vector<daxa::BlasId> body_blas_;                 // [MAX_RIGID_BODY_COUNT]
+  std::vector<std::pair<u64, u64>> body_blas_region_;   // (byte offset, aligned byte size)
+  std::vector<std::pair<u32, u32>> body_prim_region_;   // (Aabb offset, count)
+  FreeListPool blas_region_pool_;                       // over proc_blas_buffer (bytes)
+  FreeListPool prim_region_pool_;                       // over primitive_buffer (Aabb count)
+  bool incremental_ready_ = false;                      // seeded by the first full build
 
   // Buffer for the LBVH BLAS
   daxa::BlasId lbvh_blas[DOUBLE_BUFFERING] = {};
