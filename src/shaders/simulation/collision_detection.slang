@@ -949,9 +949,16 @@ struct BodyLinkManifold {
           old_index = index;
           return true;
         }
-        if (!exact_only) {
-          fallback = index;
-        }
+        // SAME-PAIR, ANY-KEY fallback. For a voxel contact the key (90-95) encodes the
+        // dominant contact-face axis, which ROTATES frame-to-frame as a fragment jitters in a
+        // pile - so the exact-key match MISSes, the warm-start normal_impulse resets to 0, and
+        // the contact re-forms fresh each frame with a large penalty impulse that LAUNCHES the
+        // fragment (the scene_11 pile "bounce"; ftag=[..k9x MISS] every frame). exact_only used
+        // to gate this off for voxel keys, back when cross-key inheritance was unguarded; now
+        // update_from_old guards it with a normal-coherence check (a wrong-face lambda is not
+        // transferred), so recovering the pair here is safe and kills the MISS storm. OBB pairs
+        // are unaffected (exact_only was already false for them).
+        fallback = index;
       }
       // SWAPPED-ORDER fallback (OBB pairs): the broad phase orders pairs by CURRENT
       // sorted index (LBVH check_index), which flips when the radix sort swaps two
@@ -1848,15 +1855,23 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
       daxa_u32 old_index = 0;
       daxa_u32 old_swapped = 0u;
       RigidBody* prev_rba = &previous_rigid_bodies[rba_prev_index];
+      RigidBody* prev_rbb = &previous_rigid_bodies[rbb_prev_index];
       daxa_u32 previous_manifold_node_count = min(previous_sim_config.manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
       daxa_u32 previous_collision_count = min(previous_sim_config.g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
 
-#if defined(BB_SIM_DEBUG)
-      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index, old_swapped))
-      {
-#else
-      if(BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index, old_swapped)) {
-#endif
+      // Walk BODY A's previous manifold-node chain for the (a,b) pair; if it MISSes, walk BODY
+      // B's chain too. The manifold was linked to BOTH bodies last frame (body_link_manifold runs
+      // for rba AND rbb), but the row-reorder carries manifold_node_index through copy_rigid_body_
+      // fields and a fracture respawn rebuilds the body set - either can leave ONE body's chain
+      // head stale/empty while the other still holds the pair. Walking only A's chain then MISSes
+      // (dm A:EMPTY) and wipes the warm-start lambda, so the contact re-forms fresh with a large
+      // penalty impulse that relaunches the fragment - the scene_11 pile "bounce". Trying B's chain
+      // recovers the pair whenever either chain survived.
+      bool found = BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rba->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index, old_swapped);
+      if (!found) {
+        found = BodyLinkManifold::find_old_collision(rba_prev_index, rbb_prev_index, manifold.key, prev_rbb->manifold_node_index, previous_manifold_node_count, previous_collision_count, collision_map_prev, previous_manifold_nodes, old_collisions, old_index, old_swapped);
+      }
+      if (found) {
         matched_old = true;
         old_cc_dbg = old_collisions[old_index].contact_count;
         manifold.update_from_old(&old_collisions[old_index], old_swapped);
