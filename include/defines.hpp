@@ -354,7 +354,10 @@ static constexpr u32 DOUBLE_BUFFERING = 2;
 
 static constexpr f32 TIME_STEP = 0.01667f;
 static constexpr f32 GRAVITY = 9.81f;
-static constexpr u32 MAX_PRIMITIVE_COUNT = 16384; // voxel bodies emit one AABB primitive per voxel
+// one AABB primitive per solid voxel; raised for the fracture soak (many small live bodies).
+// Aabb is 24 B, and only a couple of MAX_PRIMITIVE_COUNT-sized buffers exist, so this is a
+// few MB of headroom. Phase-2 incremental AS will make this per-body instead of a flat pool.
+static constexpr u32 MAX_PRIMITIVE_COUNT = 65536;
 static constexpr u32 MAX_RIGID_BODY_COUNT = 1024;
 // measured budgets, must mirror BB_MAX_COLLISION_COUNT / BB_MAX_BROAD_PAIR_COUNT in
 // shared.inl (all-pairs sizing cost ~700 MB of VRAM in Manifold buffers alone; peaks

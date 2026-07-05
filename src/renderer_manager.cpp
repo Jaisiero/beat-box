@@ -640,6 +640,8 @@ int RendererManager::render()
         {
           scene_manager->cull_out_of_world();
         }
+        // SOAK spawner (scene_11 only): rain new breakable bodies on a cadence (no-op elsewhere)
+        scene_manager->maybe_spawn();
       }
       // DEEP-POCKET TRACE: one CSV row per stepped frame with the deepest awake contact's
       // {pen,lambda,k,vn,pair,stick} latched by entry_avbd_pocket_trace. Full-rate (every

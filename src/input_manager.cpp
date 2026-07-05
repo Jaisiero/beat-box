@@ -186,6 +186,10 @@ void InputManager::on_key(i32 key, i32 action)
   case GLFW_KEY_F10:
     if (action == GLFW_PRESS) { status_mngr->request_scene(10); status_mngr->reset_accumulation_count(); }
     break;
+  // F11: fracture soak / free-list stress (scene 11) — runtime spawner rains breakables
+  case GLFW_KEY_F11:
+    if (action == GLFW_PRESS) { status_mngr->request_scene(11); status_mngr->reset_accumulation_count(); }
+    break;
   // F12: dump the LIVE GPU poses to scene_dump.txt (BB_SCENE_FILE format, incl. voxel bodies
   // with rotation) - capture the exact configuration on screen for offline reproduction
   case GLFW_KEY_F12:

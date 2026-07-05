@@ -1159,6 +1159,111 @@ public:
     }
   }
 
+  // FRACTURE SOAK TEST (scene_11): an exhaustive free-list stress. A runtime spawner rains
+  // breakable voxel bodies of MANY shapes (different pool footprints -> the free-list must
+  // split/coalesce varied sizes) onto anvils; each shatters (Voronoi), the fragments settle,
+  // and a high kill plane culls them -> a long, near-capacity alloc/free churn. Run headless
+  // with BB_POOL_VERIFY=1 (self-check after every fracture/cull) + BB_KILL_Y (cull height) +
+  // BB_FRACTURE_SPAWN_STEPS (spawn cadence). The 5-minute soak is just this scene left running.
+  void scene_11() {
+    materials = {
+      { .albedo = daxa_f32vec3(0.1f, 0.1f, 0.1f),    .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) },
+      { .albedo = daxa_f32vec3(1.0f, 1.0f, 1.0f),    .emission = daxa_f32vec3(20.0f, 20.0f, 20.0f) },
+      { .albedo = daxa_f32vec3(0.20f, 0.85f, 0.30f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) }, // 2
+      { .albedo = daxa_f32vec3(0.95f, 0.75f, 0.10f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) }, // 3
+      { .albedo = daxa_f32vec3(0.60f, 0.15f, 0.90f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) }, // 4
+      { .albedo = daxa_f32vec3(0.90f, 0.35f, 0.15f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) }, // 5
+      { .albedo = daxa_f32vec3(0.30f, 0.08f, 0.06f), .emission = daxa_f32vec3(0.0f, 0.0f, 0.0f) }, // 6 anvil
+    };
+    auto const Q = Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    auto const I0 = daxa_mat3_from_glm_mat3(glm::mat3(0));
+    rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, -50.0f, 0.0f), .rotation = Q, .minimum = daxa_f32vec3(-50.0f, -50.0f, -50.0f), .maximum = daxa_f32vec3(50.0f, 50.0f, 50.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.7f});
+    auto light = RigidBody{.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(0.0f, 26.0f, 14.0f), .rotation = Q, .minimum = daxa_f32vec3(-14.0f, -0.2f, -8.0f), .maximum = daxa_f32vec3(14.0f, 0.2f, 8.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.6f};
+    light.material_index = 1u;
+    rigid_bodies.push_back(light);
+
+    f32 const vs = 0.5f, den = 2.0f;
+    // five source shapes with DELIBERATELY different pool footprints (nodes/words/cells) so
+    // the free-list sees a wide spread of allocation sizes:
+    spawn_shapes_.clear(); spawn_strengths_.clear(); spawn_mats_.clear();
+    auto add_shape = [&](VoxelShapeBuild b, f32 strength, daxa_u32 mat) {
+      spawn_shapes_.push_back(b); spawn_strengths_.push_back(strength); spawn_mats_.push_back(mat);
+    };
+    add_shape(build_voxel_shape(glm::uvec3(3, 3, 3), vs, den, [](u32,u32,u32){ return true; }), 25.0f, 2u); // cube
+    add_shape(build_voxel_shape(glm::uvec3(6, 6, 2), vs, den, [](u32 x,u32 y,u32){ return y<2||x<2; }), 40.0f, 3u); // L
+    add_shape(build_voxel_shape(glm::uvec3(8, 8, 2), vs, den, [](u32 x,u32 y,u32){ return !(x>=2&&x<6&&y>=2&&y<6); }), 55.0f, 4u); // frame
+    add_shape(build_voxel_shape(glm::uvec3(10, 4, 4), vs, den, [](u32,u32,u32){ return true; }), 70.0f, 5u); // block (wood grain=x)
+    add_shape(build_voxel_shape(glm::uvec3(12, 2, 3), vs, den, [](u32,u32,u32){ return true; }), 45.0f, 3u); // slab
+
+    // a row of anvils to land on (concentrate the impact -> reliable fracture)
+    for (f32 ax : {-9.0f, -3.0f, 3.0f, 9.0f})
+    {
+      rigid_bodies.push_back({.flags = RigidBodyFlag::NONE, .primitive_count = 1, .primitive_offset = 0, .position = daxa_f32vec3(ax, 0.9f, 14.0f), .rotation = Q, .minimum = daxa_f32vec3(-0.8f, -0.9f, -1.0f), .maximum = daxa_f32vec3(0.8f, 0.9f, 1.0f), .mass = 0.0f, .inv_mass = 0.0f, .velocity = daxa_f32vec3(0, 0, 0), .omega = daxa_f32vec3(0, 0, 0), .inv_inertia = I0, .restitution = 0.0f, .friction = 0.7f});
+      rigid_bodies.back().material_index = 6u;
+    }
+    spawner_on_ = true;
+    spawn_step_ = 0;
+    spawn_rng_ = std::mt19937(0x50A4B0C5u); // deterministic
+  }
+
+  // spawn one breakable body of a random source shape, dropped onto a random anvil. Reuses a
+  // tombstoned body slot when free (id == index). Called by maybe_spawn on the cadence.
+  void spawn_one()
+  {
+    if (spawn_shapes_.empty()) { return; }
+    if (free_body_slots_.empty() && rigid_bodies.size() >= MAX_RIGID_BODY_COUNT) { return; } // at body cap: let culls catch up
+    std::uniform_int_distribution<daxa_u32> shape_d(0u, (daxa_u32)spawn_shapes_.size() - 1u);
+    std::uniform_int_distribution<int> anvil_d(0, 3);
+    std::uniform_real_distribution<f32> wob(-0.4f, 0.4f), spin(-1.0f, 1.0f);
+    daxa_u32 const si = shape_d(spawn_rng_);
+    VoxelShapeBuild const &s = spawn_shapes_[si];
+    f32 const ax[4] = {-9.0f, -3.0f, 3.0f, 9.0f};
+    f32 const x = ax[anvil_d(spawn_rng_)] + wob(spawn_rng_);
+    f32 const py = 11.0f + wob(spawn_rng_), pz = 14.0f + wob(spawn_rng_);
+    f32 const wx = spin(spawn_rng_), wy = spin(spawn_rng_), wz = spin(spawn_rng_);
+    // designated init (Quaternion has no default ctor, so .rotation must be listed)
+    RigidBody b{
+        .flags = RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY,
+        .material_index = spawn_mats_[si],
+        .primitive_count = s.primitive_count,
+        .primitive_offset = 0u,
+        .shape_index = s.shape_id,
+        .position = daxa_f32vec3(x, py, pz),
+        .rotation = Q_id(),
+        .minimum = s.minimum,
+        .maximum = s.maximum,
+        .mass = s.mass,
+        .inv_mass = 1.0f / s.mass,
+        .velocity = daxa_f32vec3(0, 0, 0),
+        .omega = daxa_f32vec3(wx, wy, wz),
+        .inv_inertia = s.inv_inertia,
+        .restitution = 0.0f,
+        .friction = 0.6f,
+        .fracture_impulse = spawn_strengths_[si],
+        .fracture_material = (si == 3u) ? 1u : 0u, // the block is "wood", rest "stone"
+    };
+    b.island_index = MAX_U32;
+    b.manifold_node_index = MAX_U32;
+    b.active_index = MAX_U32;
+    b.sleep_timer = 0u;
+    daxa_u32 slot;
+    if (!free_body_slots_.empty()) { slot = free_body_slots_.back(); free_body_slots_.pop_back(); b.id = slot; rigid_bodies[slot] = b; }
+    else { slot = (daxa_u32)rigid_bodies.size(); b.id = slot; rigid_bodies.push_back(b); }
+    respawn_after_fracture({}); // rebuild AS + active set to include the new body
+  }
+  static Quaternion Q_id() { return Quaternion(0.0f, 0.0f, 0.0f, 1.0f); }
+
+  // called each stepped frame from the render loop: drives the soak spawner on its cadence.
+  void maybe_spawn()
+  {
+    if (!spawner_on_) { return; }
+    static daxa_u32 const cadence = [] {
+      char const *e = bb_getenv("BB_FRACTURE_SPAWN_STEPS");
+      return e ? (daxa_u32)std::max(1, std::atoi(e)) : 45u; // ~0.75 s between drops by default
+    }();
+    if (++spawn_step_ >= cadence) { spawn_step_ = 0; sync_pools_if_needed(); sync_live_bodies(); spawn_one(); }
+  }
+
   // F3: data-driven scene from a text file (BB_SCENE_FILE=path). One dynamic cube per line:
   //   px py pz [half_extent] [mass] [restitution] [friction]   (# comments and blank lines ignored)
   // A floor + an emissive light panel are added automatically; the common load_scene() post-pass fills
@@ -1479,7 +1584,14 @@ public:
   {
     if (index >= rigid_bodies.size()) { return; }
     RigidBody &b = rigid_bodies[index];
-    if (b.shape_index != 0u) { retire_shape(b.shape_index - 1u); }
+    if (b.shape_index != 0u)
+    {
+      // ONLY free single-owner shapes. A body may still reference a SHARED template (a load
+      // shape, e.g. a spawner source, before it ever fractured) - freeing that would corrupt
+      // every sibling + future spawn that uses it. Clones/fragments are shape_private=true.
+      daxa_u32 const si = b.shape_index - 1u;
+      if (si < shape_private.size() && shape_private[si]) { retire_shape(si); }
+    }
     b.flags = RigidBodyFlag::NONE;
     b.shape_index = 0u;
     b.primitive_count = 1u;
@@ -2002,6 +2114,7 @@ public:
         case 8: scene_8(); break; // single-cube free-fall A/B (AVBD vs TGS time-to-floor)
         case 9: scene_9(); break; // FRACTURE showcase: strength-coded beams on anvils
         case 10: scene_10(); break; // FRACTURE material showcase: stone (chunks) vs wood (shards)
+        case 11: scene_11(); break; // FRACTURE soak/free-list stress: runtime spawner + kill plane
         default: scene_6(); break;
       }
     }
@@ -2157,7 +2270,7 @@ public:
     {
       return false;
     }
-    if (n < 1 || n > 10)
+    if (n < 1 || n > 11)
     {
       std::cerr << "SCENE: ignoring out-of-range scene " << n << std::endl;
       return false;
@@ -2184,6 +2297,7 @@ public:
     occ_pool_.reset(); surf_pool_.reset(); sdf_pool_.reset();
     free_shape_slots_.clear();
     free_body_slots_.clear();
+    spawner_on_ = false; spawn_shapes_.clear(); spawn_strengths_.clear(); spawn_mats_.clear();
     pools_synced_ = false; // re-sync to the new scene's post-load high-water on its first fracture
     rigid_body_manager->reset_fracture_events(); // stale serials from the old scene reference dead ids
     id_generator = 0;
@@ -2273,6 +2387,15 @@ private:
   std::vector<daxa_u32> free_shape_slots_;
   std::vector<daxa_u32> free_body_slots_; // retired (tombstoned) rigid_bodies indices, reused by new fragments
   bool pools_synced_ = false;
+  // FRACTURE SOAK (scene_11): a runtime spawner that rains DIVERSE breakable voxel shapes so
+  // the free-list juggles many allocation sizes (each source shape has a different pool
+  // footprint) over a long alloc/free churn. Deterministic (seeded) so any failure replays.
+  bool spawner_on_ = false;
+  std::vector<VoxelShapeBuild> spawn_shapes_;
+  std::vector<f32> spawn_strengths_;
+  std::vector<daxa_u32> spawn_mats_;
+  daxa_u32 spawn_step_ = 0;
+  std::mt19937 spawn_rng_{0x50A4B0C5u};
 
   // Active rigid body buffer
   daxa::BufferId active_rigid_body_buffer;
