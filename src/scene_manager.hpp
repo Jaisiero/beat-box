@@ -15,6 +15,7 @@
 #include <map>       // fracture: component census
 #include <set>       // fracture: per-batch body dedup
 #include <algorithm> // fracture: component ordering
+#include <array>     // fracture: per-component bbox
 
 BB_NAMESPACE_BEGIN
 
@@ -1450,11 +1451,16 @@ public:
   {
     daxa_u32 body;       // host body index (== persistent id)
     daxa_f32 voxel_mass; // parent's per-voxel mass (invariant under fracture)
-    glm::vec3 com_old;   // parent's pre-fracture com (from the grid min corner, world scale)
+    glm::vec3 com_old;   // parent's pre-fracture com (from the PARENT grid min corner, world scale)
     daxa_f32vec3 parent_pos;
     Quaternion parent_rot;
     daxa_f32vec3 parent_vel;
     daxa_f32vec3 parent_omega;
+    // PHASE 2b crop: this component's grid is cropped to its bbox, so the GPU-reduced com is
+    // relative to the CROPPED grid min corner. crop_off (= bbox_min * voxel_size, in the
+    // parent grid frame) shifts it back so com_parent = com_cropped + crop_off lives in the
+    // same frame as com_old. 0 for the non-crop path.
+    glm::vec3 crop_off{0.0f, 0.0f, 0.0f};
   };
 
   // sync the pool high-water marks to the post-load vector sizes ONCE (the load path is a
@@ -1820,38 +1826,79 @@ public:
     // is ALWAYS kept regardless of size, so a body never disappears entirely.
     daxa_u32 const MIN_FRAG = 3u;
 
-    auto write_component = [&](daxa_u32 occ_offset, daxa_u32 label) {
-      for (daxa_u32 w = 0u; w < words; ++w) { voxel_occ_cpu[occ_offset + w] = 0u; }
+    // PHASE 2b CROP: each component is re-packed into a grid CROPPED to its bounding box, so
+    // its pool slices + sim bounds are sized to the real extent (a 3-voxel chunk of a 10x4x4
+    // block becomes a 3x2x2 shape, not a mostly-empty 10x4x4). Precompute every component's
+    // bbox in one pass. lo/hi are inclusive parent-cell coords.
+    daxa_u32 const DX = dims.x, DY = dims.y;
+    std::map<daxa_u32, std::array<daxa_u32, 6>> bbox; // label -> {lox,loy,loz, hix,hiy,hiz}
+    for (daxa_u32 c = 0u; c < cells; ++c)
+    {
+      daxa_u32 const l = labels[c];
+      if (l == MAX_U32) { continue; }
+      daxa_u32 const x = c % DX, y = (c / DX) % DY, z = c / (DX * DY);
+      auto it = bbox.find(l);
+      if (it == bbox.end()) { bbox[l] = {x, y, z, x, y, z}; }
+      else { auto &b = it->second; b[0] = std::min(b[0], x); b[1] = std::min(b[1], y); b[2] = std::min(b[2], z); b[3] = std::max(b[3], x); b[4] = std::max(b[4], y); b[5] = std::max(b[5], z); }
+    }
+
+    // allocate a cropped shape for `label` (count solid voxels). Returns the shape index and
+    // fills crop_off (bbox_min * vs), or MAX_U32 if the pools can't fit it.
+    auto emit_cropped = [&](daxa_u32 label, daxa_u32 count, glm::vec3 &crop_off) -> daxa_u32 {
+      auto const &b = bbox[label];
+      daxa_u32vec3 const cd(b[3] - b[0] + 1u, b[4] - b[1] + 1u, b[5] - b[2] + 1u);
+      daxa_u32 const ccells = cd.x * cd.y * cd.z, cwords = (ccells + 31u) / 32u,
+                     cnodes = (cd.x + 1u) * (cd.y + 1u) * (cd.z + 1u);
+      bool const slot_ok = !free_shape_slots_.empty() || voxel_shape_cpu.size() < BB_MAX_VOXEL_SHAPE_COUNT;
+      if (!(slot_ok && occ_pool_.can_alloc(cwords, BB_MAX_VOXEL_OCC_U32S) &&
+            surf_pool_.can_alloc(ccells, BB_MAX_VOXEL_SURF_COUNT) &&
+            sdf_pool_.can_alloc(cnodes, BB_MAX_VOXEL_SDF_F32S)))
+      {
+        return 0xFFFFFFFFu;
+      }
+      VoxelShape ns = shape;
+      ns.dims = cd;
+      ns.occ_offset = pool_alloc(voxel_occ_cpu, occ_pool_, cwords, BB_MAX_VOXEL_OCC_U32S, 0u);
+      ns.surf_offset = pool_alloc(voxel_surf_cpu, surf_pool_, ccells, BB_MAX_VOXEL_SURF_COUNT, 0u);
+      ns.sdf_offset = pool_alloc(voxel_sdf_cpu, sdf_pool_, cnodes, BB_MAX_VOXEL_SDF_F32S, 0.0f);
+      // re-pack: parent cell (x,y,z) with this label -> cropped cell (x-lo, y-lo, z-lo)
       for (daxa_u32 c = 0u; c < cells; ++c)
       {
-        if (labels[c] == label) { voxel_occ_cpu[occ_offset + c / 32u] |= 1u << (c % 32u); }
+        if (labels[c] != label) { continue; }
+        daxa_u32 const x = c % DX, y = (c / DX) % DY, z = c / (DX * DY);
+        daxa_u32 const cc = (x - b[0]) + (y - b[1]) * cd.x + (z - b[2]) * cd.x * cd.y;
+        voxel_occ_cpu[ns.occ_offset + cc / 32u] |= 1u << (cc % 32u);
       }
+      daxa_u32 const nsi = alloc_shape_slot();
+      voxel_shape_cpu[nsi] = ns;
+      shape_private[nsi] = true;
+      voxel_shape_prims[nsi] = std::vector<Aabb>(count, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0)));
+      crop_off = glm::vec3((f32)b[0] * vs, (f32)b[1] * vs, (f32)b[2] * vs);
+      return nsi;
     };
 
-    // largest component keeps this body/shape
-    write_component(shape.occ_offset, comps[0].first);
-    voxel_shape_prims[shape_i].assign(comps[0].second, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0)));
+    // largest component: the BODY keeps living, but on a fresh cropped shape (the old
+    // parent slice is freed at the end). If even the largest can't fit, refuse the whole
+    // carve (respawn restores the pre-carve GPU slice from the untouched host occupancy).
+    glm::vec3 crop0;
+    daxa_u32 const shape0 = emit_cropped(comps[0].first, comps[0].second, crop0);
+    if (shape0 == 0xFFFFFFFFu) { std::cerr << "FRACTURE: pools full, carve refused (body " << ev.body_id << ")" << std::endl; return true; }
+    body.shape_index = shape0 + 1u;
     body.primitive_count = comps[0].second;
-    fixes.push_back(parent_ctx);
+    { FragFix ff = parent_ctx; ff.body = ev.body_id; ff.crop_off = crop0; fixes.push_back(ff); }
 
-    // the rest become fragment shapes + bodies (same dims: no re-indexing, tiny slices)
+    // the rest become new fragment bodies on their own cropped shapes
     for (size_t k = 1; k < comps.size(); ++k)
     {
       if (comps[k].second < MIN_FRAG) { continue; } // debris: too small to be its own body
-      if (pools_full() || rigid_bodies.size() >= MAX_RIGID_BODY_COUNT)
+      if (rigid_bodies.size() >= MAX_RIGID_BODY_COUNT && free_body_slots_.empty())
       {
-        std::cerr << "FRACTURE: pools/bodies full, fragment dropped" << std::endl;
+        std::cerr << "FRACTURE: body cap reached, fragment dropped" << std::endl;
         break;
       }
-      VoxelShape fs = shape;
-      fs.occ_offset = pool_alloc(voxel_occ_cpu, occ_pool_, words, BB_MAX_VOXEL_OCC_U32S, 0u);
-      fs.surf_offset = pool_alloc(voxel_surf_cpu, surf_pool_, cells, BB_MAX_VOXEL_SURF_COUNT, 0u);
-      fs.sdf_offset = pool_alloc(voxel_sdf_cpu, sdf_pool_, nodes, BB_MAX_VOXEL_SDF_F32S, 0.0f);
-      write_component(fs.occ_offset, comps[k].first);
-      daxa_u32 const fsi = alloc_shape_slot();
-      voxel_shape_cpu[fsi] = fs;
-      shape_private[fsi] = true;
-      voxel_shape_prims[fsi] = std::vector<Aabb>(comps[k].second, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0)));
+      glm::vec3 cropk;
+      daxa_u32 const fsi = emit_cropped(comps[k].first, comps[k].second, cropk);
+      if (fsi == 0xFFFFFFFFu) { std::cerr << "FRACTURE: pools full, fragment dropped" << std::endl; break; }
 
       RigidBody frag = body; // inherit material/friction/restitution/strength/pose
       frag.shape_index = fsi + 1u;
@@ -1864,26 +1911,18 @@ public:
       frag.flags = RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY;
       // mass/inertia/position/velocity are PROVISIONAL until the derived readback fixup.
       // REUSE a retired (tombstoned) body slot when one exists, else append. id == index in
-      // both paths (a reused slot keeps its index as its id); the active bookkeeping is
-      // rebuilt wholesale by respawn, so nothing incremental to update here.
+      // both paths; the active bookkeeping is rebuilt wholesale by respawn.
       daxa_u32 slot;
-      if (!free_body_slots_.empty())
-      {
-        slot = free_body_slots_.back();
-        free_body_slots_.pop_back();
-        frag.id = slot;
-        rigid_bodies[slot] = frag;
-      }
-      else
-      {
-        slot = (daxa_u32)rigid_bodies.size();
-        frag.id = slot;
-        rigid_bodies.push_back(frag);
-      }
+      if (!free_body_slots_.empty()) { slot = free_body_slots_.back(); free_body_slots_.pop_back(); frag.id = slot; rigid_bodies[slot] = frag; }
+      else { slot = (daxa_u32)rigid_bodies.size(); frag.id = slot; rigid_bodies.push_back(frag); }
       FragFix ff = parent_ctx;
-      ff.body = slot; // FragFix.body indexes rigid_bodies (== id)
+      ff.body = slot;         // FragFix.body indexes rigid_bodies (== id)
+      ff.crop_off = cropk;
       fixes.push_back(ff);
     }
+    // the pre-carve parent shape has been replaced by the cropped largest; free its slice
+    // (done LAST so its slot isn't reused mid-emit, which would alias a live cropped shape)
+    retire_shape(shape_i);
     return true;
   }
 
@@ -1917,7 +1956,8 @@ public:
       I[1] = glm::vec3(d.unit_inertia.y.x, d.unit_inertia.y.y, d.unit_inertia.y.z);
       I[2] = glm::vec3(d.unit_inertia.z.x, d.unit_inertia.z.y, d.unit_inertia.z.z);
       b.inv_inertia = daxa_mat3_from_glm_mat3(glm::inverse(I * fx.voxel_mass));
-      // shape frame: com back at the body origin
+      // shape frame: com back at the body origin. com_new is in the CROPPED grid frame; the
+      // shape's grid_origin puts that com at the origin.
       glm::vec3 const com_new(d.com.x, d.com.y, d.com.z);
       VoxelShape &sh = voxel_shape_cpu[si];
       sh.grid_origin = daxa_f32vec3(-com_new.x, -com_new.y, -com_new.z);
@@ -1926,8 +1966,10 @@ public:
                                sh.grid_origin.y + sh.dims.y * sh.voxel_size,
                                sh.grid_origin.z + sh.dims.z * sh.voxel_size);
       // kinematics from the CAPTURED parent frame: same world voxels, new com ->
-      // pos' = pos + R*(com_new - com_old); v' = v + omega x (pos' - pos)
-      glm::vec3 const shift = com_new - fx.com_old;
+      // pos' = pos + R*(com_parent - com_old); v' = v + omega x (pos' - pos). com_parent
+      // lifts the cropped-frame com back into the parent grid frame (crop_off = bbox_min*vs).
+      glm::vec3 const com_parent = com_new + fx.crop_off;
+      glm::vec3 const shift = com_parent - fx.com_old;
       daxa_f32vec3 const ws = quat_rotate(fx.parent_rot, daxa_f32vec3(shift.x, shift.y, shift.z));
       b.rotation = fx.parent_rot;
       b.position = daxa_f32vec3(fx.parent_pos.x + ws.x, fx.parent_pos.y + ws.y, fx.parent_pos.z + ws.z);
