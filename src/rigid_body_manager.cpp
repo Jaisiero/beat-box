@@ -2053,6 +2053,7 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
   for (daxa_u32 si = 0u; si < (daxa_u32)shapes.size(); ++si)
   {
     auto const &s = shapes[si];
+    if (s.dims.x == 0u) { continue; } // retired/free shape slot (dims=0 sentinel) - skip
     daxa_u32 const nx = s.dims.x + 1u, ny = s.dims.y + 1u, nz = s.dims.z + 1u;
     daxa_u32 const nodes = nx * ny * nz;
     VoxelSdfBuildPushConstants pc = {

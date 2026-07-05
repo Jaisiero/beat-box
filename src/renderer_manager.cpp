@@ -633,6 +633,13 @@ int RendererManager::render()
         {
           scene_manager->process_fracture_events(*feb);
         }
+        // KILL PLANE: reclaim shapes of fragments that flew out of the world. Gated on the
+        // cheap dbg_min_y signal from the readback so the cull's own readback + AS rebuild
+        // only run the frame something actually fell past it.
+        if (scene_manager->any_body_below_kill_plane(rigid_body_manager->get_sim_config_reference().dbg_min_y))
+        {
+          scene_manager->cull_out_of_world();
+        }
       }
       // DEEP-POCKET TRACE: one CSV row per stepped frame with the deepest awake contact's
       // {pen,lambda,k,vn,pair,stick} latched by entry_avbd_pocket_trace. Full-rate (every

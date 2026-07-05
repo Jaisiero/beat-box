@@ -1344,6 +1344,10 @@ public:
     daxa_u32 const surf_slots = (daxa_u32)voxel_shape_prims[shape_i].size(); // fragment reserved = solid count... see note
     occ_pool_.free(s.occ_offset, words);
     sdf_pool_.free(s.sdf_offset, nodes);
+    // sentinel: a freed slot's stale record must NOT be re-processed by the GPU pool rebuild
+    // (its offsets may already belong to a reused slot -> corruption). dims=0 marks it dead;
+    // build_voxel_pools_gpu skips it, and alloc_shape_slot overwrites dims on reuse.
+    voxel_shape_cpu[shape_i].dims = daxa_u32vec3(0, 0, 0);
     // surf slices were reserved at `cells` for fracture shapes and `count` for load shapes;
     // free by the size actually reserved. Fracture shapes (the only ones retired in phase 1)
     // reserved `cells`, so free that. (Guarded: never frees a load shape here.)
@@ -1351,6 +1355,55 @@ public:
     (void)surf_slots;
     free_shape_slots_.push_back(shape_i);
     voxel_shape_prims[shape_i].clear();
+  }
+
+  // Retire a body (index == persistent id): free its voxel shape back to the pools and
+  // TOMBSTONE the row - an inert static box parked far below the world, its index pushed to
+  // free_body_slots_ for reuse by the next fragment. The row stays in place (contiguity +
+  // the id==index invariant the fracture path relies on); respawn rebuilds the active set
+  // from scratch, so a tombstone (flags NONE) is simply excluded. The transient BLAS a
+  // tombstone still carries is reclaimed only in phase 2 (incremental AS); phase 1 reclaims
+  // the SHAPE pools (the resource that actually exhausts under heavy shattering).
+  void retire_body(daxa_u32 index)
+  {
+    if (index >= rigid_bodies.size()) { return; }
+    RigidBody &b = rigid_bodies[index];
+    if (b.shape_index != 0u) { retire_shape(b.shape_index - 1u); }
+    b.flags = RigidBodyFlag::NONE;
+    b.shape_index = 0u;
+    b.primitive_count = 1u;
+    b.primitive_offset = 0u;
+    b.mass = 0.0f;
+    b.inv_mass = 0.0f;
+    b.velocity = daxa_f32vec3(0, 0, 0);
+    b.omega = daxa_f32vec3(0, 0, 0);
+    b.position = daxa_f32vec3(0.0f, -1000.0f, 0.0f);
+    b.minimum = daxa_f32vec3(-0.001f, -0.001f, -0.001f);
+    b.maximum = daxa_f32vec3(0.001f, 0.001f, 0.001f);
+    b.material_index = 0u;
+    b.island_index = MAX_U32;
+    b.manifold_node_index = MAX_U32;
+    b.active_index = MAX_U32;
+    b.sleep_timer = 0u;
+    free_body_slots_.push_back(index);
+  }
+
+  // rebuild the host active-body bookkeeping (id set + counts) from the live rigid_bodies
+  // vector - called by respawn so retirement/spawn never touch the active list incrementally
+  // (which had id/key-collision hazards). Tombstones and statics (flags without DYNAMIC) are
+  // naturally excluded. rigid_body_map is a set of active ids (its keys are unused).
+  void rebuild_active_bookkeeping()
+  {
+    rigid_body_count = (daxa_u32)rigid_bodies.size();
+    rigid_body_map.clear();
+    rigid_body_active_count = 0u;
+    for (auto const &b : rigid_bodies)
+    {
+      if ((b.flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE)
+      {
+        rigid_body_map[rigid_body_active_count++] = b.id;
+      }
+    }
   }
 
   // Pull the LIVE GPU body states into the host vector (the host holds the SPAWN state by
@@ -1578,7 +1631,6 @@ public:
       voxel_shape_prims[fsi] = std::vector<Aabb>(comps[k].second, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0)));
 
       RigidBody frag = body; // inherit material/friction/restitution/strength/pose
-      frag.id = id_generator++;
       frag.shape_index = fsi + 1u;
       frag.primitive_count = comps[k].second;
       frag.primitive_offset = 0u;
@@ -1587,12 +1639,26 @@ public:
       frag.active_index = MAX_U32;
       frag.sleep_timer = 0u;
       frag.flags = RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY;
-      // mass/inertia/position/velocity are PROVISIONAL until the derived readback fixup
-      rigid_bodies.push_back(frag);
-      rigid_body_map[rigid_body_active_count++] = frag.id;
-      ++rigid_body_count;
+      // mass/inertia/position/velocity are PROVISIONAL until the derived readback fixup.
+      // REUSE a retired (tombstoned) body slot when one exists, else append. id == index in
+      // both paths (a reused slot keeps its index as its id); the active bookkeeping is
+      // rebuilt wholesale by respawn, so nothing incremental to update here.
+      daxa_u32 slot;
+      if (!free_body_slots_.empty())
+      {
+        slot = free_body_slots_.back();
+        free_body_slots_.pop_back();
+        frag.id = slot;
+        rigid_bodies[slot] = frag;
+      }
+      else
+      {
+        slot = (daxa_u32)rigid_bodies.size();
+        frag.id = slot;
+        rigid_bodies.push_back(frag);
+      }
       FragFix ff = parent_ctx;
-      ff.body = frag.id;
+      ff.body = slot; // FragFix.body indexes rigid_bodies (== id)
       fixes.push_back(ff);
     }
     return true;
@@ -1670,7 +1736,10 @@ public:
         aabb.insert(aabb.end(), prims.begin(), prims.end());
       }
     }
-    // 6. full AS rebuild + sim refresh (the reset() tail, minus the pause)
+    // 6. rebuild the active-body bookkeeping (counts + id set) from the live vector, so
+    //    retired tombstones drop out and reused/new fragments join - all in one place
+    rebuild_active_bookkeeping();
+    // 7. full AS rebuild + sim refresh (the reset() tail, minus the pause)
     accel_struct_mngr->reset_for_reload();
     if (!accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook()))
     {
@@ -1717,6 +1786,51 @@ public:
       any = apply_fracture(ev, fixes) || any;
     }
     if (any) { respawn_after_fracture(fixes); }
+  }
+
+  // KILL PLANE: retire any dynamic body that has fallen out of the world, freeing its shape
+  // back to the pools (that memory is what exhausts under heavy shattering; without this the
+  // fragments that fly off never release their slice). Gated by the render loop on the cheap
+  // dbg_min_y signal so the readback + AS rebuild only run when something actually left.
+  void cull_out_of_world()
+  {
+    if (!sync_live_bodies()) { return; }
+    bool any = false;
+    for (daxa_u32 i = 0u; i < (daxa_u32)rigid_bodies.size(); ++i)
+    {
+      RigidBody const &b = rigid_bodies[i];
+      if ((b.flags & RigidBodyFlag::DYNAMIC) == RigidBodyFlag::NONE) { continue; }
+      if (b.position.y < kill_y())
+      {
+        retire_body(i);
+        any = true;
+      }
+    }
+    if (any)
+    {
+      std::cout << "[FRACTURE] cull: live shapes " << (voxel_shape_cpu.size() - free_shape_slots_.size())
+                << " (high-water " << voxel_shape_cpu.size() << "/" << BB_MAX_VOXEL_SHAPE_COUNT
+                << "), sdf pool live " << sdf_pool_.live_bytes << " hw " << sdf_pool_.high_water
+                << "/" << BB_MAX_VOXEL_SDF_F32S << std::endl;
+      respawn_after_fracture({}); // empty fixes: just rebuild with the tombstones excluded
+    }
+  }
+  // cheap gate (from the per-frame readback): is any dynamic body below the kill plane?
+  bool any_body_below_kill_plane(daxa_u32 dbg_min_y_encoded)
+  {
+    if (dbg_min_y_encoded == 0xFFFFFFFFu) { return false; }
+    f32 const miny = (f32)dbg_min_y_encoded / 1000.0f - 100.0f;
+    return miny < kill_y();
+  }
+  // kill-plane height (m). BB_KILL_Y overrides the default (-20 = out of the world); a value
+  // like 0.4 culls even settled debris, which is how the recycling path is stress-tested.
+  f32 kill_y()
+  {
+    static f32 const y = [] {
+      char const *e = bb_getenv("BB_KILL_Y");
+      return e ? (f32)std::atof(e) : -20.0f;
+    }();
+    return y;
   }
 
   bool load_scene()
@@ -1957,6 +2071,7 @@ public:
     fracture_serial_seen = 0;
     occ_pool_.reset(); surf_pool_.reset(); sdf_pool_.reset();
     free_shape_slots_.clear();
+    free_body_slots_.clear();
     pools_synced_ = false; // re-sync to the new scene's post-load high-water on its first fracture
     rigid_body_manager->reset_fracture_events(); // stale serials from the old scene reference dead ids
     id_generator = 0;
@@ -2044,6 +2159,7 @@ private:
   // vectors) of retired shapes.
   BucketPool occ_pool_, surf_pool_, sdf_pool_;
   std::vector<daxa_u32> free_shape_slots_;
+  std::vector<daxa_u32> free_body_slots_; // retired (tombstoned) rigid_bodies indices, reused by new fragments
   bool pools_synced_ = false;
 
   // Active rigid body buffer
