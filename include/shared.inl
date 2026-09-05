@@ -253,6 +253,7 @@ enum RayTracingFlag : daxa_u32
   RT_SHOW_NORMALS = 1 << 1,
   RT_SHOW_ISLANDS = 1 << 2,
   RT_SHOW_COLLISIONS = 1 << 3,
+  RT_VALIDATE = 1 << 4, // latch invalid samples/history in magenta until accumulation reset
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 RayTracingFlag  operator|(RayTracingFlag a, RayTracingFlag b)
@@ -521,7 +522,7 @@ DAXA_DECL_TASK_HEAD_BEGIN(RayTracingTaskHead)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(CameraView), camera)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(RayTracingConfig), ray_tracing_config)
 DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_WRITE_ONLY, REGULAR_2D, swapchain)
-DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_READ_ONLY, REGULAR_2D, accumulation_buffer)
+DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_READ_WRITE, REGULAR_2D, accumulation_buffer)
 DAXA_TH_TLAS_ID(RAY_TRACING_SHADER_READ, tlas)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(RigidBodyEntry), rigid_body_map)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rigid_bodies)
@@ -1443,12 +1444,13 @@ DAXA_DECL_BUFFER_PTR(RigidBodyEntry)
 // Mouse pick-and-drag (review v3 feature): a tiny host-visible bridge buffer.
 // The HOST writes the input half every render frame (camera ray + button flags);
 // the GPU pick/spring pass writes the state half (picked body + grab anchor).
-// The two halves have disjoint writers, so no copy/sync beyond submission order is needed.
-#define BB_PICK_REQUEST 1u  // pick button pressed this frame -> ray-cast and grab
+// REQUEST is consumed by the GPU. Host access follows the existing simulation-completion
+// wait; mapped memory coherence alone would not protect concurrent CPU/GPU access.
+#define BB_PICK_REQUEST 1u  // latched press -> ray-cast once on the next physics step
 #define BB_PICK_DRAGGING 2u // pick button held -> keep applying the drag spring
 struct PickState
 {
-  // host-written input (every render frame)
+  // host-written input (every render frame); GPU clears the REQUEST flag
   daxa_f32vec3 ray_origin;
   daxa_u32 flags; // BB_PICK_* bits
   daxa_f32vec3 ray_dir;
