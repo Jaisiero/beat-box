@@ -113,3 +113,23 @@ successful no-op build could leave an old shader in the executable directory.
 The private Voxagon engine is not available for implementation comparison. These
 results demonstrate convergence of this project's tested scene and configuration,
 not equivalence with that engine.
+
+## Follow-up: diagnostic options and scoped readback wait
+
+The two boolean diagnostics now share a cached, validated environment parser.
+Explicit false values disable them; invalid values are rejected. Unit tests cover
+accepted true/false forms, missing values and invalid input.
+
+`read_back_sim_config()` now waits for the compute queue submission index captured
+immediately after graph execution, via `Device::wait_on_submit()`. The transfer to
+host visibility barrier remains. This replaces device-wide idle with a wait for
+the relevant queue timeline point, while preserving synchronous current-data reads.
+
+An attempted external timeline signal exposed that this installed Daxa 3.6's
+`TaskGraph::submit(TaskSubmitInfo)` ignores its argument. The final implementation
+therefore uses Daxa's implemented internal queue submission timeline. Existing
+sim/render comments about additional TaskSubmitInfo semaphore signals/waits are
+not a working synchronization mechanism in this version; resource tracking and
+explicit waits must not be removed on the strength of those comments. Renderer
+profiling still surrounds simulation with global waits. Removing those or making
+telemetry asynchronous requires a separate dependency and resource-lifetime change.

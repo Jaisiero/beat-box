@@ -178,3 +178,19 @@ Runtime sources are synchronized by the `beat-box_runtime_sources` build target,
 including when only a shader changes. Identical file timestamps are preserved for
 the SPIR-V cache, and obsolete destination files are removed so they cannot shadow
 source includes. The synchronizer rejects overlapping source/destination trees.
+
+### Diagnostic booleans and SimConfig completion
+
+`BB_SYNC_FULL_BARRIERS` and `BB_TGS_SERIAL` are read once per process by
+`src/runtime_diagnostics.hpp`. Unset means false. Accepted values are `0/1`,
+`false/true`, and `off/on`, case-insensitively. Empty or unrecognized values throw
+an explicit configuration error. Startup prints the effective values in a single
+`[DIAGNOSTICS]` line. Restart the process to change these options.
+
+SimConfig readback captures the compute queue's last submission index immediately
+following graph execution and calls `Device::wait_on_submit()` for that index,
+replacing `device.wait_idle()` in `read_back_sim_config()`. The copy and host
+publication barriers remain. Submission currently happens on one host thread.
+This uses Daxa's internal queue timeline: the installed Daxa 3.6 ignores
+`TaskSubmitInfo` additional semaphore fields. Readback still returns current,
+completed data synchronously; it does not remove the renderer's other waits.

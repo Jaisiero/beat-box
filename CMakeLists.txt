@@ -115,3 +115,7 @@ add_custom_target(warm_shader_cache
     COMMENT "Warming the Slang->SPIR-V cache (spirv_cache/) so the first launch is fast"
     USES_TERMINAL
 )
+
+add_executable(runtime_diagnostics_tests tests/runtime_diagnostics_tests.cpp)
+target_include_directories(runtime_diagnostics_tests PRIVATE src)
+add_test(NAME runtime_diagnostics_tests COMMAND runtime_diagnostics_tests)

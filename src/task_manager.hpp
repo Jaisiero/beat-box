@@ -3,7 +3,7 @@
 #include <map>
 #include <string>
 #include <variant>
-#include <cstdlib>
+#include "runtime_diagnostics.hpp"
 #include "gpu_context.hpp"
 
 BB_NAMESPACE_BEGIN
@@ -259,14 +259,14 @@ struct TaskManager
     auto TG = TaskGraph(daxa::TaskGraph({
         .device = gpu->device,
         .swapchain = is_swapchain? gpu->swapchain : std::optional<daxa::Swapchain>(),
-        .reorder_tasks = std::getenv("BB_SYNC_FULL_BARRIERS") == nullptr,
+        .reorder_tasks = !beat_box_diagnostics::options().full_barriers,
         // the rigid-body graph carries ~2600 tasks (per-color PGS + AVBD sweeps + the
         // depth-ordered shock-propagation cascade: sweeps x layers x colors); the 512KiB
         // default task memory pool is far too tight for that
         .task_memory_pool_size = 1u << 23u,
         // Diagnostic only: serialize task order and make all prior device writes visible.
         // This cannot fix races between invocations inside one dispatch.
-        .pre_task_callback = std::getenv("BB_SYNC_FULL_BARRIERS") ?
+        .pre_task_callback = beat_box_diagnostics::options().full_barriers ?
             std::function<void(daxa::TaskInterface)>{[](daxa::TaskInterface ti) {
               ti.recorder.pipeline_barrier({.src_access = daxa::AccessConsts::READ_WRITE,
                                            .dst_access = daxa::AccessConsts::READ_WRITE});
@@ -300,10 +300,10 @@ struct TaskManager
     auto TG = TaskGraph(daxa::TaskGraph({
         .device = gpu->device,
         .swapchain = is_swapchain? gpu->swapchain : std::optional<daxa::Swapchain>(),
-        .reorder_tasks = std::getenv("BB_SYNC_FULL_BARRIERS") == nullptr,
+        .reorder_tasks = !beat_box_diagnostics::options().full_barriers,
         // Diagnostic only: serialize task order and make all prior device writes visible.
         // This cannot fix races between invocations inside one dispatch.
-        .pre_task_callback = std::getenv("BB_SYNC_FULL_BARRIERS") ?
+        .pre_task_callback = beat_box_diagnostics::options().full_barriers ?
             std::function<void(daxa::TaskInterface)>{[](daxa::TaskInterface ti) {
               ti.recorder.pipeline_barrier({.src_access = daxa::AccessConsts::READ_WRITE,
                                            .dst_access = daxa::AccessConsts::READ_WRITE});

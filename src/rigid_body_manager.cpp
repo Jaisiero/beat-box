@@ -1565,7 +1565,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   auto make_gcs_ov = [this](std::shared_ptr<daxa::ComputePipeline> pl, daxa_i32 tgs_phase = 0) {
     return [this, pl, tgs_phase](daxa::TaskInterface ti, auto &) {
       ti.recorder.set_pipeline(*pl);
-      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = (tgs_phase != 0 && std::getenv("BB_TGS_SERIAL")) ? MAX_U32 : 0u, .tgs_phase = tgs_phase});
+      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = (tgs_phase != 0 && beat_box_diagnostics::options().tgs_serial) ? MAX_U32 : 0u, .tgs_phase = tgs_phase});
       ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
     };
   };
@@ -1769,25 +1769,25 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   // the pose each sub-step (TGS temporal). This mirrors Box2D v3's stage order exactly; the warm
   // start in particular belongs INSIDE the loop (b2WarmStartContactsTask runs per sub-step) and is
   // what carries the contact load across sub-steps.
-  for (daxa_u32 c = 0u; c < (std::getenv("BB_TGS_SERIAL") ? 0u : MAX_COLORS_SOLVE); ++c)
+  for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
     G.add_task(task_TGS_CPS_vec[c]);
   G.add_task(task_TGS_CPS_OV);
   for (daxa_u32 s = 0u; s < tgs_substep_count; ++s)
   {
     G.add_task(task_tgs_advect);
-    for (daxa_u32 c = 0u; c < (std::getenv("BB_TGS_SERIAL") ? 0u : MAX_COLORS_SOLVE); ++c)
+    for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
       G.add_task(task_TGS_WS_vec[c]);
     G.add_task(task_TGS_WS_OV);
     for (daxa_u32 sweep = 0u; sweep < tgs_sweeps; ++sweep)
     {
-      for (daxa_u32 c = 0u; c < (std::getenv("BB_TGS_SERIAL") ? 0u : MAX_COLORS_SOLVE); ++c)
+      for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
         G.add_task(task_TGS_CS_vec[c]);
       G.add_task(task_TGS_CS_OV);
     }
     G.add_task(task_tgs_ip);
     for (daxa_u32 sweep = 0u; sweep < tgs_sweeps; ++sweep)
     {
-      for (daxa_u32 c = 0u; c < (std::getenv("BB_TGS_SERIAL") ? 0u : MAX_COLORS_SOLVE); ++c)
+      for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
         G.add_task(task_TGS_CSR_vec[c]);
       G.add_task(task_TGS_CSR_OV);
     }
@@ -2520,7 +2520,14 @@ bool RigidBodyManager::read_back_sim_config()
   update_buffers();
 
   readback_SC_TG.execute();
-  device.wait_idle(); // callers immediately inspect the mapped SimConfig
+  // Graph execution submits synchronously on this single host thread. Capture
+  // its final compute submission, then wait only for that queue timeline point.
+  // TaskSubmitInfo's additional semaphores are ignored by the installed Daxa 3.6.
+  // Keep the graph's TRANSFER_WRITE -> HOST_READ publication barrier.
+  device.wait_on_submit({
+      .queue = daxa::QUEUE_COMPUTE_0,
+      .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0),
+  });
 
   return initialized;
 }
