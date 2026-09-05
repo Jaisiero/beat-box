@@ -97,6 +97,7 @@ fails the same way, which is the quickest way to tell this apart from an app bug
 | `7` / `8` / `9` | debug view: contacts / normals / islands |
 | `G` | visualize the graph coloring |
 | `O` | toggle sleeping |
+| `V` | toggle advection (debug; leave enabled for dragging) |
 | `P` | toggle warm starting |
 | `L` | toggle the LBVH debug BLAS |
 | `` ` `` | toggle the world axes |

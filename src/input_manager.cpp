@@ -231,7 +231,8 @@ void InputManager::on_key(i32 key, i32 action)
       status_mngr->switch_sleeping();
     }
     break;
-  case GLFW_KEY_LEFT_CONTROL:
+  // Ctrl is a modifier used by Moonlight shortcuts; never toggle physics on it alone.
+  case GLFW_KEY_V:
     if (action == GLFW_PRESS)
     {
       status_mngr->switch_advection();
