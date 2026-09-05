@@ -1216,6 +1216,11 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       // approximations between nodes and may be flat in solids or empty cavities.
       daxa_f32 vs2 = s2->voxel_size;
       daxa_f32vec3 l2 = r2->rotate_vector_inverse(pw - r2->position);
+      // Conservative finite-cube bound before eight SDF-node reads and cell SAT.
+      // Cropped fragments often overlap only a small part of each other's grids.
+      daxa_f32vec3 grid_max = s2->grid_origin + daxa_f32vec3(s2->dims) * vs2;
+      if (any(l2 + sup < s2->grid_origin - daxa_f32vec3(0.02f)) ||
+          any(l2 - sup > grid_max + daxa_f32vec3(0.02f))) { continue; }
       su = axk == 0u ? l2.y : l2.x;
       sv = axk == 2u ? l2.y : l2.z;
       // wedge-detector volume probe (unchanged semantics: sample center inside B's solid)
@@ -1226,9 +1231,10 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       daxa_f32 sd = voxel_sdf_sample(sdf, s2, l2, grad);
       daxa_f32 gl2 = dot(grad, grad);
       bool has_gradient = gl2 >= 1e-6f;
-      if (!has_gradient && voxel_occ_bit(occ, s2, c))
+      if (!has_gradient && voxel_occ_bit(occ, s2, c) && voxel_exposed_faces(occ, s2, c) == 0u)
       {
-        // Undefined exit inside solid: keep the occupied-interior recovery.
+        // Only a fully enclosed cell has no local surface exit. Thin fragments
+        // can have a flat node field while still exposing real collision faces.
         red.interior_hits += 1u;
         continue;
       }
@@ -1276,6 +1282,9 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       daxa_i32vec3 chi = daxa_i32vec3(daxa_i32(floor((l2.x + sup.x - s2->grid_origin.x) / vs2)),
                                       daxa_i32(floor((l2.y + sup.y - s2->grid_origin.y) / vs2)),
                                       daxa_i32(floor((l2.z + sup.z - s2->grid_origin.z) / vs2)));
+      // Out-of-grid cells are always empty; do not iterate over them.
+      clo = max(clo, daxa_i32vec3(0));
+      chi = min(chi, daxa_i32vec3(s2->dims) - daxa_i32vec3(1));
       for (daxa_i32 cz = clo.z; cz <= chi.z; ++cz)
       {
         for (daxa_i32 cy = clo.y; cy <= chi.y; ++cy)

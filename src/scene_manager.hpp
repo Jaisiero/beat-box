@@ -1961,8 +1961,10 @@ public:
     rigid_body_manager->update_active_rigid_body_list();
     // Both update methods refresh both parities and restore current bindings.
     // Repeating them only submitted the same uploads twice and advanced the render clock.
-    accel_struct_mngr->update_TLAS();
-    if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " blas_cpu=" << _ms(_t1,_t1b) << " blas_gpu=" << _ms(_t1b,_t2) << " sim+tlas=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
+    // All callers run inside the renderer's scene-edit block. That block publishes
+    // the final TLAS once after fracture, culling and spawning, before tracing rays.
+    // Publishing here built the same TLAS twice and inserted an extra device wait.
+    if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " blas_cpu=" << _ms(_t1,_t1b) << " blas_gpu=" << _ms(_t1b,_t2) << " sim_upload=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
     if (pool_verify_on()) { verify_pools("respawn"); }
     std::cout << "[FRACTURE] respawn: " << rigid_body_count << " bodies, "
               << voxel_shape_cpu.size() << " shapes" << std::endl;

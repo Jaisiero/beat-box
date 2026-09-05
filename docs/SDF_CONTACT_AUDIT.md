@@ -136,3 +136,32 @@ Raw logs and CSVs are in `/root/beat-box/work/sdf-audit`: `baseline-900`,
 The existing metrics report contact penetration, speed and sleeping bodies; they do
 not directly measure the largest per-body positional correction in a solver step.
 Passing these checks therefore does not establish that every possible F9 jump is gone.
+
+## Follow-up after shader modularization
+
+The remaining zero-gradient fallback also treated occupied *surface* cells as
+fully enclosed. A one-cell-thick fragment can have zero distance at all eight
+nodes while still exposing two opposing faces. Such cells now continue through
+cell SAT with their exposed-face masks. Only occupied cells with no exposed
+faces retain the undefined-interior fallback. The center rescue for genuinely
+enclosed cells and fully filtered overlaps is still approximate; this is not
+an exact global extraction algorithm for concave unions.
+
+A wider experiment replacing all gradient filters by occupancy masks improved
+the weak fracture fixture but failed the F7 resting-pool regression. It was
+rejected. Defined gradients retain their existing filtering.
+
+The follow-up fixed-step runs (900 steps, default settings) end as follows:
+
+| Scene | AVBD: sleeping / penetration / speed | TGS: sleeping / penetration / speed |
+| --- | --- | --- |
+| F5 | 9 / 8 mm / 0 | 9 / 1 mm / 0 |
+| F6 | 9 / 5 mm / 0 | 9 / 1 mm / 0 |
+| F7 | 432 / 9 mm / 0 | 432 / 4 mm / 0 |
+| Weak fracture fixture | 19 / 8 mm / 0 | 14 / 27 mm / 536 mm/s |
+
+The baseline AVBD fixture ended at 39 mm penetration. Fragment counts can differ
+because contact trajectories change subsequent impact/fracture events. TGS still
+has residual motion; F9 also needs further contact work. Neither sleeping nor a
+lower contact-depth gauge proves that every positional jump has been eliminated.
+The existing pocket CSV now includes `interior_hits` at each stepped frame.
