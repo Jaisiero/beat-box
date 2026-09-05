@@ -57,7 +57,8 @@ struct AccelerationStructureManager
   // dense prim layout + full re-upload, but (re)builds only the BLAS whose prim content changed,
   // keeping every unchanged body's baked BLAS. Falls back to the full build until seeded by one.
   bool update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
-                                        std::function<void(daxa::BufferId)> const &post_primitive_upload = {});
+                                        std::function<void(daxa::BufferId)> const &post_primitive_upload = {},
+                                        std::span<daxa_u32 const> changed_bodies = {});
   void update_TLAS();
   // Zero the incremental upload counters so the next build_accel_structs() re-fills from offset 0
   // (used by scene reset/reload). Without this the counts accumulate and the 2nd reload exceeds the

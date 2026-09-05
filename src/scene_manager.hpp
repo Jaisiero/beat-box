@@ -1528,7 +1528,10 @@ public:
         .name = "fracture_live_sync_staging",
     });
     {
-      device.wait_idle(); // scene edits and host readback require a completed publication
+      // Finish prior rendering before host edits the shared geometry pools. The caller
+      // has already waited for simulation/readback on COMPUTE_0.
+      device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
+          .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
       auto rec = device.create_command_recorder({.queue_type = daxa::QueueType::COMPUTE});
       rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
                             .dst_access = daxa::AccessConsts::TRANSFER_READ});
@@ -1537,7 +1540,8 @@ public:
                             .dst_access = daxa::AccessConsts::HOST_READ});
       auto cmds = rec.complete_current_commands();
       device.submit_commands({.queue = daxa::QUEUE_COMPUTE_0, .command_lists = std::array{cmds}});
-      device.wait_idle();
+      device.wait_on_submit({.queue = daxa::QUEUE_COMPUTE_0,
+          .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0)});
     }
     RigidBody const *live = device.buffer_host_address_as<RigidBody>(staging).value();
     for (daxa_u32 i = 0u; i < count; ++i)
@@ -1562,7 +1566,7 @@ public:
     return true;
   }
 
-  // one event: clone-if-shared, GPU carve + component labels, split components into bodies
+  // One event: read-only GPU partition + component labels, then private fragment grids.
   bool apply_fracture(FractureEvent const &ev, std::vector<FragFix> &fixes)
   {
     if (ev.body_id >= rigid_bodies.size()) { return false; }
@@ -1571,49 +1575,8 @@ public:
     daxa_u32 shape_i = body.shape_index - 1u;
     daxa_u32vec3 const dims = voxel_shape_cpu[shape_i].dims;
     daxa_u32 const cells = dims.x * dims.y * dims.z;
-    daxa_u32 const words = (cells + 31u) / 32u;
-    daxa_u32 const nodes = (dims.x + 1u) * (dims.y + 1u) * (dims.z + 1u);
-    // capacity check against the recycling allocators (a freed hole of the right size
-    // counts as available, so a steady shatter-and-cull loop never trips this)
-    auto pools_full = [&]() {
-      bool const shape_ok = !free_shape_slots_.empty() || voxel_shape_cpu.size() < BB_MAX_VOXEL_SHAPE_COUNT;
-      return !(shape_ok &&
-               occ_pool_.can_alloc(words, BB_MAX_VOXEL_OCC_U32S) &&
-               surf_pool_.can_alloc(cells, BB_MAX_VOXEL_SURF_COUNT) &&
-               sdf_pool_.can_alloc(nodes, BB_MAX_VOXEL_SDF_F32S));
-    };
-
-    // CLONE-ON-FIRST-FRACTURE: load shapes are SHARED between bodies (scene_5 reuses one L
-    // for three pieces) - carving a shared slice would dent every sibling. Fracture-born
-    // shapes are single-owner (shape_private) and carve in place.
-    if (!shape_private[shape_i])
-    {
-      if (pools_full())
-      {
-        std::cerr << "FRACTURE: shape pools full, event dropped (body " << ev.body_id << ")" << std::endl;
-        return false;
-      }
-      VoxelShape ns = voxel_shape_cpu[shape_i];
-      daxa_u32 const parent_prim_count = (daxa_u32)voxel_shape_prims[shape_i].size();
-      // snapshot the parent occupancy BEFORE allocating (pool_alloc may grow/realloc the vec)
-      std::vector<daxa_u32> occ_copy(voxel_occ_cpu.begin() + ns.occ_offset,
-                                     voxel_occ_cpu.begin() + ns.occ_offset + words);
-      ns.occ_offset = pool_alloc(voxel_occ_cpu, occ_pool_, words, BB_MAX_VOXEL_OCC_U32S, 0u);
-      ns.surf_offset = pool_alloc(voxel_surf_cpu, surf_pool_, cells, BB_MAX_VOXEL_SURF_COUNT, 0u);
-      ns.sdf_offset = pool_alloc(voxel_sdf_cpu, sdf_pool_, nodes, BB_MAX_VOXEL_SDF_F32S, 0.0f);
-      std::copy(occ_copy.begin(), occ_copy.end(), voxel_occ_cpu.begin() + ns.occ_offset);
-      daxa_u32 const nsi = alloc_shape_slot();
-      voxel_shape_cpu[nsi] = ns;
-      shape_private[nsi] = true;
-      voxel_shape_prims[nsi] = std::vector<Aabb>(parent_prim_count, Aabb(daxa_f32vec3(0, 0, 0), daxa_f32vec3(0, 0, 0)));
-      body.shape_index = nsi + 1u; // 1-based
-      shape_i = nsi;
-      // the GPU pool doesn't have the clone yet: re-upload occupancy + records so the
-      // carve kernel sees it (small pools; fracture-rate one-off)
-      std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer()).value(),
-                  voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
-      rigid_body_manager->upload_voxel_shapes(voxel_shape_cpu);
-    }
+    // Partitioning uses carve radius zero: occupancy is read-only. Keep a shared
+    // source shape intact and allocate private grids only after a real split exists.
     VoxelShape const shape = voxel_shape_cpu[shape_i]; // stable copy for this event
 
     // world -> grid-space carve center
@@ -1759,6 +1722,7 @@ public:
                   << old_count << " (body " << ev.body_id << ")" << std::endl;
     }
 
+    if (comp_counts.size() <= 1u) return false; // no topology change: no upload or AS rebuild
     std::vector<std::pair<daxa_u32, daxa_u32>> comps(comp_counts.begin(), comp_counts.end());
     std::sort(comps.begin(), comps.end(), [](auto const &a, auto const &b) {
       return a.second != b.second ? a.second > b.second : a.first < b.first;
@@ -1827,6 +1791,7 @@ public:
     // the rest become new fragment bodies on their own cropped shapes. Every component here is a
     // kept target (the conservation merge folded all sub-MIN_FRAG slivers into their neighbours),
     // so nothing is skipped: total voxel count out == total in.
+    RigidBody const fragment_template = body; // push_back may invalidate the parent reference
     for (size_t k = 1; k < comps.size(); ++k)
     {
       if (rigid_bodies.size() >= MAX_RIGID_BODY_COUNT && free_body_slots_.empty())
@@ -1838,7 +1803,7 @@ public:
       daxa_u32 const fsi = emit_cropped(comps[k].first, comps[k].second, cropk);
       if (fsi == 0xFFFFFFFFu) { std::cerr << "FRACTURE: pools full, fragment dropped" << std::endl; break; }
 
-      RigidBody frag = body; // inherit material/friction/restitution/strength/pose
+      RigidBody frag = fragment_template; // stable snapshot across vector growth
       frag.shape_index = fsi + 1u;
       frag.primitive_count = comps[k].second;
       frag.primitive_offset = 0u;
@@ -1858,9 +1823,9 @@ public:
       ff.crop_off = cropk;
       fixes.push_back(ff);
     }
-    // the pre-carve parent shape has been replaced by the cropped largest; free its slice
-    // (done LAST so its slot isn't reused mid-emit, which would alias a live cropped shape)
-    retire_shape(shape_i);
+    // Free a private parent only after emitting all fragments. Shared source shapes
+    // remain resident for their other bodies and scene spawners.
+    if (shape_private[shape_i]) retire_shape(shape_i); // shared source shapes still serve siblings
     return true;
   }
 
@@ -1979,7 +1944,10 @@ public:
     }
     else
     {
-      _ok = accel_struct_mngr->update_accel_structs_incremental(rigid_bodies, aabb, voxel_prims_hook());
+      std::vector<daxa_u32> changed_bodies;
+      changed_bodies.reserve(fixes.size());
+      for (auto const &fx : fixes) changed_bodies.push_back(fx.body);
+      _ok = accel_struct_mngr->update_accel_structs_incremental(rigid_bodies, aabb, voxel_prims_hook(), changed_bodies);
     }
     if (!_ok)
     {
@@ -1988,13 +1956,11 @@ public:
     }
     auto _t1b = _now(); // AS structs (CPU: dirty-diff + create/size-query for changed bodies) done
     accel_struct_mngr->build_AS();
-    auto _t2 = _now(); // build_AS (GPU build + wait_idle) done
+    auto _t2 = _now(); // build_AS publication completed
     rigid_body_manager->update_sim();
     rigid_body_manager->update_active_rigid_body_list();
-    status_manager->next_frame();
-    rigid_body_manager->update_sim();
-    rigid_body_manager->update_active_rigid_body_list();
-    status_manager->next_frame();
+    // Both update methods refresh both parities and restore current bindings.
+    // Repeating them only submitted the same uploads twice and advanced the render clock.
     accel_struct_mngr->update_TLAS();
     if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " blas_cpu=" << _ms(_t1,_t1b) << " blas_gpu=" << _ms(_t1b,_t2) << " sim+tlas=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
     if (pool_verify_on()) { verify_pools("respawn"); }
@@ -2015,9 +1981,11 @@ public:
       n = BB_MAX_FRACTURE_EVENTS;
     }
     fracture_serial_seen = serial;
+    auto const fracture_start = std::chrono::steady_clock::now();
     sync_pools_if_needed(); // capture the post-load high-water once, before the first alloc
     // live GPU state first: the respawn re-uploads the whole host vector
     if (!sync_live_bodies()) { return; }
+    auto const fracture_synced = std::chrono::steady_clock::now();
     bool any = false;
     std::vector<FragFix> fixes;
     std::set<daxa_u32> done; // one carve per body per batch (an impact spams manifold rows)
@@ -2029,7 +1997,16 @@ public:
       std::cout << "[FRACTURE] body " << ev.body_id << " impulse " << ev.impulse << std::endl;
       any = apply_fracture(ev, fixes) || any;
     }
+    auto const fracture_split = std::chrono::steady_clock::now();
     if (any) { respawn_after_fracture(fixes); }
+    if (bb_getenv("BB_RESPAWN_TIMING")) {
+      auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b-a).count(); };
+      auto const end = std::chrono::steady_clock::now();
+      std::cout << "[FRACTURE-MS] sync=" << ms(fracture_start, fracture_synced)
+                << " split=" << ms(fracture_synced, fracture_split)
+                << " publish=" << ms(fracture_split, end)
+                << " total=" << ms(fracture_start, end) << " events=" << n << std::endl;
+    }
   }
 
   // KILL PLANE: retire any dynamic body that has fallen out of the world, freeing its shape
@@ -2039,6 +2016,7 @@ public:
   void cull_out_of_world()
   {
     if (!sync_live_bodies()) { return; }
+    auto const fracture_synced = std::chrono::steady_clock::now();
     bool any = false;
     for (daxa_u32 i = 0u; i < (daxa_u32)rigid_bodies.size(); ++i)
     {

@@ -2152,7 +2152,8 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
                         .dst_access = daxa::AccessConsts::HOST_READ});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
-  device.wait_idle();
+  device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
+      .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
 
   // BB_SDF_VERIFY: read the GPU field back and compare against the CPU brute force (the
   // debug oracle the GPU-first directive keeps around). Exactness argument in voxel_sdf.slang;
@@ -2181,7 +2182,8 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
                            .dst_access = daxa::AccessConsts::HOST_READ});
     auto cmds2 = rec2.complete_current_commands();
     device.submit_commands({.command_lists = std::array{cmds2}});
-    device.wait_idle();
+    device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
+      .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
     daxa_f32 const *gpu = device.buffer_host_address_as<daxa_f32>(staging).value();
     double max_diff = 0.0;
     size_t worst = 0;
@@ -2215,7 +2217,8 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
                            .dst_access = daxa::AccessConsts::HOST_READ});
     auto cmds2 = rec2.complete_current_commands();
     device.submit_commands({.command_lists = std::array{cmds2}});
-    device.wait_idle();
+    device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
+      .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
     daxa_u32 const *gpu_surf = device.buffer_host_address_as<daxa_u32>(staging).value();
     VoxelShape const *gpu_shapes = reinterpret_cast<VoxelShape const *>(gpu_surf + cpu_surf_reference.size());
     daxa_u32 entry_mismatches = 0u, count_mismatches = 0u, checked = 0u;
@@ -2250,7 +2253,8 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
                            .dst_access = daxa::AccessConsts::HOST_READ});
     auto cmds2 = rec2.complete_current_commands();
     device.submit_commands({.command_lists = std::array{cmds2}});
-    device.wait_idle();
+    device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
+      .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
     VoxelShapeDerived const *gpu = device.buffer_host_address_as<VoxelShapeDerived>(staging).value();
     daxa_u32 count_mismatches = 0u;
     double max_rel = 0.0;
@@ -2443,14 +2447,6 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 car
     rec.dispatch({.x = groups, .y = 1, .z = 1});
     barrier();
   }
-  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
-                        .dst_access = daxa::AccessConsts::READ});
-  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
-                        .dst_access = daxa::AccessConsts::HOST_READ});
-  auto cmds = rec.complete_current_commands();
-  device.submit_commands({.command_lists = std::array{cmds}});
-  device.wait_idle();
-
   // readbacks (fracture-rate one-offs): carved occupancy words + per-cell labels
   auto const occ_bytes = (u64)words * sizeof(daxa_u32);
   auto const lbl_bytes = (u64)cells * sizeof(daxa_u32);
@@ -2459,18 +2455,18 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 car
       .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
       .name = "fracture_readback_staging",
   });
-  auto rec2 = device.create_command_recorder({});
-  rec2.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
                          .dst_access = daxa::AccessConsts::TRANSFER_READ});
-  rec2.copy_buffer_to_buffer({.src_buffer = voxel_occupancy, .dst_buffer = staging,
+  rec.copy_buffer_to_buffer({.src_buffer = voxel_occupancy, .dst_buffer = staging,
                               .src_offset = (u64)shape.occ_offset * sizeof(daxa_u32), .size = occ_bytes});
-  rec2.copy_buffer_to_buffer({.src_buffer = voxel_sdf_scratch[0], .dst_buffer = staging,
+  rec.copy_buffer_to_buffer({.src_buffer = voxel_sdf_scratch[0], .dst_buffer = staging,
                               .dst_offset = occ_bytes, .size = lbl_bytes});
-  rec2.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
                            .dst_access = daxa::AccessConsts::HOST_READ});
-    auto cmds2 = rec2.complete_current_commands();
-  device.submit_commands({.command_lists = std::array{cmds2}});
-  device.wait_idle();
+  auto cmds = rec.complete_current_commands();
+  device.submit_commands({.command_lists = std::array{cmds}});
+  device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
+      .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
   daxa_u32 const *host = device.buffer_host_address_as<daxa_u32>(staging).value();
   out_occ_words.assign(host, host + words);
   out_labels.assign(host + words, host + words + cells);
@@ -2497,7 +2493,8 @@ void RigidBodyManager::read_voxel_derived(daxa_u32 count, std::vector<VoxelShape
                         .dst_access = daxa::AccessConsts::HOST_READ});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
-  device.wait_idle();
+  device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
+      .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
   VoxelShapeDerived const *host = device.buffer_host_address_as<VoxelShapeDerived>(staging).value();
   out.assign(host, host + count);
   device.destroy_buffer(staging);

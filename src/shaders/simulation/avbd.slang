@@ -12,6 +12,7 @@
 // ids; collision_map translates them to the packed solver buffer (collisions).
 
 #include "extensions.slang"
+#include "fracture.slang"
 
 [[vk::push_constant]] AvbdPushConstants AVBD_PC;
 
@@ -1199,29 +1200,8 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     m->contacts[j].normal_impulse = 0.0f;
   }
 
-  // FRACTURE (MVP): one event per (manifold, breakable body) whose strongest fired-row
-  // impulse exceeds the body's threshold. Persistent serial ring - the host consumes by
-  // serial, nothing is ever cleared (survives multi-step catch-up bursts). Loads never
-  // reach here (rows only fire past the approach gate).
-  if (frac_imp > 0.0f)
-  {
-    FractureEventBuffer* feb = (FractureEventBuffer*)(sim_config->fracture_events_addr);
-    [unroll]
-    for (daxa_u32 side = 0u; side < 2u; ++side)
-    {
-      RigidBody* rb_side = side == 0u ? r1 : r2;
-      bool dyn_side = side == 0u ? dyn1 : dyn2;
-      if (!dyn_side || rb_side->fracture_impulse <= 0.0f || rb_side->shape_index == 0u) { continue; }
-      if (frac_imp <= rb_side->fracture_impulse) { continue; }
-      daxa_u32 serial;
-      InterlockedAdd(feb->serial, 1u, serial);
-      daxa_u32 slot = serial % BB_MAX_FRACTURE_EVENTS;
-      feb->events[slot].body_id = rb_side->id;
-      feb->events[slot].impulse = frac_imp;
-      feb->events[slot].position = frac_p;
-      feb->events[slot].normal = n;
-    }
-  }
+  // Share material/event handling with TGS; AVBD retains its pre-impact classifier.
+  emit_fracture_pair(sim_config, r1, r2, frac_imp, frac_p, n);
 }
 
 [shader("compute")]

@@ -1,6 +1,7 @@
 // Static bodies are shared across contacts of one color: even a zero-delta store
 // is a data race. Only dynamic bodies may receive solver writes.
 #include "shared.inl"
+#include "fracture.slang"
 
 // Sleeping bodies do not integrate. They must also have zero solver mass and
 // receive no impulses until the sleep/wake pass activates them.
@@ -332,7 +333,10 @@ struct TGS_SOFT {
   // It deliberately does NOT warm start -- that is a separate stage inside the sub-step loop,
   // exactly as in Box2D v3 (b2PrepareContactsTask once, b2WarmStartContactsTask per sub-step).
   static void pre_step(Manifold* manifold, RigidBody* body_a, RigidBody* body_b,
-                       daxa_f32 h, daxa_f32 hertz) {
+                       daxa_f32 h, daxa_f32 hertz, SimConfig* sim_config) {
+    daxa_f32 fracture_impulse = 0.0f;
+    daxa_f32vec3 fracture_position = daxa_f32vec3(0);
+    const bool breakable = body_a->fracture_impulse > 0.0f || body_b->fracture_impulse > 0.0f;
     for (daxa_u32 i = 0u; i < manifold->contact_count; i++) {
       // store the contact point in each body's LOCAL frame (so the separation tracks the pose) and
       // its current world arm for the mass terms (Box2D uses the prepare arms across the sub-steps)
@@ -348,6 +352,17 @@ struct TGS_SOFT {
       k_normal += dot(rn1, mul(solver_inverse_inertia(body_a), rn1));
       k_normal += dot(rn2, mul(solver_inverse_inertia(body_b), rn2));
       manifold->contacts[i].normal_mass = k_normal == 0.0 ? 0.0f : 1.0f / k_normal;
+      // Once per frame, before warm starting or iterative bias impulses. Resting loads
+      // and speculative gaps are not impacts. Use the same stopping-impulse units as AVBD.
+      if (breakable && manifold->contacts[i].penetration <= 0.0f && k_normal > 1.0e-9f) {
+        daxa_f32vec3 relative = body_b->velocity + cross(body_b->omega, r2)
+                              - body_a->velocity - cross(body_a->omega, r1);
+        daxa_f32 approach = dot(relative, manifold->normal);
+        if (approach < -2.0f * abs(sim_config->gravity) * sim_config->dt) {
+          daxa_f32 stop_impulse = -approach / k_normal;
+          if (stop_impulse > fracture_impulse) { fracture_impulse = stop_impulse; fracture_position = cp; }
+        }
+      }
 
       for (daxa_u32 j = 0u; j < 2; j++) {
         daxa_f32vec3 rt1 = cross(r1, manifold->tangent_vectors[j]);
@@ -369,6 +384,7 @@ struct TGS_SOFT {
       manifold->contacts[i].mass_coefficient = a2 * a3;
       manifold->contacts[i].impulse_coefficient = a3;
     }
+    emit_fracture_pair(sim_config, body_a, body_b, fracture_impulse, fracture_position, manifold->normal);
   }
 
   // Warm start: re-apply the accumulated impulse as a velocity delta. Box2D v3 runs this at the

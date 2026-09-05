@@ -543,7 +543,7 @@ void AccelerationStructureManager::seed_incremental_state(std::vector<RigidBody>
 // identical content). Falls back to a full build until one has seeded the baseline.
 bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies,
                                                                     std::vector<Aabb> const &primitives,
-                                                                    std::function<void(daxa::BufferId)> const &post_primitive_upload)
+                                                                    std::function<void(daxa::BufferId)> const &post_primitive_upload, std::span<daxa_u32 const> changed_bodies)
 {
   if (!initialized)
   {
@@ -612,12 +612,15 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
   blas_geometries.resize(rigid_body_count);
   proc_blas_scratch_offset = 0;
 
+  // Host voxel AABBs are placeholders, so their hash cannot detect changed occupancy.
+  std::vector<bool> geometry_changed(rigid_body_count, false);
+  for (daxa_u32 id : changed_bodies) if (id < rigid_body_count) geometry_changed[id] = true;
   u32 dirty_count = 0;
   for (u32 i = 0; i < rigid_body_count; ++i)
   {
     auto &rigid_body = rigid_bodies[i];
     u64 const hash = hash_prim_span(primitives, rigid_body.primitive_offset, rigid_body.primitive_count);
-    bool const dirty = body_blas_[i].is_empty() || hash != body_built_hash_[i];
+    bool const dirty = geometry_changed[i] || body_blas_[i].is_empty() || hash != body_built_hash_[i];
 
     if (dirty)
     {
