@@ -161,3 +161,8 @@ inverse inertia 1.2 on all axes; supplying inverse mass produced 30. The regress
 checks cover this value, inverse scaling with mass and the static zero-mass case.
 The relative OBB basis is also checked with noncommuting rotations and invariance
 under a common world rotation; SAT indexes it as C[B axis][A axis].
+
+Runtime sources are synchronized by the `beat-box_runtime_sources` build target,
+including when only a shader changes. Identical file timestamps are preserved for
+the SPIR-V cache, and obsolete destination files are removed so they cannot shadow
+source includes. The synchronizer rejects overlapping source/destination trees.

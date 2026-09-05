@@ -59,24 +59,21 @@ if (WIN32)
     )
 endif()
 
-# Copy runtime shader sources/includes to the build output directory so the
-# pipeline manager can compile shaders when the executable is launched there.
-# PURGE the destinations first: copy_directory never removes foreign/stale files, and a
-# leftover file in the destination can SHADOW the real one through relative includes
-# (measured: a stale simulation/extensions.slang from an old tree silently supplied
-# copy_rigid_body_fields to every exe-dir launch for two weeks).
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E rm -rf
-    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/include"
-    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/src/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${PROJECT_SOURCE_DIR}/include"
-    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/include"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${PROJECT_SOURCE_DIR}/src/shaders"
-    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/src/shaders"
-    COMMENT "Copying runtime shader sources and includes to target directory (destinations purged first)..."
+# Synchronize runtime sources on every build, including shader-only edits. Preserve
+# timestamps of identical files for Daxa's SPIR-V cache and remove stale shadow files.
+add_custom_target(${PROJECT_NAME}_runtime_sources ALL
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_TREE=${PROJECT_SOURCE_DIR}/include"
+        "-DDESTINATION_TREE=$<TARGET_FILE_DIR:${PROJECT_NAME}>/include"
+        -P "${PROJECT_SOURCE_DIR}/cmake/sync_runtime_sources.cmake"
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_TREE=${PROJECT_SOURCE_DIR}/src/shaders"
+        "-DDESTINATION_TREE=$<TARGET_FILE_DIR:${PROJECT_NAME}>/src/shaders"
+        -P "${PROJECT_SOURCE_DIR}/cmake/sync_runtime_sources.cmake"
+    COMMENT "Synchronizing runtime shader sources and includes"
+    VERBATIM
 )
+add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_runtime_sources)
 
 # Copy assets to the build output directory so they are available when running from there
 if (EXISTS "${PROJECT_SOURCE_DIR}/assets")
