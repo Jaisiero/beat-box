@@ -572,3 +572,15 @@ FORCE_INLINE daxa_f32vec2 closest_segment_parameters(
     result.x = s; result.y = t;
     return result;
 }
+
+// Rows are B's world axes expressed in A's local coordinates. Construct this
+// from dot products to avoid mixing row-vector and column-vector conventions.
+FORCE_INLINE daxa_f32mat3x3 relative_box_axes(
+    daxa_f32vec3 a0, daxa_f32vec3 a1, daxa_f32vec3 a2,
+    daxa_f32vec3 b0, daxa_f32vec3 b1, daxa_f32vec3 b2)
+{
+    return daxa_f32mat3x3(
+        daxa_f32vec3(dot(b0, a0), dot(b0, a1), dot(b0, a2)),
+        daxa_f32vec3(dot(b1, a0), dot(b1, a1), dot(b1, a2)),
+        daxa_f32vec3(dot(b2, a0), dot(b2, a1), dot(b2, a2)));
+}

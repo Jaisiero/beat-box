@@ -158,6 +158,26 @@ int main()
     CHECK(near_v(fixed.x, {0,0,0}) && near_v(fixed.y, {0,0,0}) && near_v(fixed.z, {0,0,0}));
   }
 
+  // Noncommuting rotations: A=90 degrees about X, B=90 about Y.
+  // A basis: X, Z, -Y. B basis: -Z, Y, X.
+  {
+    Quaternion a(s45, 0, 0, s45), b(0, s45, 0, s45);
+    auto relative = relative_box_axes(a.get_x_axis(), a.get_y_axis(), a.get_z_axis(),
+                                     b.get_x_axis(), b.get_y_axis(), b.get_z_axis());
+    CHECK(near_v(relative.x, {0,-1,0}));
+    CHECK(near_v(relative.y, {0,0,-1}));
+    CHECK(near_v(relative.z, {1,0,0}));
+    // A common world rotation cannot change relative geometry.
+    Quaternion common = Quaternion(0.2f, -0.4f, 0.1f, 0.85f).normalize();
+    Quaternion ca = common * a, cb = common * b;
+    auto rotated = relative_box_axes(ca.get_x_axis(), ca.get_y_axis(), ca.get_z_axis(),
+                                    cb.get_x_axis(), cb.get_y_axis(), cb.get_z_axis());
+    CHECK(near_v(rotated.x, relative.x) && near_v(rotated.y, relative.y) && near_v(rotated.z, relative.z));
+    auto identical = relative_box_axes(ca.get_x_axis(), ca.get_y_axis(), ca.get_z_axis(),
+                                      ca.get_x_axis(), ca.get_y_axis(), ca.get_z_axis());
+    CHECK(near_v(identical.x, {1,0,0}) && near_v(identical.y, {0,1,0}) && near_v(identical.z, {0,0,1}));
+  }
+
   if (g_failures == 0) { std::printf("math_tests: ALL PASSED\n"); }
   else                 { std::printf("math_tests: %d FAILURE(S)\n", g_failures); }
   return g_failures;

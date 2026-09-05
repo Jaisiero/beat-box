@@ -536,7 +536,11 @@ struct OBBvsOBBCollision {
     Transform tx_C;
     Transform tx_abs_C;
 
-    daxa_f32mat3x3 C = mul(tx_A.get_inverse_rotation_matrix(), tx_B.get_rotation_matrix());
+    // SAT below indexes C[B axis][A axis]. With row-vector transforms this is
+    // B * transpose(A), not transpose(A) * B (wrong for noncommuting rotations).
+    daxa_f32mat3x3 C = relative_box_axes(
+        tx_A.get_axis(0), tx_A.get_axis(1), tx_A.get_axis(2),
+        tx_B.get_axis(0), tx_B.get_axis(1), tx_B.get_axis(2));
     daxa_f32mat3x3 abs_C = abs(C);
 
     // const daxa_f32 THRESHOLD_ERROR = 0.98f;

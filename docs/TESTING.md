@@ -141,3 +141,23 @@ parallel overlapping edges, reversed endpoints, crossing segments, disjoint segm
 a point against a segment and two points. The shader's `edges_contact` uses this same
 helper. These geometric cases catch the old parallel branch's wrong projection sign;
 they do not establish that this branch is the dominant cause of scene 7 instability.
+
+### Convergence work and independent final geometry
+
+`BB_TGS_SWEEPS=N` (1 to 16, default 1) repeats the biased solve and relaxation
+sweeps inside each TGS substep. It does not repeat warm starting, change dt, add
+contact refreshes, change coloring or modify AVBD. Use it to separate convergence
+work from scheduling and substep frequency.
+
+`BB_DET_DUMP=/absolute/path/poses.txt` exports final GPU poses before a fixed-step
+run exits. For scene 7, `python3 tools/check_pool_geometry.py poses.txt` reconstructs
+the pool floor and walls and measures OBB overlaps independently of the engine's
+manifolds and extraction cap. Run `--self-test` for analytic geometry checks. Its
+pair IDs are indices in the dump, not persistent GPU body IDs. A sleeping count of
+432 does not prove that boxes have stopped overlapping.
+
+Cuboid inverse inertia requires mass, not inverse mass. A unit cube of mass 5 has
+inverse inertia 1.2 on all axes; supplying inverse mass produced 30. The regression
+checks cover this value, inverse scaling with mass and the static zero-mass case.
+The relative OBB basis is also checked with noncommuting rotations and invariance
+under a common world rotation; SAT indexes it as C[B axis][A axis].

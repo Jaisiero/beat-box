@@ -511,6 +511,8 @@ int RendererManager::render()
                         << ((det_hashA == det_acc) ? "  => IN-PROCESS MATCH (deterministic; cross-process source)"
                                                    : "  => IN-PROCESS DIFF (GPU-kernel non-determinism)") << std::endl;
             }
+            if (const char *dump = std::getenv("BB_DET_DUMP"))
+              scene_manager->dump_scene_live(dump);
             break;
           }
         }
