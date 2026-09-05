@@ -345,7 +345,8 @@ daxa_b32 vfr_cell_solid(daxa_u32* occ, daxa_i32 x, daxa_i32 y, daxa_i32 z)
 // CONNECTED COMPONENTS, phase 2 (host-iterated): min-label propagation over solid
 // 6-neighbors PLUS pointer jumping (label = labels[label]) so long serpentine paths
 // collapse logarithmically within the host's fixed iteration budget. min() over a fixed
-// stencil = deterministic regardless of thread order (values only ever decrease).
+// stencil converges monotonically; atomic accesses make the in-place relaxation
+// race-free, but intermediate iterations can still depend on invocation order.
 [shader("compute")]
 [numthreads(64, 1, 1)] void entry_voxel_flood_step(daxa_u32vec3 tid : SV_DispatchThreadID)
 {
@@ -353,7 +354,8 @@ daxa_b32 vfr_cell_solid(daxa_u32* occ, daxa_i32 x, daxa_i32 y, daxa_i32 z)
   daxa_u32 bit = tid.x;
   if (bit >= bit_count) { return; }
   daxa_u32* labels = (daxa_u32*)(VFR.labels_addr);
-  daxa_u32 lbl = labels[bit];
+  daxa_u32 lbl;
+  InterlockedAdd(labels[bit], 0u, lbl);
   if (lbl == 0xFFFFFFFFu) { return; }
   daxa_u32* occ = (daxa_u32*)(VFR.occupancy_addr);
   daxa_i32 x = daxa_i32(bit % VFR.cell_dims.x);
@@ -373,11 +375,16 @@ daxa_b32 vfr_cell_solid(daxa_u32* occ, daxa_i32 x, daxa_i32 y, daxa_i32 z)
     if (!vfr_cell_solid(occ, nx, ny, nz)) { continue; }
     daxa_u32 nbit = daxa_u32(nx) + daxa_u32(ny) * VFR.cell_dims.x + daxa_u32(nz) * VFR.cell_dims.x * VFR.cell_dims.y;
     if (VFR.use_voronoi != 0u && site_labels[nbit] != my_site) { continue; } // different Voronoi cell: no merge
-    best = min(best, labels[nbit]);
+    daxa_u32 neighbor_label;
+    InterlockedAdd(labels[nbit], 0u, neighbor_label);
+    best = min(best, neighbor_label);
   }
   // pointer jump: adopt the (lower) label of the cell my label points at. Safe under the
   // Voronoi constraint: `best` only ever came from same-site cells, so labels[best] is in
   // the same site+component.
-  best = min(best, labels[best]);
-  labels[bit] = best;
+  daxa_u32 parent_label;
+  InterlockedAdd(labels[best], 0u, parent_label);
+  best = min(best, parent_label);
+  daxa_u32 previous_label;
+  InterlockedMin(labels[bit], best, previous_label);
 }

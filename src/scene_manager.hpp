@@ -1276,10 +1276,15 @@ public:
         .name = "scene_dump_staging",
     });
     {
-      auto rec = device.create_command_recorder({});
+      device.wait_idle(); // scene edits and host readback require a completed publication
+      auto rec = device.create_command_recorder({.queue_type = daxa::QueueType::COMPUTE});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                            .dst_access = daxa::AccessConsts::TRANSFER_READ});
       rec.copy_buffer_to_buffer({.src_buffer = src, .dst_buffer = staging, .size = size});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                            .dst_access = daxa::AccessConsts::HOST_READ});
       auto cmds = rec.complete_current_commands();
-      device.submit_commands({.command_lists = std::array{cmds}});
+      device.submit_commands({.queue = daxa::QUEUE_COMPUTE_0, .command_lists = std::array{cmds}});
       device.wait_idle();
     }
     RigidBody const *live = device.buffer_host_address_as<RigidBody>(staging).value();
@@ -1542,10 +1547,15 @@ public:
         .name = "fracture_live_sync_staging",
     });
     {
-      auto rec = device.create_command_recorder({});
+      device.wait_idle(); // scene edits and host readback require a completed publication
+      auto rec = device.create_command_recorder({.queue_type = daxa::QueueType::COMPUTE});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                            .dst_access = daxa::AccessConsts::TRANSFER_READ});
       rec.copy_buffer_to_buffer({.src_buffer = src, .dst_buffer = staging, .size = size});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                            .dst_access = daxa::AccessConsts::HOST_READ});
       auto cmds = rec.complete_current_commands();
-      device.submit_commands({.command_lists = std::array{cmds}});
+      device.submit_commands({.queue = daxa::QUEUE_COMPUTE_0, .command_lists = std::array{cmds}});
       device.wait_idle();
     }
     RigidBody const *live = device.buffer_host_address_as<RigidBody>(staging).value();

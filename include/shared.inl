@@ -735,6 +735,7 @@ struct SimConfig
                                   // dbg_pen (interior samples emit no contact; boundary samples
                                   // measure cell-local depth <= 1 cell). scene_5 investigation.
   daxa_f32 dt;
+  daxa_u32 tgs_substeps; // must match the host-recorded TGS loop
   daxa_f32 gravity;
   SimFlag flags;
   GlobalCollisionInfo g_c_info;
@@ -1532,7 +1533,7 @@ struct BroadPhasePushConstants
 // NARROW PHASE DISPATCHER
 DAXA_DECL_TASK_HEAD_BEGIN(NarrowPhaseDispatcherTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
 struct NarrowPhaseDispatcherPushConstants
@@ -1828,7 +1829,7 @@ struct CollisionSolverPushConstants
 
 DAXA_DECL_TASK_HEAD_BEGIN(IntegratePositionsTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_DECL_TASK_HEAD_END
 
@@ -1855,7 +1856,7 @@ struct CollisionSolverRelaxationPushConstants
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyUpdateTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 // rigid_bodies is READ-ONLY here (the shader only reads it; it writes the separate
 // rigid_bodies_update buffer). Declaring it READ_WRITE made the task graph think this
 // pass overwrites rigid_bodies -> false WAW with the solver -> solver writes culled.
@@ -1901,7 +1902,7 @@ struct UpdateInstancesPushConstants
 
 DAXA_DECL_TASK_HEAD_BEGIN(CreatePointsTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Manifold), collisions)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(daxa_u32), manifold_color)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(daxa_u32), body_color) // AVBD body coloring (graph-debug tint)

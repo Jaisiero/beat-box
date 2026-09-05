@@ -84,3 +84,60 @@ ctest --test-dir build/Release -C RelWithDebInfo --output-on-failure
 - **`scratch/`** is gitignored: ad-hoc experiments, one-off plots, run logs. Promote a script to `tools/`
   (generalizing any hardcoded path, as `determinism_det.ps1` does) once it stabilizes into something
   worth keeping.
+
+## TGS pool and synchronization audit
+
+`BB_DET_STEPS` now honors an explicit `BB_SCENE` or `BB_SCENE_FILE`; scene 3 is
+only its fallback. Use the pool (scene 7) as the primary TGS stability regression:
+
+```sh
+cd build/Release
+DISPLAY=:0 BB_SOLVER=3 BB_SCENE=7 BB_AUTOSTART=1 BB_DET_STEPS=1800 \
+  BB_METRICS_CSV=pool.csv ./beat-box
+python3 ../../tools/check_pool_metrics.py pool.csv
+```
+
+The checker requires a quiet final 120 samples (integer max speed 0 mm/s), no
+contacts deeper than 200 mm, and all 432 cubes asleep. An application exit code 0
+alone is not a stability pass. `deep200` counts contacts, not bodies, and `pen_mm`
+is capped at 250 by the OBB narrow-phase extraction cap.
+
+`BB_TGS_SUBSTEPS=1..32` selects the recorded TGS loop count and its matching shader
+step size (default remains 4). This is a convergence experiment, not a substitute
+for fixing races. Compare the same number of full simulation steps.
+
+`BB_SYNC_FULL_BARRIERS=1` disables task reordering and inserts ALL_COMMANDS
+read/write memory barriers before every graph task. Diagnostic only: it cannot
+repair races within a dispatch or replace cross-queue/host synchronization.
+
+Vulkan synchronization validation, with installed Khronos layers:
+
+```sh
+VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation \
+VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT \
+DISPLAY=:0 BB_SOLVER=3 BB_SCENE=7 BB_AUTOSTART=1 BB_RUN_SECONDS=8 ./beat-box
+```
+
+Validation without a hazard report is not proof that buffer-device-address shader
+accesses or intra-dispatch races are correct. Review those accesses separately.
+
+### TGS serial scheduling reference
+
+`BB_TGS_SERIAL=1` replaces TGS prepare, warm-start, biased solve and relaxation
+with the single-invocation overflow kernels extended to cover every manifold.
+It traverses colors in the same order as the normal graph, and traverses manifold
+indices within each color; the final pass handles overflow contacts. Gravity,
+position integration, narrow phase and coloring retain their normal implementation.
+This isolates parallel contact execution without intentionally changing color order.
+It does not serialize the whole simulation and does not prove absence of races in
+other stages. It is a slow diagnostic, disabled by default, and does not alter AVBD.
+
+Compare separate runs with `BB_SCENE=7 BB_SOLVER=3 BB_AUTOSTART=1 BB_DET_STEPS=1800`,
+with and without `BB_TGS_SERIAL=1`, writing different `BB_METRICS_CSV` files.
+Do not treat early termination or shader compilation failure as a solver result.
+
+The shared `closest_segment_parameters` helper is exercised by `math_tests` on
+parallel overlapping edges, reversed endpoints, crossing segments, disjoint segments,
+a point against a segment and two points. The shader's `edges_contact` uses this same
+helper. These geometric cases catch the old parallel branch's wrong projection sign;
+they do not establish that this branch is the dominant cause of scene 7 instability.

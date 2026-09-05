@@ -499,52 +499,9 @@ struct OBBvsOBBCollision {
       daxa_f32vec3 PB, daxa_f32vec3 QB,
       out daxa_f32vec3 CA, out daxa_f32vec3 CB)
   {
-    daxa_f32vec3 DA = QA - PA;
-    daxa_f32vec3 DB = QB - PB;
-    daxa_f32vec3 r = PA - PB;
-    daxa_f32 a = dot(DA, DA);
-    daxa_f32 e = dot(DB, DB);
-    daxa_f32 f = dot(DB, r);
-    daxa_f32 c = dot(DA, r);
-    daxa_f32 b = dot(DA, DB);
-    daxa_f32 denom = a * e - b * b;
-
-    // If denom is zero, try finding the closest point on the segment to the other segment
-    if (denom == 0.0f) {
-        // Find the closest point on segment A to segment B
-        daxa_f32 t = (dot(r, DA) / a);
-        t = clamp(t, 0.0f, 1.0f);
-        CA = PA + DA * t;
-
-        // Find the closest point on segment B to segment A
-        daxa_f32vec3 s = CA - PB;
-        daxa_f32 u = (dot(s, DB) / e);
-        u = clamp(u, 0.0f, 1.0f);
-        CB = PB + DB * u;
-        return;
-    }
-
-    // Closest points between the edge SEGMENTS, not the infinite lines (Ericson 5.1.9).
-    // The parameters must be clamped to [0,1]: for nearly-parallel edges (settled neighbor
-    // cubes jiggle below the SAT `parallel` guard) denom ~ sin^2(theta) -> the unclamped
-    // line-line solution puts the contact point hundreds of units off-body. A warm-started
-    // impulse applied at that lever arm injects enormous angular velocity and the rest of
-    // the contact sweep converts it into a velocity explosion (bodies ejected/tunneling).
-    daxa_f32 TA = (b * f - c * e) / denom;
-    TA = clamp(TA, 0.0f, 1.0f);
-    daxa_f32 TB = (b * TA + f) / e;
-
-    // Re-project after clamping TB so the pair is the true segment-segment closest pair.
-    if (TB < 0.0f) {
-        TB = 0.0f;
-        TA = clamp(-c / a, 0.0f, 1.0f);
-    } else if (TB > 1.0f) {
-        TB = 1.0f;
-        TA = clamp((b - c) / a, 0.0f, 1.0f);
-    }
-
-    CA = PA + DA * TA;
-    CB = PB + DB * TB;
+    daxa_f32vec2 parameters = closest_segment_parameters(PA, QA, PB, QB);
+    CA = PA + (QA - PA) * parameters.x;
+    CB = PB + (QB - PB) * parameters.y;
   }
 
   static BoxFace get_flip_face(BoxFace face) {

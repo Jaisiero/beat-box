@@ -255,7 +255,9 @@ private
     BodyLink b_link = body_links[index];
 
     daxa_u32 island_index = MAX_U32;
-    if (b_link.island_index != index)
+    // The root's island id was initialized in the preceding dispatch. Never
+    // rewrite it here while its children are reading it (even with the same value).
+    if (b_link.active_index != index)
     {
       let _index = get_lowest_body_index(index);
       body_links[index].island_index = body_links[_index].island_index;

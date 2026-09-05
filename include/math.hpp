@@ -529,3 +529,46 @@ FORCE_INLINE daxa_f32 hitSphere(const daxa_f32vec3 center, const daxa_f32 radius
     return -1.0f;
   return (-b - sqrt(discriminant)) / (2.0f * a);
 }
+// Preserve the impulse on the physical body when a contact basis or A/B order changes.
+// The normal component is handled separately by the unilateral constraint.
+FORCE_INLINE daxa_f32vec2 reproject_tangent_impulse(
+    daxa_f32vec3 old_t0, daxa_f32vec3 old_t1, daxa_f32vec2 old_impulse,
+    daxa_f32vec3 new_t0, daxa_f32vec3 new_t1, daxa_f32 body_order_sign)
+{
+    daxa_f32vec3 p = body_order_sign * (old_impulse.x * old_t0 + old_impulse.y * old_t1);
+    daxa_f32vec2 result;
+    result.x = dot(p, new_t0);
+    result.y = dot(p, new_t1);
+    return result;
+}
+
+// Closest points on finite segments: return their parameters in [0, 1].
+// Handle parallel and zero-length segments without dividing by a zero determinant.
+FORCE_INLINE daxa_f32vec2 closest_segment_parameters(
+    daxa_f32vec3 pa, daxa_f32vec3 qa, daxa_f32vec3 pb, daxa_f32vec3 qb)
+{
+    daxa_f32vec3 da = qa - pa, db = qb - pb, r = pa - pb;
+    daxa_f32 a = dot(da, da), e = dot(db, db);
+    daxa_f32 f = dot(db, r), c = dot(da, r), b = dot(da, db);
+    daxa_f32 s = 0.0f, t = 0.0f;
+    if (a <= 1e-12f) {
+        if (e > 1e-12f) t = MIN(MAX(f / e, 0.0f), 1.0f);
+    } else if (e <= 1e-12f) {
+        s = MIN(MAX(-c / a, 0.0f), 1.0f);
+    } else {
+        daxa_f32 denominator = a * e - b * b;
+        if (denominator > 0.0f)
+            s = MIN(MAX((b * f - c * e) / denominator, 0.0f), 1.0f);
+        t = (b * s + f) / e;
+        if (t < 0.0f) {
+            t = 0.0f;
+            s = MIN(MAX(-c / a, 0.0f), 1.0f);
+        } else if (t > 1.0f) {
+            t = 1.0f;
+            s = MIN(MAX((b - c) / a, 0.0f), 1.0f);
+        }
+    }
+    daxa_f32vec2 result;
+    result.x = s; result.y = t;
+    return result;
+}

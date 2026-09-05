@@ -25,6 +25,18 @@ static daxa_f32 dot_v(daxa_f32vec3 a, daxa_f32vec3 b) { return a.x * b.x + a.y *
 
 int main()
 {
+  // Friction warm start must preserve the force on each physical body under
+  // a tangent-basis rotation and under swapping A/B (normal sign reversal).
+  {
+    auto same = reproject_tangent_impulse({1,0,0}, {0,0,1}, {2,3}, {1,0,0}, {0,0,1}, 1);
+    CHECK(near_f(same.x,2) && near_f(same.y,3));
+    auto rotated = reproject_tangent_impulse({1,0,0}, {0,0,1}, {2,3}, {0,0,1}, {-1,0,0}, 1);
+    CHECK(near_f(rotated.x,3) && near_f(rotated.y,-2));
+    auto swapped = reproject_tangent_impulse({1,0,0}, {0,0,1}, {2,3}, {-1,0,0}, {0,0,1}, -1);
+    CHECK(near_f(swapped.x,2) && near_f(swapped.y,-3));
+    auto back = reproject_tangent_impulse({-1,0,0}, {0,0,1}, swapped, {1,0,0}, {0,0,1}, -1);
+    CHECK(near_f(back.x,2) && near_f(back.y,3));
+  }
   const daxa_f32 s45 = std::sqrt(0.5f); // sin(45 deg) == cos(45 deg)
 
   // --- identity ---
@@ -116,6 +128,23 @@ int main()
     Quaternion ab_c = (a * b) * c;
     Quaternion a_bc = a * (b * c);
     CHECK(near_v(ab_c.v, a_bc.v) && near_f(ab_c.w, a_bc.w));
+  }
+
+  // Parallel overlapping segments must return coincident points. The previous
+  // shader used +dot(PA-PB,DA)/a and returned points 0.5 units apart here.
+  {
+    auto uv = closest_segment_parameters({0,0,0}, {1,0,0}, {0.5f,0,0}, {1.5f,0,0});
+    CHECK(near_f(uv.x, 0.5f + uv.y));
+    auto reverse = closest_segment_parameters({1,0,0}, {0,0,0}, {1.5f,0,0}, {0.5f,0,0});
+    CHECK(near_f(1.0f - reverse.x, 1.5f - reverse.y));
+    auto cross = closest_segment_parameters({-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0});
+    CHECK(near_f(cross.x, 0.5f) && near_f(cross.y, 0.5f));
+    auto separated = closest_segment_parameters({0,0,0}, {1,0,0}, {2,1,0}, {3,1,0});
+    CHECK(near_f(separated.x, 1.0f) && near_f(separated.y, 0.0f));
+    auto point = closest_segment_parameters({0.5f,0,0}, {0.5f,0,0}, {0,0,0}, {1,0,0});
+    CHECK(near_f(point.x, 0.0f) && near_f(point.y, 0.5f));
+    auto points = closest_segment_parameters({0,0,0}, {0,0,0}, {1,0,0}, {1,0,0});
+    CHECK(near_f(points.x, 0.0f) && near_f(points.y, 0.0f));
   }
 
   if (g_failures == 0) { std::printf("math_tests: ALL PASSED\n"); }

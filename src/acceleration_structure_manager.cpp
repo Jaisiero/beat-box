@@ -103,8 +103,8 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
       });
 
     // Set the buffers for the tasks
-    task_aabb_buffer.set_buffer(primitive_buffer);
-    task_blas_instance_data.set_buffer(blas_instances_buffer);
+    if (task_aabb_buffer.id() != primitive_buffer) { task_aabb_buffer.set_buffer(primitive_buffer); }
+    if (task_blas_instance_data.id() != blas_instances_buffer) { task_blas_instance_data.set_buffer(blas_instances_buffer); }
 
     // Create a temporary placeholder BLAS to satisfy task graph compilation requirements
     placeholder_blas = device.create_blas_from_buffer(
@@ -233,6 +233,8 @@ void AccelerationStructureManager::build_AS()
   if (rb_data_size > 0)
   {
     auto rec = device.create_command_recorder({});
+    rec.pipeline_barrier({.src_access = daxa::AccessConsts::READ_WRITE,
+                          .dst_access = daxa::AccessConsts::TRANSFER_READ_WRITE});
     for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
     {
       rec.copy_buffer_to_buffer({
@@ -241,6 +243,8 @@ void AccelerationStructureManager::build_AS()
           .size = rb_data_size,
       });
     }
+    rec.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                          .dst_access = daxa::AccessConsts::READ});
     auto cmds = rec.complete_current_commands();
     device.submit_commands({.command_lists = std::array{cmds}});
     device.wait_idle();
@@ -1107,8 +1111,8 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
 
 void AccelerationStructureManager::update_buffers()
 {
-  task_blas_instance_data.set_buffer(blas_instances_buffer);
-  task_aabb_buffer.set_buffer(primitive_buffer);
+  if (task_blas_instance_data.id() != blas_instances_buffer) { task_blas_instance_data.set_buffer(blas_instances_buffer); }
+  if (task_aabb_buffer.id() != primitive_buffer) { task_aabb_buffer.set_buffer(primitive_buffer); }
 }
 
 void AccelerationStructureManager::update_AS_buffers() {

@@ -1,4 +1,18 @@
+// Static bodies are shared across contacts of one color: even a zero-delta store
+// is a data race. Only dynamic bodies may receive solver writes.
 #include "shared.inl"
+
+// Sleeping bodies do not integrate. They must also have zero solver mass and
+// receive no impulses until the sleep/wake pass activates them.
+bool solver_body_moves(RigidBody* body) {
+  return body->has_flag(RigidBodyFlag::DYNAMIC) && !body->has_flag(RigidBodyFlag::SLEEPING);
+}
+daxa_f32 solver_inverse_mass(RigidBody* body) {
+  return solver_body_moves(body) ? body->inv_mass : 0.0f;
+}
+daxa_f32mat3x3 solver_inverse_inertia(RigidBody* body) {
+  return solver_body_moves(body) ? body->get_transformed_inertia() : daxa_f32mat3x3(0.0f);
+}
 
 struct PGS {
   static void pre_step(Manifold* manifold, daxa_f32 inv_dt, RigidBody* body_a,  RigidBody* body_b, daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_f32 k_allowed_penetration = PENETRATION_FACTOR, daxa_f32 k_bias_factor = BIAS_FACTOR) {
@@ -11,17 +25,17 @@ struct PGS {
       // Precompute normal mass, tangent mass, and bias
       daxa_f32vec3 rn1 = cross(r1, manifold->normal);
       daxa_f32vec3 rn2 = cross(r2, manifold->normal);
-      daxa_f32 k_normal = body_a->inv_mass + body_b->inv_mass;
-      k_normal += dot(rn1, mul(body_a->get_transformed_inertia(), rn1));
-      k_normal += dot(rn2, mul(body_b->get_transformed_inertia(), rn2));
+      daxa_f32 k_normal = solver_inverse_mass(body_a) + solver_inverse_mass(body_b);
+      k_normal += dot(rn1, mul(solver_inverse_inertia(body_a), rn1));
+      k_normal += dot(rn2, mul(solver_inverse_inertia(body_b), rn2));
       manifold->contacts[i].normal_mass = k_normal == 0.0 ? 0.0f : 1.0f / k_normal;
 
       for(daxa_u32 j = 0u; j < 2; j++) {
         daxa_f32vec3 rt1 = cross(r1, manifold->tangent_vectors[j]);
         daxa_f32vec3 rt2 = cross(r2, manifold->tangent_vectors[j]);
-        daxa_f32 k_tangent = body_a->inv_mass + body_b->inv_mass;
-        k_tangent += dot(rt1, mul(body_a->get_transformed_inertia(), rt1));
-        k_tangent += dot(rt2, mul(body_b->get_transformed_inertia(), rt2));
+        daxa_f32 k_tangent = solver_inverse_mass(body_a) + solver_inverse_mass(body_b);
+        k_tangent += dot(rt1, mul(solver_inverse_inertia(body_a), rt1));
+        k_tangent += dot(rt2, mul(solver_inverse_inertia(body_b), rt2));
         manifold->contacts[i].tangent_mass[j] = k_tangent == 0.0 ? 0.0 : 1.0f / k_tangent;
       }
 
@@ -39,11 +53,15 @@ struct PGS {
           }
         }
 
-        body_a->velocity -= P * body_a->inv_mass;
-        body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
+        if (solver_body_moves(body_a)) {
+          body_a->velocity -= P * solver_inverse_mass(body_a);
+          body_a->omega -= mul(solver_inverse_inertia(body_a), cross(r1, P));
+        }
 
-        body_b->velocity += P * body_b->inv_mass;
-        body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
+        if (solver_body_moves(body_b)) {
+          body_b->velocity += P * solver_inverse_mass(body_b);
+          body_b->omega += mul(solver_inverse_inertia(body_b), cross(r2, P));
+        }
       }
 
       // TODO: Revisit this
@@ -95,11 +113,15 @@ struct PGS {
             // Apply contact impulse
             daxa_f32vec3 tangent_impulse_vector = manifold->tangent_vectors[j] * tangent_impulse;
 
-            body_a->velocity -= tangent_impulse_vector * body_a->inv_mass;
-            body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1_to_point, tangent_impulse_vector));
+            if (solver_body_moves(body_a)) {
+              body_a->velocity -= tangent_impulse_vector * solver_inverse_mass(body_a);
+              body_a->omega -= mul(solver_inverse_inertia(body_a), cross(r1_to_point, tangent_impulse_vector));
+            }
 
-            body_b->velocity += tangent_impulse_vector * body_b->inv_mass;
-            body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2_to_point, tangent_impulse_vector));
+            if (solver_body_moves(body_b)) {
+              body_b->velocity += tangent_impulse_vector * solver_inverse_mass(body_b);
+              body_b->omega += mul(solver_inverse_inertia(body_b), cross(r2_to_point, tangent_impulse_vector));
+            }
           }
       }
 
@@ -123,11 +145,15 @@ struct PGS {
       // Apply contact impulse
       daxa_f32vec3 normal_impulse_vector = manifold->normal * normal_impulse;
 
-      body_a->velocity -= normal_impulse_vector * body_a->inv_mass;
-      body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1_to_point, normal_impulse_vector));
+      if (solver_body_moves(body_a)) {
+        body_a->velocity -= normal_impulse_vector * solver_inverse_mass(body_a);
+        body_a->omega -= mul(solver_inverse_inertia(body_a), cross(r1_to_point, normal_impulse_vector));
+      }
 
-      body_b->velocity += normal_impulse_vector * body_b->inv_mass;
-      body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2_to_point, normal_impulse_vector));
+      if (solver_body_moves(body_b)) {
+        body_b->velocity += normal_impulse_vector * solver_inverse_mass(body_b);
+        body_b->omega += mul(solver_inverse_inertia(body_b), cross(r2_to_point, normal_impulse_vector));
+      }
 
     }
 
@@ -150,21 +176,21 @@ struct PGS_SOFT {
       // Precompute normal mass, tangent mass, and bias
       daxa_f32vec3 rn1 = cross(r1, manifold->normal);
       daxa_f32vec3 rn2 = cross(r2, manifold->normal);
-      daxa_f32 k_normal = body_a->inv_mass + body_b->inv_mass;
-      k_normal += dot(rn1, mul(body_a->get_transformed_inertia(), rn1));
-      k_normal += dot(rn2, mul(body_b->get_transformed_inertia(), rn2));
+      daxa_f32 k_normal = solver_inverse_mass(body_a) + solver_inverse_mass(body_b);
+      k_normal += dot(rn1, mul(solver_inverse_inertia(body_a), rn1));
+      k_normal += dot(rn2, mul(solver_inverse_inertia(body_b), rn2));
       manifold->contacts[i].normal_mass = k_normal == 0.0 ? 0.0f : 1.0f / k_normal;
 
       for(daxa_u32 j = 0u; j < 2; j++) {
         daxa_f32vec3 rt1 = cross(r1, manifold->tangent_vectors[j]);
         daxa_f32vec3 rt2 = cross(r2, manifold->tangent_vectors[j]);
-        daxa_f32 k_tangent = body_a->inv_mass + body_b->inv_mass;
-        k_tangent += dot(rt1, mul(body_a->get_transformed_inertia(), rt1));
-        k_tangent += dot(rt2, mul(body_b->get_transformed_inertia(), rt2));
+        daxa_f32 k_tangent = solver_inverse_mass(body_a) + solver_inverse_mass(body_b);
+        k_tangent += dot(rt1, mul(solver_inverse_inertia(body_a), rt1));
+        k_tangent += dot(rt2, mul(solver_inverse_inertia(body_b), rt2));
         manifold->contacts[i].tangent_mass[j] = k_tangent == 0.0 ? 0.0 : 1.0f / k_tangent;
       }
 
-      daxa_f32 contact_hertz = (body_a->inv_mass == 0.0f || body_b->inv_mass == 0.0f) ? 2.0f * hertz : hertz;
+      daxa_f32 contact_hertz = (solver_inverse_mass(body_a) == 0.0f || solver_inverse_mass(body_b) == 0.0f) ? 2.0f * hertz : hertz;
 
       // soft contact
 			// should use the substep not the full time step
@@ -186,11 +212,15 @@ struct PGS_SOFT {
           }
         }
 
-        body_a->velocity -= P * body_a->inv_mass;
-        body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
+        if (solver_body_moves(body_a)) {
+          body_a->velocity -= P * solver_inverse_mass(body_a);
+          body_a->omega -= mul(solver_inverse_inertia(body_a), cross(r1, P));
+        }
 
-        body_b->velocity += P * body_b->inv_mass;
-        body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
+        if (solver_body_moves(body_b)) {
+          body_b->velocity += P * solver_inverse_mass(body_b);
+          body_b->omega += mul(solver_inverse_inertia(body_b), cross(r2, P));
+        }
       }
     }
   }
@@ -230,11 +260,15 @@ struct PGS_SOFT {
             // Apply contact impulse
             daxa_f32vec3 tangent_impulse_vector = manifold->tangent_vectors[j] * tangent_impulse;
 
-            body_a->velocity -= tangent_impulse_vector * body_a->inv_mass;
-            body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1_to_point, tangent_impulse_vector));
+            if (solver_body_moves(body_a)) {
+              body_a->velocity -= tangent_impulse_vector * solver_inverse_mass(body_a);
+              body_a->omega -= mul(solver_inverse_inertia(body_a), cross(r1_to_point, tangent_impulse_vector));
+            }
 
-            body_b->velocity += tangent_impulse_vector * body_b->inv_mass;
-            body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2_to_point, tangent_impulse_vector));
+            if (solver_body_moves(body_b)) {
+              body_b->velocity += tangent_impulse_vector * solver_inverse_mass(body_b);
+              body_b->omega += mul(solver_inverse_inertia(body_b), cross(r2_to_point, tangent_impulse_vector));
+            }
           }
       }
 
@@ -268,11 +302,15 @@ struct PGS_SOFT {
       // Apply contact impulse
       daxa_f32vec3 normal_impulse_vector = manifold->normal * impulse;
 
-      body_a->velocity -= normal_impulse_vector * body_a->inv_mass;
-      body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1_to_point, normal_impulse_vector));
+      if (solver_body_moves(body_a)) {
+        body_a->velocity -= normal_impulse_vector * solver_inverse_mass(body_a);
+        body_a->omega -= mul(solver_inverse_inertia(body_a), cross(r1_to_point, normal_impulse_vector));
+      }
 
-      body_b->velocity += normal_impulse_vector * body_b->inv_mass;
-      body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2_to_point, normal_impulse_vector));
+      if (solver_body_moves(body_b)) {
+        body_b->velocity += normal_impulse_vector * solver_inverse_mass(body_b);
+        body_b->omega += mul(solver_inverse_inertia(body_b), cross(r2_to_point, normal_impulse_vector));
+      }
 
     }
   }
@@ -306,22 +344,22 @@ struct TGS_SOFT {
 
       daxa_f32vec3 rn1 = cross(r1, manifold->normal);
       daxa_f32vec3 rn2 = cross(r2, manifold->normal);
-      daxa_f32 k_normal = body_a->inv_mass + body_b->inv_mass;
-      k_normal += dot(rn1, mul(body_a->get_transformed_inertia(), rn1));
-      k_normal += dot(rn2, mul(body_b->get_transformed_inertia(), rn2));
+      daxa_f32 k_normal = solver_inverse_mass(body_a) + solver_inverse_mass(body_b);
+      k_normal += dot(rn1, mul(solver_inverse_inertia(body_a), rn1));
+      k_normal += dot(rn2, mul(solver_inverse_inertia(body_b), rn2));
       manifold->contacts[i].normal_mass = k_normal == 0.0 ? 0.0f : 1.0f / k_normal;
 
       for (daxa_u32 j = 0u; j < 2; j++) {
         daxa_f32vec3 rt1 = cross(r1, manifold->tangent_vectors[j]);
         daxa_f32vec3 rt2 = cross(r2, manifold->tangent_vectors[j]);
-        daxa_f32 k_tangent = body_a->inv_mass + body_b->inv_mass;
-        k_tangent += dot(rt1, mul(body_a->get_transformed_inertia(), rt1));
-        k_tangent += dot(rt2, mul(body_b->get_transformed_inertia(), rt2));
+        daxa_f32 k_tangent = solver_inverse_mass(body_a) + solver_inverse_mass(body_b);
+        k_tangent += dot(rt1, mul(solver_inverse_inertia(body_a), rt1));
+        k_tangent += dot(rt2, mul(solver_inverse_inertia(body_b), rt2));
         manifold->contacts[i].tangent_mass[j] = k_tangent == 0.0 ? 0.0 : 1.0f / k_tangent;
       }
 
       // soft contact coefficients (solver2d TGS Soft) computed with the SUB-step h
-      daxa_f32 contact_hertz = (body_a->inv_mass == 0.0f || body_b->inv_mass == 0.0f) ? 2.0f * hertz : hertz;
+      daxa_f32 contact_hertz = (solver_inverse_mass(body_a) == 0.0f || solver_inverse_mass(body_b) == 0.0f) ? 2.0f * hertz : hertz;
       const daxa_f32 zeta = 10.0f;
       const daxa_f32 omega = 2.0f * _PI * contact_hertz;
       const daxa_f32 a1 = 2.0f * zeta + h * omega;
@@ -352,10 +390,14 @@ struct TGS_SOFT {
           P += manifold->tangent_vectors[j] * manifold->contacts[i].tangent_impulse[j];
         }
       }
-      body_a->velocity -= P * body_a->inv_mass;
-      body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
-      body_b->velocity += P * body_b->inv_mass;
-      body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
+      if (solver_body_moves(body_a)) {
+        body_a->velocity -= P * solver_inverse_mass(body_a);
+        body_a->omega -= mul(solver_inverse_inertia(body_a), cross(r1, P));
+      }
+      if (solver_body_moves(body_b)) {
+        body_b->velocity += P * solver_inverse_mass(body_b);
+        body_b->omega += mul(solver_inverse_inertia(body_b), cross(r2, P));
+      }
     }
   }
 
@@ -388,10 +430,14 @@ struct TGS_SOFT {
             timp = clamp(timp, -max_f, max_f);
           }
           daxa_f32vec3 P = tdir * timp;
-          body_a->velocity -= P * body_a->inv_mass;
-          body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
-          body_b->velocity += P * body_b->inv_mass;
-          body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
+          if (solver_body_moves(body_a)) {
+            body_a->velocity -= P * solver_inverse_mass(body_a);
+            body_a->omega -= mul(solver_inverse_inertia(body_a), cross(r1, P));
+          }
+          if (solver_body_moves(body_b)) {
+            body_b->velocity += P * solver_inverse_mass(body_b);
+            body_b->omega += mul(solver_inverse_inertia(body_b), cross(r2, P));
+          }
         }
       }
 
@@ -418,10 +464,14 @@ struct TGS_SOFT {
         impulse = max(impulse, 0.0f);
       }
       daxa_f32vec3 Pn = n * impulse;
-      body_a->velocity -= Pn * body_a->inv_mass;
-      body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, Pn));
-      body_b->velocity += Pn * body_b->inv_mass;
-      body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, Pn));
+      if (solver_body_moves(body_a)) {
+        body_a->velocity -= Pn * solver_inverse_mass(body_a);
+        body_a->omega -= mul(solver_inverse_inertia(body_a), cross(r1, Pn));
+      }
+      if (solver_body_moves(body_b)) {
+        body_b->velocity += Pn * solver_inverse_mass(body_b);
+        body_b->omega += mul(solver_inverse_inertia(body_b), cross(r2, Pn));
+      }
     }
   }
 };

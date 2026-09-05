@@ -877,8 +877,12 @@ groupshared daxa_u32 sws_base[16];
   bool a_dyn = ra->has_flag(RigidBodyFlag::DYNAMIC);
   bool b_dyn = rb->has_flag(RigidBodyFlag::DYNAMIC);
   // statics are always "quiet"; only a non-quiet DYNAMIC partner vetoes
-  bool a_loud = a_dyn && ((ra->sleep_timer & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
-  bool b_loud = b_dyn && ((rb->sleep_timer & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
+  // Other invocations atomically set the veto bit in this same word.
+  daxa_u32 timer_a, timer_b;
+  InterlockedOr(ra->sleep_timer, 0u, timer_a);
+  InterlockedOr(rb->sleep_timer, 0u, timer_b);
+  bool a_loud = a_dyn && ((timer_a & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
+  bool b_loud = b_dyn && ((timer_b & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
   // DEPTH veto: AVBD's post-stabilization corrects penetration positionally, without
   // velocity, so the velocity-based sleep test can freeze a deep pile mid-extraction
   // (the box pool froze with 88-213mm of standing interpenetration). Keep the pair
@@ -1560,7 +1564,7 @@ groupshared daxa_u32 sws_base[16];
       if (sim_config->has_flag(SimFlag::ADVECTION))
       {
         daxa_f32 h = (sim_config->solver_type == SimSolverType::TGS_SOFT)
-                     ? sim_config->dt / daxa_f32(BB_TGS_SUBSTEPS) : sim_config->dt;
+                     ? sim_config->dt / daxa_f32(sim_config->tgs_substeps) : sim_config->dt;
         r->integrate_positions(h);
       }
     }
@@ -1682,7 +1686,7 @@ groupshared daxa_u32 sws_base[16];
   if (GCS.tgs_phase == 1)
   {
     if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
-    daxa::f32 h = sim_config->dt / daxa_f32(BB_TGS_SUBSTEPS);
+    daxa::f32 h = sim_config->dt / daxa_f32(sim_config->tgs_substeps);
     daxa::f32 inv_h = h > 0.0f ? 1.0f / h : 0.0f;
     daxa::f32 tgs_hertz = min(MIN_CONTACT_HERTZ, inv_h * 0.3333333333333333f);
     TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz);
@@ -1720,7 +1724,7 @@ groupshared daxa_u32 sws_base[16];
   if (GCS.tgs_phase == 1)
   {
     if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
-    daxa::f32 inv_h = daxa_f32(BB_TGS_SUBSTEPS) * inv_dt; // 1 / (dt/N)
+    daxa::f32 inv_h = daxa_f32(sim_config->tgs_substeps) * inv_dt; // 1 / (dt/N)
     TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, inv_h);
     return;
   }
@@ -1754,7 +1758,7 @@ groupshared daxa_u32 sws_base[16];
   if (GCS.tgs_phase == 1)
   {
     if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
-    daxa::f32 inv_h = daxa_f32(BB_TGS_SUBSTEPS) * inv_dt;
+    daxa::f32 inv_h = daxa_f32(sim_config->tgs_substeps) * inv_dt;
     TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_h); // relax: no bias
     return;
   }
@@ -1780,7 +1784,9 @@ bool gc_overflowed(daxa_u32 c)
 {
   if (compute_i.x >= 1u) return;
   SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
-  if (sim_config->graph_color_overflow == 0u) return;
+  // Diagnostic reference: preserve color order, serialize every manifold within each color.
+  bool serial_all = GCS.color == MAX_U32;
+  if (!serial_all && sim_config->graph_color_overflow == 0u) return;
   let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
   daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
   RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
@@ -1788,9 +1794,14 @@ bool gc_overflowed(daxa_u32 c)
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
   daxa::f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
+  for (daxa_u32 pass = 0u; pass < (serial_all ? BB_MAX_COLORS_SOLVE + 1u : 1u); ++pass)
   for (daxa_u32 m = 0u; m < coll; ++m)
   {
-    if (!gc_overflowed(manifold_color[m])) continue;
+    if (serial_all && pass < BB_MAX_COLORS_SOLVE)
+    {
+      if (manifold_color[m] != pass) continue;
+    }
+    else if (!gc_overflowed(manifold_color[m])) continue;
     Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
     if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) continue;
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
@@ -1802,7 +1813,7 @@ bool gc_overflowed(daxa_u32 c)
       // Without this the manifolds the colored dispatches skip are never solved under TGS.
       if (GCS.tgs_phase == 1)
       {
-        daxa::f32 h = sim_config->dt / daxa_f32(BB_TGS_SUBSTEPS);
+        daxa::f32 h = sim_config->dt / daxa_f32(sim_config->tgs_substeps);
         daxa::f32 inv_h_sub = h > 0.0f ? 1.0f / h : 0.0f;
         daxa::f32 tgs_hertz = min(MIN_CONTACT_HERTZ, inv_h_sub * 0.3333333333333333f);
         TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz);
@@ -1821,16 +1832,23 @@ bool gc_overflowed(daxa_u32 c)
 {
   if (compute_i.x >= 1u) return;
   SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
-  if (sim_config->graph_color_overflow == 0u) return;
+  // Diagnostic reference: preserve color order, serialize every manifold within each color.
+  bool serial_all = GCS.color == MAX_U32;
+  if (!serial_all && sim_config->graph_color_overflow == 0u) return;
   let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
   daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
   RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  for (daxa_u32 pass = 0u; pass < (serial_all ? BB_MAX_COLORS_SOLVE + 1u : 1u); ++pass)
   for (daxa_u32 m = 0u; m < coll; ++m)
   {
-    if (!gc_overflowed(manifold_color[m])) continue;
+    if (serial_all && pass < BB_MAX_COLORS_SOLVE)
+    {
+      if (manifold_color[m] != pass) continue;
+    }
+    else if (!gc_overflowed(manifold_color[m])) continue;
     Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
     if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) continue;
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
@@ -1838,7 +1856,7 @@ bool gc_overflowed(daxa_u32 c)
     if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) continue; // sleeping/static pair: at rest
     if (sim_config->solver_type == SimSolverType::TGS_SOFT)
     {
-      TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, daxa_f32(BB_TGS_SUBSTEPS) * inv_dt);
+      TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, daxa_f32(sim_config->tgs_substeps) * inv_dt);
       continue;
     }
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)
@@ -1851,16 +1869,23 @@ bool gc_overflowed(daxa_u32 c)
 {
   if (compute_i.x >= 1u) return;
   SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
-  if (sim_config->graph_color_overflow == 0u) return;
+  // Diagnostic reference: preserve color order, serialize every manifold within each color.
+  bool serial_all = GCS.color == MAX_U32;
+  if (!serial_all && sim_config->graph_color_overflow == 0u) return;
   let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
   daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
   RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
+  for (daxa_u32 pass = 0u; pass < (serial_all ? BB_MAX_COLORS_SOLVE + 1u : 1u); ++pass)
   for (daxa_u32 m = 0u; m < coll; ++m)
   {
-    if (!gc_overflowed(manifold_color[m])) continue;
+    if (serial_all && pass < BB_MAX_COLORS_SOLVE)
+    {
+      if (manifold_color[m] != pass) continue;
+    }
+    else if (!gc_overflowed(manifold_color[m])) continue;
     Manifold* manifold = &((Manifold*)(GCS.task_head.collisions))[m];
     if (manifold->obb1_index >= sim_config->rigid_body_count || manifold->obb2_index >= sim_config->rigid_body_count || manifold->obb1_index == manifold->obb2_index) continue;
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
@@ -1868,7 +1893,7 @@ bool gc_overflowed(daxa_u32 c)
     if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) continue; // sleeping/static pair: at rest
     if (sim_config->solver_type == SimSolverType::TGS_SOFT)
     {
-      TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, daxa_f32(BB_TGS_SUBSTEPS) * inv_dt);
+      TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, daxa_f32(sim_config->tgs_substeps) * inv_dt);
       continue;
     }
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)

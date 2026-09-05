@@ -216,6 +216,7 @@ private:
   bool initialized = false;
   // iteration count
   daxa_u32 iteration_count = DEFAULT_ITERATION_COUNT;
+  daxa_u32 tgs_substep_count = BB_TGS_SUBSTEPS;
   // Task manager reference
   std::shared_ptr<TaskManager> task_manager;
   // Back-references wired in create() — RAW on purpose (review v3): shared_ptr back-refs formed
