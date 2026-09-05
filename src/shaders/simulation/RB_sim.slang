@@ -883,35 +883,35 @@ groupshared daxa_u32 sws_base[16];
   InterlockedOr(rb->sleep_timer, 0u, timer_b);
   bool a_loud = a_dyn && ((timer_a & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
   bool b_loud = b_dyn && ((timer_b & BB_SLEEP_TIMER_MASK) < BB_SLEEP_STEPS);
-  // DEPTH veto: AVBD's post-stabilization corrects penetration positionally, without
-  // velocity, so the velocity-based sleep test can freeze a deep pile mid-extraction
-  // (the box pool froze with 88-213mm of standing interpenetration). Keep the pair
-  // awake while its deepest contact is far from the surface: the penalty ramp keeps
-  // shrinking the overlap while the bodies stay quiet, and they finally sleep flush.
-  // The threshold IS the standing rest depth, so it belongs just ABOVE the solver's
-  // achievable equilibrium: under a ~7-cube column the penalty springs compress to
-  // ~45mm at the pile BOTTOM (buried, invisible - surface contacts rest millimetric),
-  // and a tighter veto just trapped those pairs awake forever at maxv=0. (Chasing
-  // deeper landings with a bigger veto was measured unproductive - the occasional
-  // 55-65mm pocket leaves one still body unflagged, which is acceptable.)
-  daxa_i32 cc = manifolds[m].contact_count;
-  bool deep = false;
-  // STALLED-EXTRACTION RELEASE: the deep veto exists to keep pairs awake while the
-  // post-stab is still extracting them positionally (velocity cannot see that motion).
-  // Once the depth trend (Manifold.error, tenth-mm/frame, written by update_from_old)
-  // flatlines under 1mm/frame, the pair sits at the solver's achievable equilibrium for
-  // THIS landing - holding it awake is a permanent trap (measured: 430/432 plateau at
-  // pen 53-55, maxv=0, for 250+ samples against the fixed 50mm threshold). Unknown
-  // trend (sentinel, fresh manifold) stays conservative: veto applies.
+  // OBB contacts must satisfy the penetration tolerance before sleeping. A flat
+  // depth trend is not evidence that an overlapping pair is resolved: freezing it
+  // would preserve the overlap permanently. Voxel contacts retain their existing
+  // discrete-surface policy, independently of the unit-box convergence criterion.
+  bool voxel_pair = ra->shape_index != 0u || rb->shape_index != 0u;
   bool stalled = manifolds[m].error != 0x7FFFFFFF && abs(manifolds[m].error) < 10;
-  if (!stalled)
+  daxa_f32 depth_limit = voxel_pair ? 0.05f : PENETRATION_FACTOR;
+  bool deep = false;
+  if (!voxel_pair || !stalled)
   {
-    for (daxa_i32 ci = 0; ci < cc; ++ci)
+    for (daxa_i32 ci = 0; ci < manifolds[m].contact_count; ++ci)
     {
-      if (manifolds[m].contacts[ci].penetration < -0.05f) { deep = true; break; }
+      if (manifolds[m].contacts[ci].penetration < -depth_limit) { deep = true; break; }
     }
   }
   daxa_u32 prev;
+  if (deep && !voxel_pair)
+  {
+    // All connected bodies must be free to resolve a deep overlap. Waking only
+    // the pair can trap it between neighbors already treated as immovable.
+    Island* islands = (Island*)(SLP.task_head.islands);
+    daxa_u32 island_count = min(sim_config->island_count, BB_MAX_RIGID_BODY_COUNT);
+    daxa_u32 island_a = rigid_bodies[a].island_index;
+    daxa_u32 island_b = rigid_bodies[b].island_index;
+    if (a_dyn && island_a < island_count)
+      InterlockedOr(islands[island_a].sleep_veto, 1u, prev);
+    if (b_dyn && island_b < island_count)
+      InterlockedOr(islands[island_b].sleep_veto, 1u, prev);
+  }
   if ((a_loud || deep) && b_dyn)
   {
     InterlockedOr(rb->sleep_timer, BB_SLEEP_VETO_BIT, prev);
@@ -947,6 +947,13 @@ groupshared daxa_u32 sws_base[16];
   }
 
   bool vetoed = (r->sleep_timer & BB_SLEEP_VETO_BIT) != 0u;
+  // The preceding veto dispatch publishes this field through the islands RW
+  // attachment; this dispatch only reads it, so no atomic load is needed here.
+  Island* islands = (Island*)(SLP.task_head.islands);
+  daxa_u32 island_count = min(sim_config->island_count, BB_MAX_RIGID_BODY_COUNT);
+  daxa_u32 body_island = rigid_bodies[index].island_index;
+  if (body_island < island_count)
+    vetoed = vetoed || islands[body_island].sleep_veto != 0u;
   bool quiet = (r->sleep_timer & BB_SLEEP_TIMER_MASK) >= BB_SLEEP_STEPS;
   bool sleep = quiet && !vetoed;
   bool was_sleeping = r->has_flag(RigidBodyFlag::SLEEPING);
@@ -1688,7 +1695,7 @@ groupshared daxa_u32 sws_base[16];
     if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
     daxa::f32 h = sim_config->dt / daxa_f32(sim_config->tgs_substeps);
     daxa::f32 inv_h = h > 0.0f ? 1.0f / h : 0.0f;
-    daxa::f32 tgs_hertz = min(MIN_CONTACT_HERTZ, inv_h * 0.3333333333333333f);
+    daxa::f32 tgs_hertz = min(TGS_CONTACT_HERTZ, inv_h * 0.3333333333333333f);
     TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz);
     return;
   }
@@ -1815,7 +1822,7 @@ bool gc_overflowed(daxa_u32 c)
       {
         daxa::f32 h = sim_config->dt / daxa_f32(sim_config->tgs_substeps);
         daxa::f32 inv_h_sub = h > 0.0f ? 1.0f / h : 0.0f;
-        daxa::f32 tgs_hertz = min(MIN_CONTACT_HERTZ, inv_h_sub * 0.3333333333333333f);
+        daxa::f32 tgs_hertz = min(TGS_CONTACT_HERTZ, inv_h_sub * 0.3333333333333333f);
         TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz);
       }
       else if (GCS.tgs_phase == 2)

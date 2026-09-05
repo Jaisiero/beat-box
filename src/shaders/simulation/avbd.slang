@@ -724,10 +724,13 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
           daxa_f32 C = avbd_contact_C(m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, rr1, rr2);
           daxa_f32 lam = m->contacts[j].normal_impulse; // <= 0 (force convention)
           daxa_f32 k = m->contacts[j].mass_coefficient;
-          // DEEP-EXTRACTION: in the velocity-free post-stab (stab_alpha=0, C=full C0), a deeply
-          // buried contact whose lambda/k decayed to ~0 cannot dominate the block solve -> floor
-          // its k so it pushes out (no boil: positional, post-velocity). See shared.inl.
-          if (AVBD_PC.stab_alpha < 0.5f && C < -BB_AVBD_DEEP_EXTRACT_THRESH)
+          // Compare the geometric separation, before margin/slop, with the sleep depth
+          // limit. C already has those offsets applied; comparing it directly silently
+          // delays extraction by another 5.5 mm and prevents the island from sleeping.
+          daxa_f32 initial_C = m->contacts[j].penetration + BB_AVBD_MARGIN;
+          daxa_f32 removed_slop = min(max(-initial_C, 0.0f), BB_AVBD_PS_SLOP);
+          daxa_f32 geometric_C = C - (BB_AVBD_MARGIN + removed_slop) * (1.0f - AVBD_PC.stab_alpha);
+          if (AVBD_PC.stab_alpha < 0.5f && geometric_C < -BB_AVBD_DEEP_EXTRACT_THRESH)
           {
             k = max(k, BB_AVBD_DEEP_EXTRACT_K);
           }

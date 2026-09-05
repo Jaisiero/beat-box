@@ -1295,6 +1295,7 @@ public:
       device.destroy_buffer(staging);
       return;
     }
+    out.precision(9); // round-trip float32 poses for independent geometry checks
     out << "# F12 live dump: px py pz [h m e fr qx qy qz qw] / vox <shape> px py pz qx qy qz qw\n";
     daxa_u32 n = 0u;
     for (daxa_u32 i = 0u; i < count; ++i)

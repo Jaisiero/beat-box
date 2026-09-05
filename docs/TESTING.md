@@ -92,19 +92,23 @@ only its fallback. Use the pool (scene 7) as the primary TGS stability regressio
 
 ```sh
 cd build/Release
-DISPLAY=:0 BB_SOLVER=3 BB_SCENE=7 BB_AUTOSTART=1 BB_DET_STEPS=1800 \
-  BB_METRICS_CSV=pool.csv ./beat-box
+DISPLAY=:0 BB_SOLVER=3 BB_SCENE=7 BB_AUTOSTART=1 BB_DET_STEPS=7200 \
+  BB_METRICS_CSV=pool.csv BB_DET_DUMP=pool.txt ./beat-box
 python3 ../../tools/check_pool_metrics.py pool.csv
+python3 ../../tools/check_pool_geometry.py pool.txt --check
 ```
 
 The checker requires a quiet final 120 samples (integer max speed 0 mm/s), no
-contacts deeper than 200 mm, and all 432 cubes asleep. An application exit code 0
+contacts deeper than 200 mm, maximum reported penetration <= 10 mm, and all 432
+cubes asleep. Use `--solver 2` for an AVBD metrics file. An application exit code 0
 alone is not a stability pass. `deep200` counts contacts, not bodies, and `pen_mm`
 is capped at 250 by the OBB narrow-phase extraction cap.
 
 `BB_TGS_SUBSTEPS=1..32` selects the recorded TGS loop count and its matching shader
-step size (default remains 4). This is a convergence experiment, not a substitute
-for fixing races. Compare the same number of full simulation steps.
+step size (default 8). TGS contact frequency is now 120 Hz, capped to one third
+of the substep frequency before the static-contact multiplier. These quality
+settings increase solver work compared with the previous 4 substeps / 30 Hz.
+Substep experiments are not a substitute for fixing races. Compare the same number of full simulation steps.
 
 `BB_SYNC_FULL_BARRIERS=1` disables task reordering and inserts ALL_COMMANDS
 read/write memory barriers before every graph task. Diagnostic only: it cannot
@@ -144,7 +148,7 @@ they do not establish that this branch is the dominant cause of scene 7 instabil
 
 ### Convergence work and independent final geometry
 
-`BB_TGS_SWEEPS=N` (1 to 16, default 1) repeats the biased solve and relaxation
+`BB_TGS_SWEEPS=N` (1 to 16, default 2) repeats the biased solve and relaxation
 sweeps inside each TGS substep. It does not repeat warm starting, change dt, add
 contact refreshes, change coloring or modify AVBD. Use it to separate convergence
 work from scheduling and substep frequency.
@@ -153,8 +157,16 @@ work from scheduling and substep frequency.
 run exits. For scene 7, `python3 tools/check_pool_geometry.py poses.txt` reconstructs
 the pool floor and walls and measures OBB overlaps independently of the engine's
 manifolds and extraction cap. Run `--self-test` for analytic geometry checks. Its
-pair IDs are indices in the dump, not persistent GPU body IDs. A sleeping count of
-432 does not prove that boxes have stopped overlapping.
+pair IDs are indices in the dump, not persistent GPU body IDs. `--check` exits 2
+if the dump does not contain 432 cubes or any measured overlap exceeds 10 mm;
+`--max-depth-mm` changes that tolerance explicitly. A sleeping count of 432 does
+not prove that boxes have stopped overlapping. Dumps preserve float32 precision.
+
+OBB contacts deeper than `PENETRATION_FACTOR` now veto sleeping for their whole
+island, including neighbors previously asleep. A stalled depth trend no longer
+bypasses this limit. The contact veto uses atomic OR into an island flag reset
+during island creation; the shared Daxa islands RW attachment orders the veto
+dispatch before sleep application. Voxel contacts retain their prior policy.
 
 Cuboid inverse inertia requires mass, not inverse mass. A unit cube of mass 5 has
 inverse inertia 1.2 on all axes; supplying inverse mass produced 30. The regression

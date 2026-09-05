@@ -225,7 +225,7 @@ private
       }
       body_link.island_index = island_index;
       // unknow start index yet, reset counter
-      islands[island_index] = Island(MAX_U32, 0, 0, MAX_U32, 0);
+      islands[island_index] = Island(MAX_U32, 0, 0, MAX_U32, 0, 0);
 #if defined(BB_DEBUG)
       // printf("add_island: %d\n", island_index);
 #endif // BB_DEBUG

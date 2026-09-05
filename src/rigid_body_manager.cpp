@@ -1362,6 +1362,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       daxa::attachment_view(SleepTaskHead::AT.sim_config, task_sim_config),
       daxa::attachment_view(SleepTaskHead::AT.rigid_bodies, task_rigid_bodies),
       daxa::attachment_view(SleepTaskHead::AT.collisions, task_collision_scratch),
+      daxa::attachment_view(SleepTaskHead::AT.islands, task_islands),
   };
   auto sleep_dispatch = [this](daxa::TaskInterface ti, std::shared_ptr<daxa::ComputePipeline> &pl, daxa_u32 dispatch_offset)
   {
@@ -1759,7 +1760,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
   // Diagnostic: change convergence work while keeping dt, substeps and contact refresh fixed.
   daxa_u32 const tgs_sweeps = std::getenv("BB_TGS_SWEEPS")
-      ? static_cast<daxa_u32>(std::clamp(std::atoi(std::getenv("BB_TGS_SWEEPS")), 1, 16)) : 1u;
+      ? static_cast<daxa_u32>(std::clamp(std::atoi(std::getenv("BB_TGS_SWEEPS")), 1, 16)) : 2u;
   // TGS_SOFT (Box2D v3 / solver2d): sub-stepped soft solver, integrated with graph coloring.
   // All tasks early-return unless solver_type==TGS_SOFT, so this block is free for the other solvers.
   // Prepare once (soft coeffs at sub-step h + local anchors), then BB_TGS_SUBSTEPS sub-steps of:

@@ -70,7 +70,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("poses", type=Path, nargs="?")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--max-depth-mm", type=float, default=10.0)
+    parser.add_argument("--check", action="store_true", help="Exit with code 2 when geometry exceeds tolerance")
     args = parser.parse_args()
+    if not math.isfinite(args.max_depth_mm) or args.max_depth_mm < 0:
+        parser.error("--max-depth-mm must be finite and nonnegative")
     if args.self_test:
         self_test()
         print("Geometry oracle self-test passed")
@@ -100,11 +104,15 @@ def main():
         if depth > 1e-5:
             pairs.append({"a": i, "b": j, "depth_mm": round(depth * 1000, 3)})
     pairs.sort(key=lambda p: p["depth_mm"], reverse=True)
+    maximum = pairs[0]["depth_mm"] if pairs else 0
+    passed = count == 432 and maximum <= args.max_depth_mm
     print(json.dumps({"dynamic_count": count, "overlapping_pairs": len(pairs),
-                      "max_depth_mm": pairs[0]["depth_mm"] if pairs else 0,
+                      "max_depth_mm": maximum, "passed": passed,
                       "pairs_over_10mm": sum(p["depth_mm"] > 10 for p in pairs),
                       "pairs_over_50mm": sum(p["depth_mm"] > 50 for p in pairs),
                       "deepest_pairs": pairs[:20]}, indent=2))
+    if args.check and not passed:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
