@@ -273,26 +273,10 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
       if (any_voxel) { return; }
       if (dot(normal, old_manifold->normal * old_n_sign) <= 0.7f) { return; } // plane really changed
     }
-    // voxel manifolds (key 99): the dominant normal is assembled from QUANTIZED voxel
-    // sample normals and can flap a few degrees frame-to-frame at rest, which re-excites
-    // the contacts and blocks sleeping. While the rebuilt normal stays within ~25 deg of
-    // last step's, reuse the old normal (and its tangent basis) verbatim.
-    if (key >= 90 && key <= 95)
-    {
-      daxa_f32 ndot = dot(normal, old_manifold->normal);
-      if (ndot > 0.9f)
-      {
-        normal = old_manifold->normal;
-        compute_basis();
-      }
-      else if (ndot < -0.5f)
-      {
-        // the cluster flipped sides since last step: carrying the persisted lambdas
-        // across the flip would apply them along the INVERTED normal (attraction).
-        // Treat the manifold as fresh instead.
-        return;
-      }
-    }
+    // Keep the newly measured voxel normal: its depths were computed/projected along
+    // that direction. Freezing a world normal until a 25-degree threshold makes rotating
+    // contacts solve the wrong plane, then switch abruptly. Reject incompatible history.
+    if (key >= 90 && key <= 95 && dot(normal, old_manifold->normal) <= 0.7f) return;
     daxa_f32vec3 otv0  = old_manifold->tangent_vectors[0];
     daxa_f32vec3 otv1  = old_manifold->tangent_vectors[1];
 
@@ -304,7 +288,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
         if ((used_old & (1u << j)) != 0u) { continue; }
         Contact* old_contact = &old_manifold->contacts[j];
         if(is_same_contact(old_contact, contacts[i].fp, contacts[i].position)) {
-            contacts[i].normal_impulse = old_contact->normal_impulse;
+            contacts[i].normal_impulse = old_contact->normal_impulse * (voxel_m ? max(0.0f, dot(normal, old_manifold->normal)) : 1.0f);
             daxa_f32vec2 ti = reproject_tangent_impulse(otv0, otv1,
                 daxa_f32vec2(old_contact->tangent_impulse[0], old_contact->tangent_impulse[1]),
                 tangent_vectors[0], tangent_vectors[1], old_n_sign);
@@ -323,14 +307,12 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
               contacts[i].anchor_a = old_contact->anchor_a;
               contacts[i].anchor_b = old_contact->anchor_b;
             }
-            // persistent-manifold POSITION hysteresis (all manifold kinds): regenerated
-            // positions micro-wobble every step (voxel corner retreat toggles, SAT clip
-            // vertices sliding), continuously moving the solver's arms even though the
-            // identity matched. Keep the OLD point until it has really drifted
-            // (Box2D/Bullet keep clipped points the same way). Depth still refreshes.
+            // Keep the legacy OBB position hysteresis. Voxel depths and normals refer
+            // to the freshly measured point, so do not freeze it in world space.
+            // Sticking anchors above remain body-local and persist independently.
             {
               daxa_f32vec3 dpos = contacts[i].position - old_contact->position;
-              if (dot(dpos, dpos) < 0.01f) // (0.1)^2
+              if (!voxel_m && dot(dpos, dpos) < 0.01f) // OBB legacy hysteresis only
               {
                 contacts[i].position = old_contact->position;
               }
@@ -380,7 +362,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
         {
           daxa_u32 i = daxa_u32(best_i);
           Contact* old_contact = &old_manifold->contacts[daxa_u32(best_j)];
-          contacts[i].normal_impulse = old_contact->normal_impulse;
+          contacts[i].normal_impulse = old_contact->normal_impulse * (voxel_m ? max(0.0f, dot(normal, old_manifold->normal)) : 1.0f);
           daxa_f32vec2 ti = reproject_tangent_impulse(otv0, otv1,
               daxa_f32vec2(old_contact->tangent_impulse[0], old_contact->tangent_impulse[1]),
               tangent_vectors[0], tangent_vectors[1], old_n_sign);

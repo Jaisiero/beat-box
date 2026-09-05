@@ -63,7 +63,7 @@ struct GPUcontext{
       .native_window_info = native_window_info,
       .surface_format = surface_format,
       .present_mode = daxa::PresentMode::FIFO,
-      .image_usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_SRC,
+      .image_usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_SRC | daxa::ImageUsageFlagBits::TRANSFER_DST,
       .name = swapchain_name,
     });
   }
