@@ -1,16 +1,43 @@
 diff --git a/cmake/deps.cmake b/cmake/deps.cmake
-index a1222ec1..b2febb08 100644
+index a1222ec1..03ece65f 100644
 --- a/cmake/deps.cmake
 +++ b/cmake/deps.cmake
-@@ -94,7 +94,7 @@ if (DAXA_ENABLE_UTILS_IMGUI AND NOT TARGET imgui::imgui AND NOT TARGET implot::i
+@@ -94,10 +94,22 @@ if (DAXA_ENABLE_UTILS_IMGUI AND NOT TARGET imgui::imgui AND NOT TARGET implot::i
  endif()
  
  if (DAXA_ENABLE_UTILS_PIPELINE_MANAGER_SLANG AND NOT TARGET slang::slang)
 -    set(Slang_VERSION "2025.11")
 +    set(Slang_VERSION "2026.10")
++    # The Slang release archives are per-platform: Windows ships a .zip with slang.dll +
++    # slang.lib, Linux a .tar.gz with libslang.so. The original line hardcoded the Windows
++    # archive, so on Linux find_library(Slang_LIBRARY NAMES slang) found nothing and the
++    # build died with 'Slang_LIBRARY-NOTFOUND, needed by beat-box'. Pick the archive that
++    # matches the host. (Everything downstream already has a working Unix branch.)
++    if (WIN32)
++        set(Slang_ARCHIVE "slang-${Slang_VERSION}-windows-x86_64.zip")
++    elseif (APPLE)
++        set(Slang_ARCHIVE "slang-${Slang_VERSION}-macos-aarch64.zip")
++    else()
++        set(Slang_ARCHIVE "slang-${Slang_VERSION}-linux-x86_64.tar.gz")
++    endif()
      FetchContent_Declare(
          slang
-         URL https://github.com/shader-slang/slang/releases/download/v${Slang_VERSION}/slang-${Slang_VERSION}-windows-x86_64.zip
+-        URL https://github.com/shader-slang/slang/releases/download/v${Slang_VERSION}/slang-${Slang_VERSION}-windows-x86_64.zip
++        URL https://github.com/shader-slang/slang/releases/download/v${Slang_VERSION}/${Slang_ARCHIVE}
+         # URL https://github.com/shader-slang/slang/releases/download/v2025.11/slang-2025.11-windows-x86_64.zip
+         DOWNLOAD_EXTRACT_TIMESTAMP 1
+     )
+@@ -163,7 +175,10 @@ if (DAXA_ENABLE_UTILS_PIPELINE_MANAGER_SLANG AND NOT TARGET slang::slang)
+     # Additionally, SLANG_OPTIMIZATION_LEVEL_HIGH requires slang-glslang.dll.
+     # Find it and link with it by default:
+     find_file(Slang_GLSLANG
++        # The Linux tarball ships this one VERSION-SUFFIXED (libslang-glslang-2026.10.so)
++        # with no unversioned symlink, so the plain name only matches on Windows.
+         NAMES ${CMAKE_SHARED_LIBRARY_PREFIX}slang-glslang${CMAKE_SHARED_LIBRARY_SUFFIX}
++              ${CMAKE_SHARED_LIBRARY_PREFIX}slang-glslang-${Slang_VERSION}${CMAKE_SHARED_LIBRARY_SUFFIX}
+         HINTS ${slang_SOURCE_DIR}/bin
+                 ${slang_SOURCE_DIR}/lib
+         NO_DEFAULT_PATH
 diff --git a/include/daxa/utils/task_graph.hpp b/include/daxa/utils/task_graph.hpp
 index a3b2064a..4222cc33 100644
 --- a/include/daxa/utils/task_graph.hpp
@@ -69,3 +96,99 @@ index 66579494..e99f6365 100644
 -}
 \ No newline at end of file
 +}
+diff --git a/src/utils/impl_resource_viewer.cpp b/src/utils/impl_resource_viewer.cpp
+index 9dcc807a..491dc0ae 100644
+--- a/src/utils/impl_resource_viewer.cpp
++++ b/src/utils/impl_resource_viewer.cpp
+@@ -956,7 +956,7 @@ namespace daxa
+             // Everything must begin with a struct keyword.
+             if(! work_code.starts_with("struct"))
+             {
+-                result.error_message = std::format("Expected 'struct' keyword got \"{}...\"", work_code.substr(0, std::min(work_code.size(), 20ull)));
++                result.error_message = std::format("Expected 'struct' keyword got \"{}...\"", work_code.substr(0, std::min<std::size_t>(work_code.size(), 20)));
+                 return result;
+             }
+             // Skip struct keyword.
+@@ -979,7 +979,7 @@ namespace daxa
+             // Expect opening brace.
+             if(! work_code.starts_with("{"))
+             {
+-                result.error_message = std::format("Expected '{{' after struct name '{}', got \"{}...\"", struct_name, work_code.substr(0, std::min(work_code.size(), 20ull)));
++                result.error_message = std::format("Expected '{{' after struct name '{}', got \"{}...\"", struct_name, work_code.substr(0, std::min<std::size_t>(work_code.size(), 20)));
+                 return result;
+             }
+             work_code = work_code.substr(1);
+@@ -994,7 +994,7 @@ namespace daxa
+                     work_code = work_code.substr(1);
+                     if(!work_code.starts_with(";"))
+                     {
+-                        result.error_message = std::format("Expected ';' after closing '}}' of struct '{}', got \"{}...\"", struct_name, work_code.substr(0, std::min(work_code.size(), 20ull)));
++                        result.error_message = std::format("Expected ';' after closing '}}' of struct '{}', got \"{}...\"", struct_name, work_code.substr(0, std::min<std::size_t>(work_code.size(), 20)));
+                         return result;
+                     }
+                     work_code = work_code.substr(1);
+@@ -1026,7 +1026,7 @@ namespace daxa
+                     pointer_depth = 1;
+                     if(!member_type.ends_with(")"))
+                     {
+-                        result.error_message = std::format("Expected closing ')' for buffer pointer type in struct '{}', got \"{}...\"", struct_name, work_code.substr(0, std::min(work_code.size(), 20ull)));
++                        result.error_message = std::format("Expected closing ')' for buffer pointer type in struct '{}', got \"{}...\"", struct_name, work_code.substr(0, std::min<std::size_t>(work_code.size(), 20)));
+                         return result;
+                     }
+                     member_type.remove_prefix(member_type.find('(') + 1);
+@@ -1137,7 +1137,7 @@ namespace daxa
+ 
+                 if(!work_code.starts_with(";"))
+                 {
+-                    result.error_message = std::format("Expected ';' after member declaration of '{}' in struct '{}', got \"{}...\"", member_name, struct_name, work_code.substr(0, std::min(work_code.size(), 20ull)));
++                    result.error_message = std::format("Expected ';' after member declaration of '{}' in struct '{}', got \"{}...\"", member_name, struct_name, work_code.substr(0, std::min<std::size_t>(work_code.size(), 20)));
+                     return result;
+                 }
+                 work_code = work_code.substr(1);
+diff --git a/src/utils/impl_task_graph.cpp b/src/utils/impl_task_graph.cpp
+index 27d295ad..f4a6a13f 100644
+--- a/src/utils/impl_task_graph.cpp
++++ b/src/utils/impl_task_graph.cpp
+@@ -2737,8 +2737,8 @@ namespace daxa
+             return r0_lifetime > r1_lifetime; });
+ 
+         // Calculate transient heap size and allocation offsets.
+-        auto resource_heap_size = 0ull;
+-        auto resource_heap_alignment = 0ull;
++        u64 resource_heap_size = 0;
++        u64 resource_heap_alignment = 0;
+         auto resource_heap_memory_bits = ~0u;
+         struct NonExternalResourceAllocation
+         {
+diff --git a/src/utils/impl_task_graph_ui.cpp b/src/utils/impl_task_graph_ui.cpp
+index c462b6c0..7b22f437 100644
+--- a/src/utils/impl_task_graph_ui.cpp
++++ b/src/utils/impl_task_graph_ui.cpp
+@@ -414,11 +414,11 @@ namespace daxa
+             }
+             else
+             {
+-                for (u32 i = 0; i < std::min(255ull, resource.name.size()); ++i)
++                for (u32 i = 0; i < std::min<std::size_t>(255, resource.name.size()); ++i)
+                 {
+                     ui_context.resource_name_search[i] = resource.name[i];
+                 }
+-                ui_context.resource_name_search[std::min(255ull, resource.name.size())] = 0;
++                ui_context.resource_name_search[std::min<std::size_t>(255, resource.name.size())] = 0;
+             }
+         }
+     }
+@@ -479,11 +479,11 @@ namespace daxa
+             }
+             else
+             {
+-                for (u32 i = 0; i < std::min(255ull, task.name.size()); ++i)
++                for (u32 i = 0; i < std::min<std::size_t>(255, task.name.size()); ++i)
+                 {
+                     ui_context.task_name_search[i] = task.name[i];
+                 }
+-                ui_context.task_name_search[std::min(255ull, task.name.size())] = 0;
++                ui_context.task_name_search[std::min<std::size_t>(255, task.name.size())] = 0;
+             }
+         }
+     }

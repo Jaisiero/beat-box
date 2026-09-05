@@ -19,10 +19,13 @@ add_executable(${PROJECT_NAME} ${SRCS})
 # RigidBodyManager::create() instantiates dozens of large task objects as locals in a
 # single function, producing a very large stack frame. The default 1 MB stack overflows
 # on entry (STATUS_STACK_OVERFLOW). Give the main thread generous headroom.
+# Linux needs no flag here: the main-thread stack is 8 MB by default (vs Windows' 1 MB) and the
+# frame fits -- verified by a full scene_7 run on the RTX 4090. Do NOT re-add -Wl,-z,stacksize:
+# that is a Solaris linker directive, GNU ld silently ignores it and prints
+# "warning: -z stacksize=33554432 ignored", so it was pure noise. If a future refactor does
+# overflow 8 MB, raise it at launch (ulimit -s 65536) rather than pretending a link flag works.
 if (MSVC)
     target_link_options(${PROJECT_NAME} PRIVATE /STACK:33554432) # 32 MB
-else()
-    target_link_options(${PROJECT_NAME} PRIVATE -Wl,-z,stacksize=33554432)
 endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC include)

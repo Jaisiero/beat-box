@@ -290,8 +290,11 @@ struct TGS_SOFT {
     return body->rotate_vector_inverse(world_point - body->position);
   }
 
+  // Prepare runs ONCE per frame (masses, soft coefficients at the sub-step h, local anchors).
+  // It deliberately does NOT warm start -- that is a separate stage inside the sub-step loop,
+  // exactly as in Box2D v3 (b2PrepareContactsTask once, b2WarmStartContactsTask per sub-step).
   static void pre_step(Manifold* manifold, RigidBody* body_a, RigidBody* body_b,
-                       daxa_b32 accumulate_impulses, daxa_b32 enable_friction, daxa_f32 h, daxa_f32 hertz) {
+                       daxa_f32 h, daxa_f32 hertz) {
     for (daxa_u32 i = 0u; i < manifold->contact_count; i++) {
       // store the contact point in each body's LOCAL frame (so the separation tracks the pose) and
       // its current world arm for the mass terms (Box2D uses the prepare arms across the sub-steps)
@@ -327,20 +330,32 @@ struct TGS_SOFT {
       manifold->contacts[i].bias_factor = omega / a1;
       manifold->contacts[i].mass_coefficient = a2 * a3;
       manifold->contacts[i].impulse_coefficient = a3;
+    }
+  }
 
-      // warm start: apply the accumulated impulse from last frame
-      if (accumulate_impulses) {
-        daxa_f32vec3 P = manifold->normal * manifold->contacts[i].normal_impulse;
-        if (enable_friction) {
-          for (daxa_u32 j = 0u; j < 2; j++) {
-            P += manifold->tangent_vectors[j] * manifold->contacts[i].tangent_impulse[j];
-          }
+  // Warm start: re-apply the accumulated impulse as a velocity delta. Box2D v3 runs this at the
+  // START OF EVERY SUB-STEP, and that is what carries the contact load across the sub-steps: the
+  // following solve then only computes the CORRECTION on top of a load already being held. Doing
+  // it once per frame instead leaves sub-steps 2..N re-deriving the contact force from zero through
+  // a deliberately compliant constraint with a single iteration, which under-resolves resting
+  // stacks and lets them sink. Uses the LIVE arms (rotated local anchors) so it stays consistent
+  // with solve()'s separation tracking.
+  static void warm_start(Manifold* manifold, RigidBody* body_a, RigidBody* body_b,
+                         daxa_b32 accumulate_impulses, daxa_b32 enable_friction) {
+    if (!accumulate_impulses) return;
+    for (daxa_u32 i = 0u; i < manifold->contact_count; i++) {
+      daxa_f32vec3 r1 = body_a->rotate_vector(manifold->contacts[i].anchor_a);
+      daxa_f32vec3 r2 = body_b->rotate_vector(manifold->contacts[i].anchor_b);
+      daxa_f32vec3 P = manifold->normal * manifold->contacts[i].normal_impulse;
+      if (enable_friction) {
+        for (daxa_u32 j = 0u; j < 2; j++) {
+          P += manifold->tangent_vectors[j] * manifold->contacts[i].tangent_impulse[j];
         }
-        body_a->velocity -= P * body_a->inv_mass;
-        body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
-        body_b->velocity += P * body_b->inv_mass;
-        body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
       }
+      body_a->velocity -= P * body_a->inv_mass;
+      body_a->omega -= mul(body_a->get_transformed_inertia(), cross(r1, P));
+      body_b->velocity += P * body_b->inv_mass;
+      body_b->omega += mul(body_b->get_transformed_inertia(), cross(r2, P));
     }
   }
 

@@ -27,10 +27,11 @@ GPU, built on [Daxa](https://github.com/Ipotrick/Daxa) task graphs with shaders 
 
 ## Requirements
 
-- Windows 10/11 with **Visual Studio 2022** (the `Release` CMake preset uses the VS 17 generator;
-  `Release-Linux`/Ninja presets exist but Windows is the primary tested path)
+- **Windows 10/11** with **Visual Studio 2022** (the `Release` preset uses the VS 17 generator), or
+  **Linux** with GCC 13+ / Ninja (the `Release-Linux` preset) — both are built and run regularly
 - **CMake ≥ 3.21** and **Git** (the configure step clones Daxa and vcpkg automatically)
-- **Vulkan SDK** installed (validation layers only needed for debugging)
+- **Vulkan SDK ≥ 1.4.313** (Daxa 3.6 uses the promoted-to-core `VK_KHR_line_rasterization` names,
+  so distro headers older than 1.4 — Ubuntu 24.04 ships 1.3.275 — do **not** compile)
 - A GPU + driver with **Vulkan ray-tracing pipeline** support (`VK_KHR_ray_tracing_pipeline`)
 
 ## Build
@@ -52,6 +53,32 @@ build/Release/RelWithDebInfo/beat-box.exe
 
 > The console prints `[COMPILE N] <pipeline>` progress during a cold shader compile — it is not a
 > hang. The SPIR-V cache lives in `spirv_cache/` next to the executable.
+
+### Linux
+
+```sh
+# Ubuntu 24.04: toolchain + window-system dev packages vcpkg's glfw3 needs
+sudo apt install -y build-essential cmake ninja-build git pkg-config     libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev     libwayland-dev libxkbcommon-dev wayland-protocols
+
+# Vulkan SDK 1.4.x from LunarG (the distro's 1.3.275 headers are too old — see Requirements)
+wget -qO /etc/apt/trusted.gpg.d/lunarg.asc https://packages.lunarg.com/lunarg-signing-key-pub.asc
+wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list     https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+sudo apt update && sudo apt install -y vulkan-sdk
+
+cmake --preset Release-Linux
+cmake --build build/Release -j8
+build/Release/beat-box
+```
+
+The app needs a real, presentable surface — `Xvfb` has no Present extension, so swapchain
+creation aborts under it. On a headless NVIDIA box run a real X server on the GPU
+(`AllowEmptyInitialConfiguration` + `UseDisplayDevice "none"` + a `Virtual` resolution) and
+launch against that `DISPLAY`.
+
+If you are inside a container, `/dev/nvidia-modeset` must be present in addition to
+`/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm*` and `/dev/dri`. Without it the NVIDIA ICD
+enumerates the GPU and runs compute fine, but reports **no presentable surfaces** — `vkcube`
+fails the same way, which is the quickest way to tell this apart from an app bug.
 
 ## Controls
 

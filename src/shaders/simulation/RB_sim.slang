@@ -1685,7 +1685,13 @@ groupshared daxa_u32 sws_base[16];
     daxa::f32 h = sim_config->dt / daxa_f32(BB_TGS_SUBSTEPS);
     daxa::f32 inv_h = h > 0.0f ? 1.0f / h : 0.0f;
     daxa::f32 tgs_hertz = min(MIN_CONTACT_HERTZ, inv_h * 0.3333333333333333f);
-    TGS_SOFT.pre_step(manifold, r1, r2, accum_impulse, friction, h, tgs_hertz);
+    TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz);
+    return;
+  }
+  if (GCS.tgs_phase == 2) // Box2D v3's per-sub-step warm start stage
+  {
+    if (sim_config->solver_type != SimSolverType::TGS_SOFT) return;
+    TGS_SOFT.warm_start(manifold, r1, r2, accum_impulse, friction);
     return;
   }
   if (sim_config->solver_type == SimSolverType::TGS_SOFT) return; // TGS runs its own sub-step loop
@@ -1790,6 +1796,21 @@ bool gc_overflowed(daxa_u32 c)
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
     RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
     if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) continue; // sleeping/static pair: at rest
+    if (sim_config->solver_type == SimSolverType::TGS_SOFT)
+    {
+      // TGS overflow: mirror the per-color path (phase 1 = prepare, phase 2 = warm start).
+      // Without this the manifolds the colored dispatches skip are never solved under TGS.
+      if (GCS.tgs_phase == 1)
+      {
+        daxa::f32 h = sim_config->dt / daxa_f32(BB_TGS_SUBSTEPS);
+        daxa::f32 inv_h_sub = h > 0.0f ? 1.0f / h : 0.0f;
+        daxa::f32 tgs_hertz = min(MIN_CONTACT_HERTZ, inv_h_sub * 0.3333333333333333f);
+        TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz);
+      }
+      else if (GCS.tgs_phase == 2)
+        TGS_SOFT.warm_start(manifold, r1, r2, accum_impulse, friction);
+      continue;
+    }
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)
       PGS_SOFT.pre_step(manifold, inv_dt, r1, r2, accum_impulse, friction, sim_config->dt, hertz);
   }
@@ -1815,6 +1836,11 @@ bool gc_overflowed(daxa_u32 c)
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
     RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
     if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) continue; // sleeping/static pair: at rest
+    if (sim_config->solver_type == SimSolverType::TGS_SOFT)
+    {
+      TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, daxa_f32(BB_TGS_SUBSTEPS) * inv_dt);
+      continue;
+    }
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)
       PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, true, inv_dt);
   }
@@ -1840,6 +1866,11 @@ bool gc_overflowed(daxa_u32 c)
     RigidBody* r1 = &rigid_bodies[manifold->obb1_index];
     RigidBody* r2 = &rigid_bodies[manifold->obb2_index];
     if (!rb_is_awake_dynamic(r1) && !rb_is_awake_dynamic(r2)) continue; // sleeping/static pair: at rest
+    if (sim_config->solver_type == SimSolverType::TGS_SOFT)
+    {
+      TGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, daxa_f32(BB_TGS_SUBSTEPS) * inv_dt);
+      continue;
+    }
     if (sim_config->solver_type == SimSolverType::PGS_SOFT)
       PGS_SOFT.solve(manifold, r1, r2, accum_impulse, friction, false, inv_dt);
   }

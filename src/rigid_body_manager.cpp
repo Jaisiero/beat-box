@@ -1538,13 +1538,17 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // TGS_SOFT sub-step instances (same pipelines, tgs_phase=1 so the shader runs the TGS branch).
   // Reuses the per-color graph-coloring dispatch (incl. the empty-color skip) -> TGS stays parallel.
-  std::vector<TTask_GCS> task_TGS_CPS_vec, task_TGS_CS_vec, task_TGS_CSR_vec;
+  // tgs_phase 2 reuses the PRE-SOLVER pipeline for Box2D v3's separate per-sub-step warm start
+  // stage, so no extra pipeline is compiled -- the shader branches on the phase.
+  std::vector<TTask_GCS> task_TGS_CPS_vec, task_TGS_WS_vec, task_TGS_CS_vec, task_TGS_CSR_vec;
   task_TGS_CPS_vec.reserve(MAX_COLORS_SOLVE);
+  task_TGS_WS_vec.reserve(MAX_COLORS_SOLVE);
   task_TGS_CS_vec.reserve(MAX_COLORS_SOLVE);
   task_TGS_CSR_vec.reserve(MAX_COLORS_SOLVE);
   for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
   {
     task_TGS_CPS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CPS, c, 1));
+    task_TGS_WS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CPS, c, 2));
     task_TGS_CS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CS, c, 1));
     task_TGS_CSR_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CSR, c, 1));
   }
@@ -1564,6 +1568,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_GCS_OV task_GCS_CS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CS_OV));
   TTask_GCS_OV task_GCS_CSR_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CSR_OV));
   TTask_GCS_OV task_TGS_CPS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CPS_OV, 1));
+  TTask_GCS_OV task_TGS_WS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CPS_OV, 2));
   TTask_GCS_OV task_TGS_CS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CS_OV, 1));
   TTask_GCS_OV task_TGS_CSR_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CSR_OV, 1));
 
@@ -1750,14 +1755,20 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   // TGS_SOFT (Box2D v3 / solver2d): sub-stepped soft solver, integrated with graph coloring.
   // All tasks early-return unless solver_type==TGS_SOFT, so this block is free for the other solvers.
   // Prepare once (soft coeffs at sub-step h + local anchors), then BB_TGS_SUBSTEPS sub-steps of:
-  // integrate velocity (gravity*h) -> per-color solve (bias) -> integrate positions (x+=v*h) ->
-  // per-color relax (no bias). The separation is re-derived from the pose each sub-step (TGS temporal).
+  // integrate velocity (gravity*h) -> per-color WARM START -> per-color solve (bias) ->
+  // integrate positions (x+=v*h) -> per-color relax (no bias). The separation is re-derived from
+  // the pose each sub-step (TGS temporal). This mirrors Box2D v3's stage order exactly; the warm
+  // start in particular belongs INSIDE the loop (b2WarmStartContactsTask runs per sub-step) and is
+  // what carries the contact load across sub-steps.
   for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
     G.add_task(task_TGS_CPS_vec[c]);
   G.add_task(task_TGS_CPS_OV);
   for (daxa_u32 s = 0u; s < BB_TGS_SUBSTEPS; ++s)
   {
     G.add_task(task_tgs_advect);
+    for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+      G.add_task(task_TGS_WS_vec[c]);
+    G.add_task(task_TGS_WS_OV);
     for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
       G.add_task(task_TGS_CS_vec[c]);
     G.add_task(task_TGS_CS_OV);
