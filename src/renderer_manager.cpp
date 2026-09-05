@@ -1,5 +1,6 @@
 #define _CRT_SECURE_NO_WARNINGS // std::getenv (BB_RUN_SECONDS) on MSVC
 #include "renderer_manager.hpp"
+#include "runtime_diagnostics.hpp"
 #include "scene_manager.hpp" // forward-declared in the header (rebuild-cascade cut, review v3)
 #include <iostream>
 #include <fstream> // deep-pocket trace CSV (diagnostic)
@@ -53,12 +54,12 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   };
 
   // the accumulation buffer matches the TRACE resolution (accumulation happens pre-upscale).
-  // FORMAT: RGBA16F, NOT the swapchain's 8-bit UNORM - the buffer stores LINEAR HDR radiance
+  // FORMAT: RGBA32F (RGB mean + per-pixel sample count), NOT the swapchain's 8-bit UNORM - the buffer stores LINEAR HDR radiance
   // (tonemap happens after averaging, PT batch 2), and UNORM storage CLAMPED every value >1.0
   // and quantized darks to 1/255: accumulated images came out dimmer/flatter than the live
   // frame with banding (user-reported "el buffer de acumulación no funciona bien").
   accumulation_buffer = gpu->device.create_image({
-      .format = daxa::Format::R16G16B16A16_SFLOAT,
+      .format = daxa::Format::R32G32B32A32_SFLOAT,
       .size = scaled_extent(),
       .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
       .name = "accumulation_buffer",
@@ -85,7 +86,9 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
         auto const show_islands = status_manager->is_showing_islands();
         auto const show_normals = status_manager->is_showing_normals();
         auto const show_collisions = status_manager->is_showing_collisions();
+        static bool const validate_rt = beat_box_diagnostics::parse_boolean("BB_RT_VALIDATE", std::getenv("BB_RT_VALIDATE"));
         auto flags = accumulating ? RayTracingFlag::RT_ACCUMULATE : RayTracingFlag::RT_NONE;
+        if (validate_rt) flags |= RayTracingFlag::RT_VALIDATE;
         flags |= show_islands ? RayTracingFlag::RT_SHOW_ISLANDS : show_normals ? RayTracingFlag::RT_SHOW_NORMALS : show_collisions ? RayTracingFlag::RT_SHOW_COLLISIONS : RayTracingFlag::RT_NONE;
         ti.device.buffer_host_address_as<RayTracingConfig>(ti.get(task_ray_tracing_config_host).id).value()[0] = RayTracingConfig{
             .flags = flags,
@@ -441,7 +444,7 @@ int RendererManager::render()
       auto const rs_ext = daxa::Extent3D(std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().x * render_scale)),
                                          std::max(1u, (daxa_u32)(gpu->swapchain_get_extent().y * render_scale)), 1);
       accumulation_buffer = gpu->device.create_image({
-          .format = daxa::Format::R16G16B16A16_SFLOAT, // linear HDR storage (see create())
+          .format = daxa::Format::R32G32B32A32_SFLOAT, // linear HDR storage (see create())
           .size = rs_ext, // matches the TRACE resolution (accumulation is pre-upscale)
           .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::TRANSFER_SRC,
           .name = "accumulation_buffer",

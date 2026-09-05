@@ -1,4 +1,5 @@
 #include "shared.inl"
+#include "path_tracing_math.hpp"
 
 // Wang Hash Function
 daxa_u32 wang_hash(daxa_u32 seed)
@@ -34,7 +35,7 @@ daxa_u32 xorshift32(inout daxa_u32 state)
 daxa_f32 random_float(inout daxa_u32 state)
 {
     daxa_u32 rnd = xorshift32(state);
-    return rnd * 2.3283064365386963e-10f; // 1/2^32
+    return pt_unit_float(rnd);
 }
 
 // Function to sample a Lambertian diffuse reflection
@@ -187,8 +188,8 @@ daxa_f32vec3 compute_direct_lighting_area(
         shadow_ray.TMin = 0.001f;
         shadow_ray.TMax = distance - 0.002f;
 
-        ShadowPayload shadow_payload = {};
-        TraceRay(tlas, RAY_FLAG_NONE, ~0, 1, 0, 0, shadow_ray, shadow_payload);
+        ShadowPayload shadow_payload = { true };
+        TraceRay(tlas, RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0x1, 0, 0, 1, shadow_ray, shadow_payload);
 
         if (!shadow_payload.hit)
         {
@@ -250,8 +251,8 @@ daxa_f32vec3 compute_direct_lighting_point(
     shadow_ray.TMin = 0.001f;
     shadow_ray.TMax = distance - 0.002f;
 
-    ShadowPayload shadow_payload = {};
-    TraceRay(tlas, RAY_FLAG_NONE, ~0, 1, 0, 0, shadow_ray, shadow_payload);
+    ShadowPayload shadow_payload = { true };
+    TraceRay(tlas, RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER, 0x1, 0, 0, 1, shadow_ray, shadow_payload);
 
     if (!shadow_payload.hit)
     {
@@ -294,216 +295,60 @@ daxa_u32 select_random_light(inout daxa_u32 seed, daxa_u32 light_count, daxa_u32
     return index;
 }
 
-// Sample a point on the cube's surface with a "cosine-weighted" distribution
-// with respect to the shading position. In other words, faces more orthogonal
-// to the view vector get picked more often.
-daxa_f32vec3 cosine_weighted_sample_on_cube(
-    inout daxa_u32 seed,
-    RigidBody* r,
-    daxa_f32vec3 shading_position,
-    out daxa_f32vec3 light_normal,
-    daxa_f32 half_size,
-    // PT-correctness (review v3): the sampler's TRUE area-measure pdf for the returned point:
-    // P(face) * uniform-on-face = (w_chosen / total_weight) / face_area. The old caller assumed
-    // uniform sampling of the whole cube (1 / (6*side^2)), which does not match this sampler.
-    out daxa_f32 pdf_area)
-{
-    // 1) Define the 6 faces of the unit cube in local space
-    const daxa_u32 FACE_COUNT = 6u;
-    struct FaceDef
-    {
-        daxa_f32vec3 normal_local;
-        daxa_f32vec3 center_local;
-    };
-
-    FaceDef faces[FACE_COUNT] =
-    {
-        // +X
-        { daxa_f32vec3(+1.0f,  0.0f,  0.0f), daxa_f32vec3(+half_size,  0.0f,        0.0f) },
-        // -X
-        { daxa_f32vec3(-1.0f,  0.0f,  0.0f), daxa_f32vec3(-half_size,  0.0f,        0.0f) },
-        // +Y
-        { daxa_f32vec3( 0.0f, +1.0f,  0.0f), daxa_f32vec3( 0.0f,       +half_size,  0.0f) },
-        // -Y
-        { daxa_f32vec3( 0.0f, -1.0f,  0.0f), daxa_f32vec3( 0.0f,       -half_size,  0.0f) },
-        // +Z
-        { daxa_f32vec3( 0.0f,  0.0f, +1.0f), daxa_f32vec3( 0.0f,       0.0f,        +half_size) },
-        // -Z
-        { daxa_f32vec3( 0.0f,  0.0f, -1.0f), daxa_f32vec3( 0.0f,       0.0f,        -half_size) },
-    };
-
-    // 2) Compute the "weight" for each face = max(0, dot(face_normal, view_dir)) * face_area
-    //    face_area for one face = side^2 = (2*half_size)^2 = 4 * half_size^2
-    const daxa_f32 face_area = 4.0f * (half_size * half_size);
-
-    daxa_f32 weights[FACE_COUNT];
-    daxa_f32 total_weight = 0.0f;
-
-    for(daxa_u32 i = 0; i < FACE_COUNT; i++)
-    {
-        // Rotate local normal to world space
-        daxa_f32vec3 normal_w = normalize(r->rotate_vector(faces[i].normal_local));
-
-        // Face center in world space
-        daxa_f32vec3 center_w = r->object_to_world(faces[i].center_local);
-
-        // Vector from face center to shading position
-        daxa_f32vec3 to_shading = shading_position - center_w;
-        daxa_f32 length_shading = length(to_shading);
-
-        if(length_shading < 1e-9f)
-        {
-            // Degenerate: shading point is basically *on* the face center
-            // Weight = 0 in this scenario
-            weights[i] = 0.0f;
-            continue;
-        }
-
-        daxa_f32vec3 dir = to_shading / length_shading;
-        daxa_f32 dot_val  = dot(normal_w, dir);
-
-        // If dot_val <= 0, face is back-facing => weight = 0
-        // Otherwise weight = dot_val * face_area
-        daxa_f32 w = max(0.0f, dot_val) * face_area;
-        weights[i] = w;
-        total_weight += w;
-    }
-
-    // 3) If all weights are zero => entire cube is back-facing or very close => return zero
-    if(total_weight < 1e-12f)
-    {
-        light_normal = daxa_f32vec3(0.0f);
-        pdf_area = 0.0f;
-        return daxa_f32vec3(0.0f);
-    }
-
-    // 4) Pick a face by sampling a random in [0 .. total_weight)
-    daxa_f32 rrand = random_float(seed) * total_weight;
-    daxa_u32 chosen_index = 0u;
-
-    // Walk through the face weights until we find the face
-    daxa_f32 accum = 0.0f;
-    for(daxa_u32 i = 0; i < FACE_COUNT; i++)
-    {
-        accum += weights[i];
-        if(rrand <= accum)
-        {
-            chosen_index = i;
-            break;
-        }
-    }
-
-    // 5) Uniformly sample the chosen face in local coords
-    daxa_f32 u2 = random_float(seed);
-    daxa_f32 u3 = random_float(seed);
-
-    daxa_f32vec3 sample_local;
-    switch(chosen_index)
-    {
-    case 0: // +X
-        sample_local = daxa_f32vec3(
-            +half_size,
-            (u2 - 0.5f) * 2.0f * half_size,
-            (u3 - 0.5f) * 2.0f * half_size
-        );
-        break;
-    case 1: // -X
-        sample_local = daxa_f32vec3(
-            -half_size,
-            (u2 - 0.5f) * 2.0f * half_size,
-            (u3 - 0.5f) * 2.0f * half_size
-        );
-        break;
-    case 2: // +Y
-        sample_local = daxa_f32vec3(
-            (u2 - 0.5f) * 2.0f * half_size,
-            +half_size,
-            (u3 - 0.5f) * 2.0f * half_size
-        );
-        break;
-    case 3: // -Y
-        sample_local = daxa_f32vec3(
-            (u2 - 0.5f) * 2.0f * half_size,
-            -half_size,
-            (u3 - 0.5f) * 2.0f * half_size
-        );
-        break;
-    case 4: // +Z
-        sample_local = daxa_f32vec3(
-            (u2 - 0.5f) * 2.0f * half_size,
-            (u3 - 0.5f) * 2.0f * half_size,
-            +half_size
-        );
-        break;
-    default: // 5 => -Z
-        sample_local = daxa_f32vec3(
-            (u2 - 0.5f) * 2.0f * half_size,
-            (u3 - 0.5f) * 2.0f * half_size,
-            -half_size
-        );
-        break;
-    }
-
-    // 6) Transform the sample point & normal back to world space
-    daxa_f32vec3 normal_local = faces[chosen_index].normal_local;
-    light_normal = normalize(r->rotate_vector(normal_local));
-    daxa_f32vec3 sample_point = r->object_to_world(sample_local);
-
-    // the pdf of THIS sampler at the returned point (area measure)
-    pdf_area = (weights[chosen_index] / total_weight) / face_area;
-
-    return sample_point;
+// Shared face geometry and distribution for NEE and emission-hit MIS.
+daxa_f32 box_face_weight(RigidBody* r, daxa_f32vec3 from, daxa_u32 face) {
+    daxa_f32vec3 center = r->object_to_world(pt_face_point(r->minimum, r->maximum, face, 0.5f, 0.5f));
+    daxa_f32vec3 delta = from - center;
+    daxa_f32 d2 = dot(delta, delta);
+    if (d2 <= 1.0e-12f) return 0.0f;
+    return max(0.0f, dot(r->rotate_vector(pt_face_normal(face)), delta) / sqrt(d2))
+           * pt_face_area(r->minimum, r->maximum, face);
 }
 
-// The solid-angle pdf that the NEE above (uniform light pick * cosine_weighted_sample_on_cube)
-// assigns to a direction that arrives at `hit_position` on the emissive body `r`, as seen from
-// `from_position`. Used to MIS-weight emission picked up by BRDF-sampled bounce rays (the other
-// half of the balance heuristic — without it, direct light from emissive cubes is double-counted).
-// MUST mirror the face-weight computation in cosine_weighted_sample_on_cube exactly.
-daxa_f32 cube_light_pdf_omega(
-    RigidBody* r,
-    daxa_f32vec3 from_position,
-    daxa_f32vec3 hit_position,
-    daxa_f32vec3 hit_face_normal, // world-space normal of the face that was hit
-    daxa_u32 light_count)
+daxa_f32vec3 cosine_weighted_sample_on_cube(
+    inout daxa_u32 seed, RigidBody* r, daxa_f32vec3 from,
+    out daxa_f32vec3 light_normal, out daxa_f32 pdf_area)
 {
-    daxa_f32 half_size = r->get_half_size(0);
-    const daxa_f32 face_area = 4.0f * (half_size * half_size);
-
-    const daxa_f32vec3 face_normals_local[6] = {
-        daxa_f32vec3(+1.0f, 0.0f, 0.0f), daxa_f32vec3(-1.0f, 0.0f, 0.0f),
-        daxa_f32vec3(0.0f, +1.0f, 0.0f), daxa_f32vec3(0.0f, -1.0f, 0.0f),
-        daxa_f32vec3(0.0f, 0.0f, +1.0f), daxa_f32vec3(0.0f, 0.0f, -1.0f),
-    };
-
-    daxa_f32 total_weight = 0.0f;
-    daxa_f32 hit_face_weight = 0.0f;
-    for (daxa_u32 i = 0; i < 6; i++)
-    {
-        daxa_f32vec3 normal_w = normalize(r->rotate_vector(face_normals_local[i]));
-        daxa_f32vec3 center_w = r->object_to_world(face_normals_local[i] * half_size);
-        daxa_f32vec3 to_shading = from_position - center_w;
-        daxa_f32 len = length(to_shading);
-        if (len < 1e-9f) { continue; }
-        daxa_f32 w = max(0.0f, dot(normal_w, to_shading / len)) * face_area;
-        total_weight += w;
-        if (dot(normal_w, hit_face_normal) > 0.9f) { hit_face_weight = w; }
+    light_normal = daxa_f32vec3(0);
+    pdf_area = 0.0f;
+    daxa_f32 weights[6];
+    daxa_f32 total = 0.0f;
+    daxa_u32 chosen = 0u;
+    for (daxa_u32 i=0u; i<6u; ++i) {
+        weights[i] = box_face_weight(r, from, i);
+        total += weights[i];
+        if (weights[i] > 0.0f) chosen = i; // rounding fallback: last nonzero face
     }
-    if (total_weight < 1e-12f || hit_face_weight <= 0.0f || light_count == 0)
-    {
-        return 0.0f;
+    if (total <= 1.0e-12f) return daxa_f32vec3(0);
+    daxa_f32 target = random_float(seed) * total;
+    daxa_f32 cumulative = 0.0f;
+    for (daxa_u32 i=0u; i<6u; ++i) {
+        cumulative += weights[i];
+        if (weights[i] > 0.0f && target < cumulative) { chosen = i; break; }
     }
+    daxa_f32 u = random_float(seed), v = random_float(seed);
+    light_normal = r->rotate_vector(pt_face_normal(chosen));
+    pdf_area = weights[chosen] / total / pt_face_area(r->minimum, r->maximum, chosen);
+    return r->object_to_world(pt_face_point(r->minimum, r->maximum, chosen, u, v));
+}
 
-    daxa_f32vec3 d = hit_position - from_position;
-    daxa_f32 distance_squared = dot(d, d);
-    daxa_f32 cos_theta_light = max(0.0f, dot(-normalize(d), hit_face_normal));
-    if (cos_theta_light < EPSILON || distance_squared < 1e-12f)
-    {
-        return 0.0f;
+daxa_f32 cube_light_pdf_omega(RigidBody* r, daxa_f32vec3 from,
+    daxa_f32vec3 hit, daxa_f32vec3 normal, daxa_u32 light_count)
+{
+    if (light_count == 0u) return 0.0f;
+    daxa_f32 total = 0.0f, weighted_density = 0.0f;
+    for (daxa_u32 i=0u; i<6u; ++i) {
+        daxa_f32 w = box_face_weight(r, from, i);
+        total += w;
+        if (w > 0.0f && dot(r->rotate_vector(pt_face_normal(i)), normal) > 0.9f)
+            weighted_density = w / pt_face_area(r->minimum, r->maximum, i);
     }
-
-    daxa_f32 pdf_area = (hit_face_weight / total_weight) / face_area / daxa_f32(light_count);
-    return pdf_area * distance_squared / cos_theta_light; // area -> solid angle
+    daxa_f32vec3 delta = hit - from;
+    daxa_f32 d2 = dot(delta, delta);
+    if (total <= 1.0e-12f || d2 <= 1.0e-12f) return 0.0f;
+    daxa_f32 cosine = max(0.0f, dot(-delta / sqrt(d2), normal));
+    if (cosine < EPSILON) return 0.0f;
+    return weighted_density / total / daxa_f32(light_count) * d2 / cosine;
 }
 
 // Function to compute direct lighting with MIS for multiple Cube Lights using cosine-weighted sampling
@@ -523,7 +368,8 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     out daxa_f32vec3 light_dir)
 {
     daxa_f32vec3 light_radiance = daxa_f32vec3(0.0);
-    pdf_light = 0.0f; // Initialize PDF
+    pdf_light = 0.0f; // Initialize every output, including early returns
+    light_dir = daxa_f32vec3(0);
     
     if (light_count == 0)
     {
@@ -555,14 +401,14 @@ daxa_f32vec3 compute_direct_lighting_cubes(
         return daxa_f32vec3(0.0);
     }
     
-    daxa_f32 half_size = r->get_half_size(0);  // Assuming uniform scaling
+
     
     
     // Sample a point on the cube's surface with cosine-weighted distribution & compute the light's normal at the sampled point
     daxa_f32vec3 light_normal = daxa_f32vec3(0.0f);
     daxa_f32 pdf_sample_area = 0.0f; // the sampler's TRUE area pdf (per-face weighted, not uniform)
     daxa_f32vec3 light_sample_position =
-        cosine_weighted_sample_on_cube(seed, r, position, light_normal, half_size, pdf_sample_area);
+        cosine_weighted_sample_on_cube(seed, r, position, light_normal, pdf_sample_area);
 
     // If uniform_sample_on_cube() found no forward-facing face, skip
     if (all(light_normal == 0.0f))
@@ -573,8 +419,9 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     }
 
     // Compute direction to the sampled point on the light
-    daxa_f32vec3 light_dir = light_sample_position - position;
+    light_dir = light_sample_position - position;
     daxa_f32 distance_squared = dot(light_dir, light_dir);
+    if (distance_squared <= 1.0e-8f) return daxa_f32vec3(0);
     daxa_f32 distance = sqrt(distance_squared);
     light_dir /= distance; // normalize
 
@@ -605,19 +452,22 @@ daxa_f32vec3 compute_direct_lighting_cubes(
     // Shadow test (ray from shading point to the light sample)
     RayDesc shadow_ray;
     shadow_ray.Origin    = position + normal * 0.001f;
-    shadow_ray.Direction = light_dir;
-    shadow_ray.TMin      = 0.001f;
-    shadow_ray.TMax      = distance - 0.002f;
+    daxa_f32vec3 shadow_delta = light_sample_position - shadow_ray.Origin;
+    daxa_f32 shadow_distance = length(shadow_delta);
+    if (shadow_distance <= 0.002f) { pdf_light = 0.0f; return daxa_f32vec3(0); }
+    shadow_ray.Direction = shadow_delta / shadow_distance;
+    shadow_ray.TMin      = 0.0001f;
+    shadow_ray.TMax      = shadow_distance - 0.001f;
 
     // If 'hit' is false, that means the path is clear; if 'hit' is true, we are occluded
-    ShadowPayload shadow_payload = { false };
+    ShadowPayload shadow_payload = { true };
     TraceRay(
         tlas,
-        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-        ~0,          // cull mask
-        1,           // sbtRecordOffset
+        RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+        0x1,         // physical geometry only; debug BVH has a separate mask
+        0,           // real geometry intersection, no LBVH any-hit payload
         0,           // sbtRecordStride
-        0,           // missShaderIndex
+        1,           // miss_shadows clears the initially occluded payload
         shadow_ray,
         shadow_payload
     );

@@ -850,7 +850,7 @@ bool AccelerationStructureManager::update()
                                      daxa_f32vec4(0.0f, 1.0f, 0.0f, 0.0f),
                                      daxa_f32vec4(0.0f, 0.0f, 1.0f, 0.0f)),
         .instance_custom_index = current_rigid_body_count,
-        .mask = 0xFF,
+        .mask = 0x2, // debug geometry must not occlude physical light rays
         .instance_shader_binding_table_record_offset = 1,
         .flags = {},
         .blas_device_address = device.device_address(lbvh_blas[frame_index]).value(),

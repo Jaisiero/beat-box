@@ -253,6 +253,7 @@ enum RayTracingFlag : daxa_u32
   RT_SHOW_NORMALS = 1 << 1,
   RT_SHOW_ISLANDS = 1 << 2,
   RT_SHOW_COLLISIONS = 1 << 3,
+  RT_VALIDATE = 1 << 4, // latch invalid samples/history in magenta until accumulation reset
 };
 #if DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 RayTracingFlag  operator|(RayTracingFlag a, RayTracingFlag b)
@@ -521,7 +522,7 @@ DAXA_DECL_TASK_HEAD_BEGIN(RayTracingTaskHead)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(CameraView), camera)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(RayTracingConfig), ray_tracing_config)
 DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_WRITE_ONLY, REGULAR_2D, swapchain)
-DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_STORAGE_READ_ONLY, REGULAR_2D, accumulation_buffer)
+DAXA_TH_IMAGE_ID(RAY_TRACING_SHADER_READ_WRITE, REGULAR_2D, accumulation_buffer)
 DAXA_TH_TLAS_ID(RAY_TRACING_SHADER_READ, tlas)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ, daxa_BufferPtr(RigidBodyEntry), rigid_body_map)
 DAXA_TH_BUFFER_PTR(RAY_TRACING_SHADER_READ_WRITE, daxa_BufferPtr(RigidBody), rigid_bodies)

@@ -9,6 +9,8 @@
 // hue-shifted fringes. ACES filmic fit (Narkowicz), branch-free.
 daxa::f32vec3 tonemap_aces(daxa::f32vec3 x)
 {
+  // The clamped fit is already white above 16; bound the polynomial to avoid HDR overflow.
+  x = min(x, daxa::f32vec3(16.0f));
   const daxa::f32 a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
   return clamp((x * (a * x + b)) / (x * (c * x + d) + e), daxa::f32vec3(0.0f), daxa::f32vec3(1.0f));
 }
@@ -27,6 +29,7 @@ daxa::f32vec3 tonemap_aces(daxa::f32vec3 x)
   var max_bounces = ray_tracing_config.max_bounces;
   var frame_count = ray_tracing_config.frame_count;
   var current_frame_index = ray_tracing_config.current_frame_index;
+  bool validate_rt = (ray_tracing_config.flags & RayTracingFlag::RT_VALIDATE) != RayTracingFlag::RT_NONE;
   var accumulate_flag = (ray_tracing_config.flags & 0x1u) != 0u;
 
   // Initialize the random seed for the pixel
@@ -128,7 +131,7 @@ daxa::f32vec3 tonemap_aces(daxa::f32vec3 x)
       daxa::f32 cos_theta = max(0.0f, dot(normal, light_dir));
       daxa::f32 pdf_brdf_light = cos_theta / PI;
 
-      // Compute MIS weight using the power heuristic
+      // Compute MIS weight using the balance heuristic
       daxa::f32 mis_weight = (pdf_light) / (pdf_light + pdf_brdf_light);
 
       // Accumulate radiance with MIS weight
@@ -149,8 +152,10 @@ daxa::f32vec3 tonemap_aces(daxa::f32vec3 x)
     // sample_lambertian(normal, albedo, bluenoise.x, bluenoise.y, new_direction, pdf_brdf, brdf);
 
     // Update throughput for indirect lighting
-    daxa::f32 cos_theta = max(0.0f, dot(normal, new_direction));
-    payload.throughput *= (brdf * cos_theta) / pdf_brdf;
+    // Cosine-weighted Lambertian sampling cancels f*cos/pdf exactly.
+    // Avoid the grazing-angle 0/0 instead of clamping a biased denominator.
+    if (!(pdf_brdf > 0.0f)) break;
+    payload.throughput *= albedo;
 
     // remember this vertex for the next bounce's emission MIS weight
     prev_pdf_brdf = pdf_brdf;
@@ -188,14 +193,28 @@ daxa::f32vec3 tonemap_aces(daxa::f32vec3 x)
     // Get the accumulation buffer
     let accumulation_buffer = RWTexture2D<daxa::f32vec4>::get(p.task_head.accumulation_buffer);
 
-    // Get the accumulated color
-    daxa::f32vec4 accumulated_color = accumulation_buffer[thread_idx.xy];
-
-    // Update the accumulated color by frame_count and add the new radiance
-    daxa::f32vec3 average_radiance = (accumulated_color.rgb * daxa::f32(frame_count) + payload.radiance) / daxa::f32(frame_count + 1);
-
-    // Write the averaged color to the accumulation buffer
-    accumulation_buffer[thread_idx.xy] = daxa::f32vec4(average_radiance, 1.0);
+    // Alpha stores this pixel's accepted sample count. Invalid samples do not
+    // darken the average or become permanent black pixels in the history.
+    daxa::f32vec4 history = daxa::f32vec4(0);
+    if (frame_count != 0u) history = accumulation_buffer[thread_idx.xy];
+    bool invalid_history = !all(isfinite(history));
+    bool invalid_seen = invalid_history || (validate_rt && history.a < 0.0f);
+    if (invalid_history) history = daxa::f32vec4(0);
+    history.a = abs(history.a);
+    bool valid_sample = all(isfinite(payload.radiance)) && all(payload.radiance >= 0.0f);
+    if (valid_sample) {
+      history.a = min(history.a + 1.0f, 16777216.0f);
+      history.rgb += (payload.radiance - history.rgb) / history.a;
+    }
+    invalid_seen = invalid_seen || !valid_sample;
+    // Diagnostic mode keeps a sticky marker without allocating a per-frame readback.
+    if (validate_rt && invalid_seen) history.a = -max(history.a, 1.0f);
+    accumulation_buffer[thread_idx.xy] = history;
+    if (validate_rt && invalid_seen) {
+      swapchain[thread_idx.xy] = daxa::f32vec4(1,0,1,1);
+      return;
+    }
+    daxa::f32vec3 average_radiance = history.rgb;
 
     // Tone-map (HDR -> [0,1]) then gamma; accumulation stays LINEAR (average first, map after)
     daxa::f32vec3 gamma_corrected_average = pow(tonemap_aces(average_radiance), daxa::f32vec3(1.0 / 2.2));
@@ -205,6 +224,10 @@ daxa::f32vec3 tonemap_aces(daxa::f32vec3 x)
   }
   else
   {
+    if (!all(isfinite(payload.radiance)) || any(payload.radiance < 0.0f)) {
+      swapchain[thread_idx.xy] = validate_rt ? daxa::f32vec4(1,0,1,1) : daxa::f32vec4(0,0,0,1);
+      return;
+    }
     // Tone-map (HDR -> [0,1]) then gamma
     daxa::f32vec3 gamma_corrected_radiance = pow(tonemap_aces(payload.radiance), daxa::f32vec3(1.0 / 2.2));
 
@@ -269,7 +292,7 @@ daxa::f32vec3 tonemap_aces(daxa::f32vec3 x)
 
   Ray ray = {WorldRayOrigin(), WorldRayDirection()};
   ray.origin = r->world_to_object(ray.origin);
-  ray.direction = normalize(r->rotate_vector_inverse(ray.direction));
+  ray.direction = r->rotate_vector_inverse(ray.direction); // preserve world ray parameter
 
   THit = hitAabb(aabb, ray);
 
@@ -341,7 +364,7 @@ daxa::f32 get_opaque_factor(daxa::f32vec3 hit_pos, Aabb aabb)
 
   Ray ray = {WorldRayOrigin(), WorldRayDirection()};
   // ray.origin = r->world_to_object(ray.origin);
-  // ray.direction = normalize(r->rotate_vector_inverse(ray.direction));
+  // ray.direction = r->rotate_vector_inverse(ray.direction); // preserve world ray parameter
 
   THit = hitAabb(aabb, ray);
 
