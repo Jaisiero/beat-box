@@ -147,6 +147,17 @@ int main()
     CHECK(near_f(points.x, 0.0f) && near_f(points.y, 0.0f));
   }
 
+  // Unit cube of mass 5: I = m/6, so inverse inertia is 6/m = 1.2.
+  // Passing inverse mass instead gives 30: a 25x rotational response error.
+  {
+    auto inertia = cuboid_get_inverse_intertia(5.0f, {-0.5f,-0.5f,-0.5f}, {0.5f,0.5f,0.5f});
+    CHECK(near_f(inertia.x.x, 1.2f) && near_f(inertia.y.y, 1.2f) && near_f(inertia.z.z, 1.2f));
+    auto heavier = cuboid_get_inverse_intertia(10.0f, {-0.5f,-0.5f,-0.5f}, {0.5f,0.5f,0.5f});
+    CHECK(near_f(heavier.x.x, 0.5f * inertia.x.x));
+    auto fixed = cuboid_get_inverse_intertia(0.0f, {-0.5f,-0.5f,-0.5f}, {0.5f,0.5f,0.5f});
+    CHECK(near_v(fixed.x, {0,0,0}) && near_v(fixed.y, {0,0,0}) && near_v(fixed.z, {0,0,0}));
+  }
+
   if (g_failures == 0) { std::printf("math_tests: ALL PASSED\n"); }
   else                 { std::printf("math_tests: %d FAILURE(S)\n", g_failures); }
   return g_failures;

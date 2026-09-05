@@ -2178,7 +2178,7 @@ public:
       if (rigid_body.shape_index == 0u)
       {
         // legacy OBB body: cuboid inertia + a single box primitive
-        rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);
+        rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.mass, rigid_body.minimum, rigid_body.maximum);
         aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
       }
       else
