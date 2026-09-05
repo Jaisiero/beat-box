@@ -13,7 +13,7 @@
 // All passes are dispatched over graph_color_dispatch = ceil(max(collision_count, rigid_body_count)/X)
 // and guard each buffer access by its own bound.
 
-#include "extensions.slang"
+#include "shared.inl"
 
 [[vk::push_constant]] GraphColorPushConstants GC;
 [[vk::push_constant]] RigidBodyDispatcherPushConstants GCD; // coloring dispatcher reuses the dispatcher head (writes dispatch_buffer)
