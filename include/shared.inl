@@ -365,7 +365,7 @@ struct RigidBody
   // Quaternion::to_matrix() (math.hpp) and the rotate_vector() sandwich below. A non-unit value makes
   // them silently diverge (each scales differently by |q|^2) -> at-rest render mismatch. The invariant
   // is established at scene upload (AccelerationStructureManager::build_accel_structs) and maintained
-  // by integrate_positions() (extensions.slang), which renormalizes after every step.
+  // by integrate_positions() (rigid_body_integration.slang), which renormalizes after every step.
   Quaternion rotation;
   daxa_f32vec3 minimum;
   daxa_f32vec3 maximum;
@@ -979,8 +979,8 @@ static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
 //   5. TERMINAL SPEED CLAMP (BB_MAX_LINEAR_SPEED). Anti-punch-through; without it 28 m/s rain
 //      tunnels ~470mm + trips the impulse-explosion latch (EX[s=4]). NOTE: this caps the FALL look
 //      (floaty); raising it needs sub-frame substepping (falsified: cushion/cost) -- a known wall.
-//   6. INELASTIC IMPACT PASS (e=0, avbd.slang IMP_J/IMP_APPLY). Removes impact rebound post-FIN.
-//   7. SETTLE SPONGE (avbd.slang finalize, v<0.3 && 3+ manifolds -> *0.9). Drains residual pile
+//   6. INELASTIC IMPACT PASS (e=0, passes/avbd_impact.slang). Removes impact rebound post-FIN.
+//   7. SETTLE SPONGE (passes/avbd_step.slang finalize, v<0.3 && 3+ manifolds -> *0.9). Drains residual pile
 //      micro-velocity. WIDENING IT BACKFIRES (re-excitation: lighter settle -> pen~0 flicker).
 //
 // KNOWN IRREDUCIBLE: the resting-pile "tremble" without sleeping is SAT-axis-flap + matcher churn +

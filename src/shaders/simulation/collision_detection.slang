@@ -1,5 +1,8 @@
 #include "voxel_contact_math.hpp"
-#include "extensions.slang"
+#include "rigid_body_math.slang"
+#include "transform.slang"
+#include "state_copy.slang"
+#include "contact_history.slang"
 #include "islands.slang"
 
 // credits: https://github.com/RandyGaul/qu3e

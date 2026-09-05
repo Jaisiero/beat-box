@@ -10,3 +10,6 @@ imgui.ini
 
 # F12 live pose dump (generated debug artifact)
 scene_dump.txt
+
+# Python shader tooling
+__pycache__/
