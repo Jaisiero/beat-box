@@ -84,3 +84,113 @@ ctest --test-dir build/Release -C RelWithDebInfo --output-on-failure
 - **`scratch/`** is gitignored: ad-hoc experiments, one-off plots, run logs. Promote a script to `tools/`
   (generalizing any hardcoded path, as `determinism_det.ps1` does) once it stabilizes into something
   worth keeping.
+
+## TGS pool and synchronization audit
+
+`BB_DET_STEPS` now honors an explicit `BB_SCENE` or `BB_SCENE_FILE`; scene 3 is
+only its fallback. Use the pool (scene 7) as the primary TGS stability regression:
+
+```sh
+cd build/Release
+DISPLAY=:0 BB_SOLVER=3 BB_SCENE=7 BB_AUTOSTART=1 BB_DET_STEPS=7200 \
+  BB_METRICS_CSV=pool.csv BB_DET_DUMP=pool.txt ./beat-box
+python3 ../../tools/check_pool_metrics.py pool.csv
+python3 ../../tools/check_pool_geometry.py pool.txt --check
+```
+
+The checker requires a quiet final 120 samples (integer max speed 0 mm/s), no
+contacts deeper than 200 mm, maximum reported penetration <= 10 mm, and all 432
+cubes asleep. Use `--solver 2` for an AVBD metrics file. An application exit code 0
+alone is not a stability pass. `deep200` counts contacts, not bodies, and `pen_mm`
+is capped at 250 by the OBB narrow-phase extraction cap.
+
+`BB_TGS_SUBSTEPS=1..32` selects the recorded TGS loop count and its matching shader
+step size (default 8). TGS contact frequency is now 120 Hz, capped to one third
+of the substep frequency before the static-contact multiplier. These quality
+settings increase solver work compared with the previous 4 substeps / 30 Hz.
+Substep experiments are not a substitute for fixing races. Compare the same number of full simulation steps.
+
+`BB_SYNC_FULL_BARRIERS=1` disables task reordering and inserts ALL_COMMANDS
+read/write memory barriers before every graph task. Diagnostic only: it cannot
+repair races within a dispatch or replace cross-queue/host synchronization.
+
+Vulkan synchronization validation, with installed Khronos layers:
+
+```sh
+VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation \
+VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT \
+DISPLAY=:0 BB_SOLVER=3 BB_SCENE=7 BB_AUTOSTART=1 BB_RUN_SECONDS=8 ./beat-box
+```
+
+Validation without a hazard report is not proof that buffer-device-address shader
+accesses or intra-dispatch races are correct. Review those accesses separately.
+
+### TGS serial scheduling reference
+
+`BB_TGS_SERIAL=1` replaces TGS prepare, warm-start, biased solve and relaxation
+with the single-invocation overflow kernels extended to cover every manifold.
+It traverses colors in the same order as the normal graph, and traverses manifold
+indices within each color; the final pass handles overflow contacts. Gravity,
+position integration, narrow phase and coloring retain their normal implementation.
+This isolates parallel contact execution without intentionally changing color order.
+It does not serialize the whole simulation and does not prove absence of races in
+other stages. It is a slow diagnostic, disabled by default, and does not alter AVBD.
+
+Compare separate runs with `BB_SCENE=7 BB_SOLVER=3 BB_AUTOSTART=1 BB_DET_STEPS=1800`,
+with and without `BB_TGS_SERIAL=1`, writing different `BB_METRICS_CSV` files.
+Do not treat early termination or shader compilation failure as a solver result.
+
+The shared `closest_segment_parameters` helper is exercised by `math_tests` on
+parallel overlapping edges, reversed endpoints, crossing segments, disjoint segments,
+a point against a segment and two points. The shader's `edges_contact` uses this same
+helper. These geometric cases catch the old parallel branch's wrong projection sign;
+they do not establish that this branch is the dominant cause of scene 7 instability.
+
+### Convergence work and independent final geometry
+
+`BB_TGS_SWEEPS=N` (1 to 16, default 2) repeats the biased solve and relaxation
+sweeps inside each TGS substep. It does not repeat warm starting, change dt, add
+contact refreshes, change coloring or modify AVBD. Use it to separate convergence
+work from scheduling and substep frequency.
+
+`BB_DET_DUMP=/absolute/path/poses.txt` exports final GPU poses before a fixed-step
+run exits. For scene 7, `python3 tools/check_pool_geometry.py poses.txt` reconstructs
+the pool floor and walls and measures OBB overlaps independently of the engine's
+manifolds and extraction cap. Run `--self-test` for analytic geometry checks. Its
+pair IDs are indices in the dump, not persistent GPU body IDs. `--check` exits 2
+if the dump does not contain 432 cubes or any measured overlap exceeds 10 mm;
+`--max-depth-mm` changes that tolerance explicitly. A sleeping count of 432 does
+not prove that boxes have stopped overlapping. Dumps preserve float32 precision.
+
+OBB contacts deeper than `PENETRATION_FACTOR` now veto sleeping for their whole
+island, including neighbors previously asleep. A stalled depth trend no longer
+bypasses this limit. The contact veto uses atomic OR into an island flag reset
+during island creation; the shared Daxa islands RW attachment orders the veto
+dispatch before sleep application. Voxel contacts retain their prior policy.
+
+Cuboid inverse inertia requires mass, not inverse mass. A unit cube of mass 5 has
+inverse inertia 1.2 on all axes; supplying inverse mass produced 30. The regression
+checks cover this value, inverse scaling with mass and the static zero-mass case.
+The relative OBB basis is also checked with noncommuting rotations and invariance
+under a common world rotation; SAT indexes it as C[B axis][A axis].
+
+Runtime sources are synchronized by the `beat-box_runtime_sources` build target,
+including when only a shader changes. Identical file timestamps are preserved for
+the SPIR-V cache, and obsolete destination files are removed so they cannot shadow
+source includes. The synchronizer rejects overlapping source/destination trees.
+
+### Diagnostic booleans and SimConfig completion
+
+`BB_SYNC_FULL_BARRIERS` and `BB_TGS_SERIAL` are read once per process by
+`src/runtime_diagnostics.hpp`. Unset means false. Accepted values are `0/1`,
+`false/true`, and `off/on`, case-insensitively. Empty or unrecognized values throw
+an explicit configuration error. Startup prints the effective values in a single
+`[DIAGNOSTICS]` line. Restart the process to change these options.
+
+SimConfig readback captures the compute queue's last submission index immediately
+following graph execution and calls `Device::wait_on_submit()` for that index,
+replacing `device.wait_idle()` in `read_back_sim_config()`. The copy and host
+publication barriers remain. Submission currently happens on one host thread.
+This uses Daxa's internal queue timeline: the installed Daxa 3.6 ignores
+`TaskSubmitInfo` additional semaphore fields. Readback still returns current,
+completed data synchronously; it does not remove the renderer's other waits.

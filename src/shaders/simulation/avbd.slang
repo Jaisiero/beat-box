@@ -724,10 +724,13 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
           daxa_f32 C = avbd_contact_C(m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, rr1, rr2);
           daxa_f32 lam = m->contacts[j].normal_impulse; // <= 0 (force convention)
           daxa_f32 k = m->contacts[j].mass_coefficient;
-          // DEEP-EXTRACTION: in the velocity-free post-stab (stab_alpha=0, C=full C0), a deeply
-          // buried contact whose lambda/k decayed to ~0 cannot dominate the block solve -> floor
-          // its k so it pushes out (no boil: positional, post-velocity). See shared.inl.
-          if (AVBD_PC.stab_alpha < 0.5f && C < -BB_AVBD_DEEP_EXTRACT_THRESH)
+          // Compare the geometric separation, before margin/slop, with the sleep depth
+          // limit. C already has those offsets applied; comparing it directly silently
+          // delays extraction by another 5.5 mm and prevents the island from sleeping.
+          daxa_f32 initial_C = m->contacts[j].penetration + BB_AVBD_MARGIN;
+          daxa_f32 removed_slop = min(max(-initial_C, 0.0f), BB_AVBD_PS_SLOP);
+          daxa_f32 geometric_C = C - (BB_AVBD_MARGIN + removed_slop) * (1.0f - AVBD_PC.stab_alpha);
+          if (AVBD_PC.stab_alpha < 0.5f && geometric_C < -BB_AVBD_DEEP_EXTRACT_THRESH)
           {
             k = max(k, BB_AVBD_DEEP_EXTRACT_K);
           }
@@ -884,8 +887,9 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
     return;
   }
   AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
-  daxa_u32 d1 = states[b1].support_depth;
-  daxa_u32 d2 = states[b2].support_depth;
+  daxa_u32 d1, d2;
+  InterlockedAdd(states[b1].support_depth, 0u, d1);
+  InterlockedAdd(states[b2].support_depth, 0u, d2);
   daxa_u32 prev;
   if (d2 != MAX_U32 && d2 + 1u < d1)
   {
@@ -1302,8 +1306,7 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
 // mid-flight. vn is recomputed from the reconstructed velocities (>0 = separating). Goal:
 // see whether the tail oscillator's deep contact is loaded (lambda<<0) or unloaded
 // (lambda~0) and whether vn reverses sign every frame (the bounce pump).
-[shader("compute")]
-[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_pocket_trace(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+void avbd_trace_contact(daxa_u32vec3 compute_i)
 {
   SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
   if (sim_config->solver_type != SimSolverType::AVBD)
@@ -1346,13 +1349,8 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
     daxa_u32 pen_mm = daxa_u32(clamp(-pen * 1000.0f, 0.0f, 1.0e9f));
     daxa_u32 prev;
     InterlockedMax(sim_config->dbg_pk_pen, pen_mm, prev);
-    // KNOWN DIAGNOSTIC-ONLY RACE (intentionally not hardened): dbg_pk_pen itself is the true max
-    // (atomic), but the payload latch below is a non-atomic guarded write — several threads can each
-    // see pen_mm > their sampled `prev` and race, so the latched vn/lambda/k/body/stick may belong to
-    // a different contact than the one that ultimately owns dbg_pk_pen. All dbg_pk_* are readback-only
-    // trace fields, never fed back into the sim, so this cannot affect physics — only the trace row's
-    // secondary fields may be slightly inconsistent with the peak. A race-free fix would need a packed
-    // (pen<<k | payload) 64-bit atomic; not worth it for debug output.
+    // The trace entry runs this reduction on one invocation, so the maximum and
+    // its payload always describe the same contact.
     if (pen_mm > prev) // this contact is (currently) the deepest; latch its full state
     {
       daxa_f32vec3 p = m->contacts[j].position;
@@ -1366,6 +1364,17 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
       sim_config->dbg_pk_stick = (cc << 1) | (m->contacts[j].stick & 1u);
     }
   }
+}
+
+// Diagnostic reduction: serialized to keep the multiword payload with its winner.
+// The host records this task only when BB_POCKET_TRACE is requested.
+[shader("compute")]
+[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_pocket_trace(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  if (compute_i.x != 0u) return;
+  SimConfig* sc = (SimConfig*)(AVBD_PC.task_head.sim_config);
+  daxa_u32 count = min(sc->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  for (daxa_u32 i = 0u; i < count; ++i) avbd_trace_contact(daxa_u32vec3(i, 0u, 0u));
 }
 
 // ----- coloring passes -----

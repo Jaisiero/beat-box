@@ -14,6 +14,10 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
                                    std::shared_ptr<TaskManager> task_manager,
                                    std::shared_ptr<AccelerationStructureManager> accel_struct_mngr) : device(device), task_manager(task_manager), accel_struct_mngr(accel_struct_mngr)
 {
+  if (const char *value = std::getenv("BB_TGS_SUBSTEPS"))
+  {
+    tgs_substep_count = static_cast<daxa_u32>(std::clamp(std::atoi(value), 1, 32));
+  }
   if (device.is_valid())
   {
     pipeline_RBD = task_manager->create_compute(RigidBodyDispatcherInfo{}.info);
@@ -298,6 +302,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         .manifold_node_count = 0,
         .broad_phase_collision_count = 0,
         .dt = TIME_STEP,
+        .tgs_substeps = tgs_substep_count,
         .gravity = -GRAVITY,
         .flags = sim_flags,
         .g_c_info = GlobalCollisionInfo{
@@ -1357,6 +1362,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       daxa::attachment_view(SleepTaskHead::AT.sim_config, task_sim_config),
       daxa::attachment_view(SleepTaskHead::AT.rigid_bodies, task_rigid_bodies),
       daxa::attachment_view(SleepTaskHead::AT.collisions, task_collision_scratch),
+      daxa::attachment_view(SleepTaskHead::AT.islands, task_islands),
   };
   auto sleep_dispatch = [this](daxa::TaskInterface ti, std::shared_ptr<daxa::ComputePipeline> &pl, daxa_u32 dispatch_offset)
   {
@@ -1538,13 +1544,17 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   // TGS_SOFT sub-step instances (same pipelines, tgs_phase=1 so the shader runs the TGS branch).
   // Reuses the per-color graph-coloring dispatch (incl. the empty-color skip) -> TGS stays parallel.
-  std::vector<TTask_GCS> task_TGS_CPS_vec, task_TGS_CS_vec, task_TGS_CSR_vec;
+  // tgs_phase 2 reuses the PRE-SOLVER pipeline for Box2D v3's separate per-sub-step warm start
+  // stage, so no extra pipeline is compiled -- the shader branches on the phase.
+  std::vector<TTask_GCS> task_TGS_CPS_vec, task_TGS_WS_vec, task_TGS_CS_vec, task_TGS_CSR_vec;
   task_TGS_CPS_vec.reserve(MAX_COLORS_SOLVE);
+  task_TGS_WS_vec.reserve(MAX_COLORS_SOLVE);
   task_TGS_CS_vec.reserve(MAX_COLORS_SOLVE);
   task_TGS_CSR_vec.reserve(MAX_COLORS_SOLVE);
   for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
   {
     task_TGS_CPS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CPS, c, 1));
+    task_TGS_WS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CPS, c, 2));
     task_TGS_CS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CS, c, 1));
     task_TGS_CSR_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CSR, c, 1));
   }
@@ -1555,7 +1565,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   auto make_gcs_ov = [this](std::shared_ptr<daxa::ComputePipeline> pl, daxa_i32 tgs_phase = 0) {
     return [this, pl, tgs_phase](daxa::TaskInterface ti, auto &) {
       ti.recorder.set_pipeline(*pl);
-      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = 0u, .tgs_phase = tgs_phase});
+      ti.recorder.push_constant(GraphColorSolvePushConstants{.task_head = ti.attachment_shader_blob, .color = (tgs_phase != 0 && beat_box_diagnostics::options().tgs_serial) ? MAX_U32 : 0u, .tgs_phase = tgs_phase});
       ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
     };
   };
@@ -1564,6 +1574,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   TTask_GCS_OV task_GCS_CS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CS_OV));
   TTask_GCS_OV task_GCS_CSR_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CSR_OV));
   TTask_GCS_OV task_TGS_CPS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CPS_OV, 1));
+  TTask_GCS_OV task_TGS_WS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CPS_OV, 2));
   TTask_GCS_OV task_TGS_CS_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CS_OV, 1));
   TTask_GCS_OV task_TGS_CSR_OV(gc_solve_views, make_gcs_ov(pipeline_GCS_CSR_OV, 1));
 
@@ -1747,27 +1758,42 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   } // end AVBD FIN/impact/post-stab
   if (solver == SimSolverType::TGS_SOFT)
   {
+  // Diagnostic: change convergence work while keeping dt, substeps and contact refresh fixed.
+  daxa_u32 const tgs_sweeps = std::getenv("BB_TGS_SWEEPS")
+      ? static_cast<daxa_u32>(std::clamp(std::atoi(std::getenv("BB_TGS_SWEEPS")), 1, 16)) : 2u;
   // TGS_SOFT (Box2D v3 / solver2d): sub-stepped soft solver, integrated with graph coloring.
   // All tasks early-return unless solver_type==TGS_SOFT, so this block is free for the other solvers.
   // Prepare once (soft coeffs at sub-step h + local anchors), then BB_TGS_SUBSTEPS sub-steps of:
-  // integrate velocity (gravity*h) -> per-color solve (bias) -> integrate positions (x+=v*h) ->
-  // per-color relax (no bias). The separation is re-derived from the pose each sub-step (TGS temporal).
-  for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
+  // integrate velocity (gravity*h) -> per-color WARM START -> per-color solve (bias) ->
+  // integrate positions (x+=v*h) -> per-color relax (no bias). The separation is re-derived from
+  // the pose each sub-step (TGS temporal). This mirrors Box2D v3's stage order exactly; the warm
+  // start in particular belongs INSIDE the loop (b2WarmStartContactsTask runs per sub-step) and is
+  // what carries the contact load across sub-steps.
+  for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
     G.add_task(task_TGS_CPS_vec[c]);
   G.add_task(task_TGS_CPS_OV);
-  for (daxa_u32 s = 0u; s < BB_TGS_SUBSTEPS; ++s)
+  for (daxa_u32 s = 0u; s < tgs_substep_count; ++s)
   {
     G.add_task(task_tgs_advect);
-    for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
-      G.add_task(task_TGS_CS_vec[c]);
-    G.add_task(task_TGS_CS_OV);
+    for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
+      G.add_task(task_TGS_WS_vec[c]);
+    G.add_task(task_TGS_WS_OV);
+    for (daxa_u32 sweep = 0u; sweep < tgs_sweeps; ++sweep)
+    {
+      for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
+        G.add_task(task_TGS_CS_vec[c]);
+      G.add_task(task_TGS_CS_OV);
+    }
     G.add_task(task_tgs_ip);
-    for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
-      G.add_task(task_TGS_CSR_vec[c]);
-    G.add_task(task_TGS_CSR_OV);
+    for (daxa_u32 sweep = 0u; sweep < tgs_sweeps; ++sweep)
+    {
+      for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
+        G.add_task(task_TGS_CSR_vec[c]);
+      G.add_task(task_TGS_CSR_OV);
+    }
   }
   } // end TGS sub-step loop
-  if (solver == SimSolverType::AVBD)
+  if (solver == SimSolverType::AVBD && std::getenv("BB_POCKET_TRACE"))
     G.add_task(task_AVBD_PKTR); // diagnostic (AVBD only)
   G.add_task(task_CP);
   G.add_task(task_update);
@@ -1843,22 +1869,29 @@ void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &out_readback
 {
   daxa::InlineTaskInfo task_readback_SC({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_old_sim_config),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_sim_config),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_sim_config_host),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
+        // Explicit device-to-transfer and transfer-to-host dependencies for readback.
+        ti.recorder.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+                                     .dst_access = daxa::AccessConsts::TRANSFER_READ});
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = ti.get(task_old_sim_config).id,
+            .src_buffer = ti.get(task_sim_config).id,
             .dst_buffer = ti.get(task_sim_config_host).id,
             .size = sizeof(SimConfig),
         });
+        ti.recorder.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                                     .dst_access = daxa::AccessConsts::HOST_READ});
+        ti.recorder.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+                                     .dst_access = daxa::AccessConsts::HOST_READ});
       },
       .name = "read back sim config",
   });
 
   std::array<daxa::TaskBuffer, 2> buffers = {
-      task_old_sim_config,
+      task_sim_config,
       task_sim_config_host,
   };
 
@@ -1977,7 +2010,7 @@ bool RigidBodyManager::update_resources()
     return !initialized;
   }
 
-  task_rigid_bodies.set_buffer(accel_struct_mngr->get_rigid_body_buffer());
+  if (task_rigid_bodies.id() != accel_struct_mngr->get_rigid_body_buffer()) { task_rigid_bodies.set_buffer(accel_struct_mngr->get_rigid_body_buffer()); }
 
   return initialized;
 }
@@ -2006,6 +2039,7 @@ bool RigidBodyManager::update_sim()
         .manifold_node_count = 0,
         .radix_shift = 0,
         .dt = TIME_STEP,
+        .tgs_substeps = tgs_substep_count,
         .gravity = -GRAVITY,
         .flags = sim_flags,
         .g_c_info = GlobalCollisionInfo{
@@ -2112,6 +2146,10 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
     rec.dispatch({.x = 1, .y = 1, .z = 1});
     barrier();
   }
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                        .dst_access = daxa::AccessConsts::READ});
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                        .dst_access = daxa::AccessConsts::HOST_READ});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
   device.wait_idle();
@@ -2136,7 +2174,11 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
         .name = "voxel_sdf_verify_staging",
     });
     auto rec2 = device.create_command_recorder({});
+    rec2.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                           .dst_access = daxa::AccessConsts::TRANSFER_READ});
     rec2.copy_buffer_to_buffer({.src_buffer = voxel_sdf, .dst_buffer = staging, .size = size});
+    rec2.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                           .dst_access = daxa::AccessConsts::HOST_READ});
     auto cmds2 = rec2.complete_current_commands();
     device.submit_commands({.command_lists = std::array{cmds2}});
     device.wait_idle();
@@ -2165,8 +2207,12 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
         .name = "voxel_surf_verify_staging",
     });
     auto rec2 = device.create_command_recorder({});
+    rec2.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                           .dst_access = daxa::AccessConsts::TRANSFER_READ});
     rec2.copy_buffer_to_buffer({.src_buffer = voxel_surface, .dst_buffer = staging, .size = surf_size});
     rec2.copy_buffer_to_buffer({.src_buffer = voxel_shapes, .dst_buffer = staging, .dst_offset = surf_size, .size = shapes_size});
+    rec2.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                           .dst_access = daxa::AccessConsts::HOST_READ});
     auto cmds2 = rec2.complete_current_commands();
     device.submit_commands({.command_lists = std::array{cmds2}});
     device.wait_idle();
@@ -2197,7 +2243,11 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
         .name = "voxel_derived_verify_staging",
     });
     auto rec2 = device.create_command_recorder({});
+    rec2.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                           .dst_access = daxa::AccessConsts::TRANSFER_READ});
     rec2.copy_buffer_to_buffer({.src_buffer = voxel_derived, .dst_buffer = staging, .size = size});
+    rec2.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                           .dst_access = daxa::AccessConsts::HOST_READ});
     auto cmds2 = rec2.complete_current_commands();
     device.submit_commands({.command_lists = std::array{cmds2}});
     device.wait_idle();
@@ -2270,6 +2320,10 @@ void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shap
       .src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
       .dst_access = daxa::AccessConsts::ACCELERATION_STRUCTURE_BUILD_READ,
   });
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                        .dst_access = daxa::AccessConsts::READ});
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                        .dst_access = daxa::AccessConsts::HOST_READ});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
   device.wait_idle();
@@ -2291,7 +2345,11 @@ void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shap
         .name = "voxel_prims_verify_staging",
     });
     auto rec2 = device.create_command_recorder({});
+    rec2.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                           .dst_access = daxa::AccessConsts::TRANSFER_READ});
     rec2.copy_buffer_to_buffer({.src_buffer = prims_buffer, .dst_buffer = staging, .size = size});
+    rec2.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                           .dst_access = daxa::AccessConsts::HOST_READ});
     auto cmds2 = rec2.complete_current_commands();
     device.submit_commands({.command_lists = std::array{cmds2}});
     device.wait_idle();
@@ -2385,6 +2443,10 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 car
     rec.dispatch({.x = groups, .y = 1, .z = 1});
     barrier();
   }
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                        .dst_access = daxa::AccessConsts::READ});
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                        .dst_access = daxa::AccessConsts::HOST_READ});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
   device.wait_idle();
@@ -2398,11 +2460,15 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 car
       .name = "fracture_readback_staging",
   });
   auto rec2 = device.create_command_recorder({});
+  rec2.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                         .dst_access = daxa::AccessConsts::TRANSFER_READ});
   rec2.copy_buffer_to_buffer({.src_buffer = voxel_occupancy, .dst_buffer = staging,
                               .src_offset = (u64)shape.occ_offset * sizeof(daxa_u32), .size = occ_bytes});
   rec2.copy_buffer_to_buffer({.src_buffer = voxel_sdf_scratch[0], .dst_buffer = staging,
                               .dst_offset = occ_bytes, .size = lbl_bytes});
-  auto cmds2 = rec2.complete_current_commands();
+  rec2.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                           .dst_access = daxa::AccessConsts::HOST_READ});
+    auto cmds2 = rec2.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds2}});
   device.wait_idle();
   daxa_u32 const *host = device.buffer_host_address_as<daxa_u32>(staging).value();
@@ -2422,7 +2488,13 @@ void RigidBodyManager::read_voxel_derived(daxa_u32 count, std::vector<VoxelShape
       .name = "voxel_derived_readback_staging",
   });
   auto rec = device.create_command_recorder({});
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+                        .dst_access = daxa::AccessConsts::TRANSFER_READ});
   rec.copy_buffer_to_buffer({.src_buffer = voxel_derived, .dst_buffer = staging, .size = size});
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                        .dst_access = daxa::AccessConsts::READ});
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                        .dst_access = daxa::AccessConsts::HOST_READ});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
   device.wait_idle();
@@ -2448,6 +2520,14 @@ bool RigidBodyManager::read_back_sim_config()
   update_buffers();
 
   readback_SC_TG.execute();
+  // Graph execution submits synchronously on this single host thread. Capture
+  // its final compute submission, then wait only for that queue timeline point.
+  // TaskSubmitInfo's additional semaphores are ignored by the installed Daxa 3.6.
+  // Keep the graph's TRANSFER_WRITE -> HOST_READ publication barrier.
+  device.wait_on_submit({
+      .queue = daxa::QUEUE_COMPUTE_0,
+      .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0),
+  });
 
   return initialized;
 }
@@ -2480,43 +2560,59 @@ void RigidBodyManager::update_buffers(daxa_u32 current_frame)
 {
   daxa_u32 previous_frame = (current_frame + DOUBLE_BUFFERING - 1) % DOUBLE_BUFFERING;
 
-  task_sim_config_host.set_buffer(sim_config_host_buffer[current_frame]);
-  task_sim_config.set_buffer(sim_config[current_frame]);
-  task_old_sim_config.set_buffer(sim_config[previous_frame]);
-  task_morton_codes.set_buffer(morton_codes);
-  task_tmp_morton_codes.set_buffer(tmp_morton_codes);
-  task_radix_sort_histograms.set_buffer(global_histograms[current_frame]);
+  // Daxa 3.6 set_buffer clears queue history. When ping-pong roles reverse,
+  // swap IDs AND their history, then avoid resetting unchanged bindings below.
+  auto swap_roles = [](daxa::TaskBuffer &a, daxa::TaskBuffer &b,
+                       daxa::BufferId next_a, daxa::BufferId next_b) {
+    if (next_a != next_b && a.id() == next_b && b.id() == next_a) { a.swap_buffers(b); }
+  };
+  swap_roles(task_sim_config, task_old_sim_config, sim_config[current_frame], sim_config[previous_frame]);
+  swap_roles(task_lbvh_nodes, task_previous_lbvh_nodes, lbvh_nodes[current_frame], lbvh_nodes[previous_frame]);
+  swap_roles(task_rigid_body_entries, task_previous_rigid_body_entries, rigid_body_entries[current_frame], rigid_body_entries[previous_frame]);
+  swap_roles(task_rigid_body_link_manifolds, task_previous_rigid_body_link_manifolds, rigid_body_link_manifolds[current_frame], rigid_body_link_manifolds[previous_frame]);
+  swap_roles(task_collision_entries, task_collision_entries_previous, collision_entries[current_frame], collision_entries[previous_frame]);
+  swap_roles(task_collisions, task_old_collisions, collisions[current_frame], collisions[previous_frame]);
+  swap_roles(task_islands, task_previous_islands, island_buffer[current_frame], island_buffer[previous_frame]);
+  swap_roles(task_contact_islands, task_previous_contact_islands, contact_island_buffer[current_frame], contact_island_buffer[previous_frame]);
+
+
+  if (task_sim_config_host.id() != sim_config_host_buffer[current_frame]) { task_sim_config_host.set_buffer(sim_config_host_buffer[current_frame]); }
+  if (task_sim_config.id() != sim_config[current_frame]) { task_sim_config.set_buffer(sim_config[current_frame]); }
+  if (task_old_sim_config.id() != sim_config[previous_frame]) { task_old_sim_config.set_buffer(sim_config[previous_frame]); }
+  if (task_morton_codes.id() != morton_codes) { task_morton_codes.set_buffer(morton_codes); }
+  if (task_tmp_morton_codes.id() != tmp_morton_codes) { task_tmp_morton_codes.set_buffer(tmp_morton_codes); }
+  if (task_radix_sort_histograms.id() != global_histograms[current_frame]) { task_radix_sort_histograms.set_buffer(global_histograms[current_frame]); }
   // NOTE: unlike every other binding here, these three resolve parity via the accel-struct
   // manager's GLOBAL get_sim_frame_index() and IGNORE the `current_frame` argument. Harmless today
   // (the graphs that call update_buffers(f) in a parity loop — update_SC_TG, ARB_TG — don't attach
   // these buffers), but a latent trap: extending either graph to touch the rigid-body buffers would
   // silently bind the global-current parity for the f=0 iteration. Add frame-indexed getter
   // overloads if that ever changes.
-  task_previous_rigid_bodies.set_buffer(accel_struct_mngr->get_previous_rigid_body_buffer());
-  task_rigid_bodies.set_buffer(accel_struct_mngr->get_rigid_body_buffer());
-  task_next_rigid_bodies.set_buffer(accel_struct_mngr->get_next_rigid_body_buffer());
-  task_lbvh_nodes.set_buffer(lbvh_nodes[current_frame]);
-  task_previous_lbvh_nodes.set_buffer(lbvh_nodes[previous_frame]);
-  task_lbvh_construction_info.set_buffer(lbvh_construction_info);
-  task_active_rigid_bodies.set_buffer(active_rigid_bodies[current_frame]);
-  task_rigid_body_entries.set_buffer(rigid_body_entries[current_frame]);
-  task_previous_rigid_body_entries.set_buffer(rigid_body_entries[previous_frame]);
-  task_broad_phase_collisions.set_buffer(broad_phase_collisions[current_frame]);
-  task_rigid_body_scratch.set_buffer(rigid_body_scratch);
-  task_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[current_frame]);
-  task_collision_entries.set_buffer(collision_entries[current_frame]);
-  task_collisions.set_buffer(collisions[current_frame]);
-  task_collision_scratch.set_buffer(collision_scratch);
-  task_previous_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[previous_frame]);
-  task_collision_entries_previous.set_buffer(collision_entries[previous_frame]);
-  task_old_collisions.set_buffer(collisions[previous_frame]);
-  task_scratch_body_links.set_buffer(scratch_body_links[current_frame]);
-  task_body_links.set_buffer(body_links[current_frame]);
-  task_manifold_links.set_buffer(manifold_links[current_frame]);
-  task_islands.set_buffer(island_buffer[current_frame]);
-  task_previous_islands.set_buffer(island_buffer[previous_frame]);
-  task_contact_islands.set_buffer(contact_island_buffer[current_frame]);
-  task_previous_contact_islands.set_buffer(contact_island_buffer[previous_frame]);
+  if (task_previous_rigid_bodies.id() != accel_struct_mngr->get_previous_rigid_body_buffer()) { task_previous_rigid_bodies.set_buffer(accel_struct_mngr->get_previous_rigid_body_buffer()); }
+  if (task_rigid_bodies.id() != accel_struct_mngr->get_rigid_body_buffer()) { task_rigid_bodies.set_buffer(accel_struct_mngr->get_rigid_body_buffer()); }
+  if (task_next_rigid_bodies.id() != accel_struct_mngr->get_next_rigid_body_buffer()) { task_next_rigid_bodies.set_buffer(accel_struct_mngr->get_next_rigid_body_buffer()); }
+  if (task_lbvh_nodes.id() != lbvh_nodes[current_frame]) { task_lbvh_nodes.set_buffer(lbvh_nodes[current_frame]); }
+  if (task_previous_lbvh_nodes.id() != lbvh_nodes[previous_frame]) { task_previous_lbvh_nodes.set_buffer(lbvh_nodes[previous_frame]); }
+  if (task_lbvh_construction_info.id() != lbvh_construction_info) { task_lbvh_construction_info.set_buffer(lbvh_construction_info); }
+  if (task_active_rigid_bodies.id() != active_rigid_bodies[current_frame]) { task_active_rigid_bodies.set_buffer(active_rigid_bodies[current_frame]); }
+  if (task_rigid_body_entries.id() != rigid_body_entries[current_frame]) { task_rigid_body_entries.set_buffer(rigid_body_entries[current_frame]); }
+  if (task_previous_rigid_body_entries.id() != rigid_body_entries[previous_frame]) { task_previous_rigid_body_entries.set_buffer(rigid_body_entries[previous_frame]); }
+  if (task_broad_phase_collisions.id() != broad_phase_collisions[current_frame]) { task_broad_phase_collisions.set_buffer(broad_phase_collisions[current_frame]); }
+  if (task_rigid_body_scratch.id() != rigid_body_scratch) { task_rigid_body_scratch.set_buffer(rigid_body_scratch); }
+  if (task_rigid_body_link_manifolds.id() != rigid_body_link_manifolds[current_frame]) { task_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[current_frame]); }
+  if (task_collision_entries.id() != collision_entries[current_frame]) { task_collision_entries.set_buffer(collision_entries[current_frame]); }
+  if (task_collisions.id() != collisions[current_frame]) { task_collisions.set_buffer(collisions[current_frame]); }
+  if (task_collision_scratch.id() != collision_scratch) { task_collision_scratch.set_buffer(collision_scratch); }
+  if (task_previous_rigid_body_link_manifolds.id() != rigid_body_link_manifolds[previous_frame]) { task_previous_rigid_body_link_manifolds.set_buffer(rigid_body_link_manifolds[previous_frame]); }
+  if (task_collision_entries_previous.id() != collision_entries[previous_frame]) { task_collision_entries_previous.set_buffer(collision_entries[previous_frame]); }
+  if (task_old_collisions.id() != collisions[previous_frame]) { task_old_collisions.set_buffer(collisions[previous_frame]); }
+  if (task_scratch_body_links.id() != scratch_body_links[current_frame]) { task_scratch_body_links.set_buffer(scratch_body_links[current_frame]); }
+  if (task_body_links.id() != body_links[current_frame]) { task_body_links.set_buffer(body_links[current_frame]); }
+  if (task_manifold_links.id() != manifold_links[current_frame]) { task_manifold_links.set_buffer(manifold_links[current_frame]); }
+  if (task_islands.id() != island_buffer[current_frame]) { task_islands.set_buffer(island_buffer[current_frame]); }
+  if (task_previous_islands.id() != island_buffer[previous_frame]) { task_previous_islands.set_buffer(island_buffer[previous_frame]); }
+  if (task_contact_islands.id() != contact_island_buffer[current_frame]) { task_contact_islands.set_buffer(contact_island_buffer[current_frame]); }
+  if (task_previous_contact_islands.id() != contact_island_buffer[previous_frame]) { task_previous_contact_islands.set_buffer(contact_island_buffer[previous_frame]); }
 }
 
 BB_NAMESPACE_END

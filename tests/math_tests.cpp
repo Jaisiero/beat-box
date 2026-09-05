@@ -25,6 +25,18 @@ static daxa_f32 dot_v(daxa_f32vec3 a, daxa_f32vec3 b) { return a.x * b.x + a.y *
 
 int main()
 {
+  // Friction warm start must preserve the force on each physical body under
+  // a tangent-basis rotation and under swapping A/B (normal sign reversal).
+  {
+    auto same = reproject_tangent_impulse({1,0,0}, {0,0,1}, {2,3}, {1,0,0}, {0,0,1}, 1);
+    CHECK(near_f(same.x,2) && near_f(same.y,3));
+    auto rotated = reproject_tangent_impulse({1,0,0}, {0,0,1}, {2,3}, {0,0,1}, {-1,0,0}, 1);
+    CHECK(near_f(rotated.x,3) && near_f(rotated.y,-2));
+    auto swapped = reproject_tangent_impulse({1,0,0}, {0,0,1}, {2,3}, {-1,0,0}, {0,0,1}, -1);
+    CHECK(near_f(swapped.x,2) && near_f(swapped.y,-3));
+    auto back = reproject_tangent_impulse({-1,0,0}, {0,0,1}, swapped, {1,0,0}, {0,0,1}, -1);
+    CHECK(near_f(back.x,2) && near_f(back.y,3));
+  }
   const daxa_f32 s45 = std::sqrt(0.5f); // sin(45 deg) == cos(45 deg)
 
   // --- identity ---
@@ -116,6 +128,54 @@ int main()
     Quaternion ab_c = (a * b) * c;
     Quaternion a_bc = a * (b * c);
     CHECK(near_v(ab_c.v, a_bc.v) && near_f(ab_c.w, a_bc.w));
+  }
+
+  // Parallel overlapping segments must return coincident points. The previous
+  // shader used +dot(PA-PB,DA)/a and returned points 0.5 units apart here.
+  {
+    auto uv = closest_segment_parameters({0,0,0}, {1,0,0}, {0.5f,0,0}, {1.5f,0,0});
+    CHECK(near_f(uv.x, 0.5f + uv.y));
+    auto reverse = closest_segment_parameters({1,0,0}, {0,0,0}, {1.5f,0,0}, {0.5f,0,0});
+    CHECK(near_f(1.0f - reverse.x, 1.5f - reverse.y));
+    auto cross = closest_segment_parameters({-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0});
+    CHECK(near_f(cross.x, 0.5f) && near_f(cross.y, 0.5f));
+    auto separated = closest_segment_parameters({0,0,0}, {1,0,0}, {2,1,0}, {3,1,0});
+    CHECK(near_f(separated.x, 1.0f) && near_f(separated.y, 0.0f));
+    auto point = closest_segment_parameters({0.5f,0,0}, {0.5f,0,0}, {0,0,0}, {1,0,0});
+    CHECK(near_f(point.x, 0.0f) && near_f(point.y, 0.5f));
+    auto points = closest_segment_parameters({0,0,0}, {0,0,0}, {1,0,0}, {1,0,0});
+    CHECK(near_f(points.x, 0.0f) && near_f(points.y, 0.0f));
+  }
+
+  // Unit cube of mass 5: I = m/6, so inverse inertia is 6/m = 1.2.
+  // Passing inverse mass instead gives 30: a 25x rotational response error.
+  {
+    auto inertia = cuboid_get_inverse_intertia(5.0f, {-0.5f,-0.5f,-0.5f}, {0.5f,0.5f,0.5f});
+    CHECK(near_f(inertia.x.x, 1.2f) && near_f(inertia.y.y, 1.2f) && near_f(inertia.z.z, 1.2f));
+    auto heavier = cuboid_get_inverse_intertia(10.0f, {-0.5f,-0.5f,-0.5f}, {0.5f,0.5f,0.5f});
+    CHECK(near_f(heavier.x.x, 0.5f * inertia.x.x));
+    auto fixed = cuboid_get_inverse_intertia(0.0f, {-0.5f,-0.5f,-0.5f}, {0.5f,0.5f,0.5f});
+    CHECK(near_v(fixed.x, {0,0,0}) && near_v(fixed.y, {0,0,0}) && near_v(fixed.z, {0,0,0}));
+  }
+
+  // Noncommuting rotations: A=90 degrees about X, B=90 about Y.
+  // A basis: X, Z, -Y. B basis: -Z, Y, X.
+  {
+    Quaternion a(s45, 0, 0, s45), b(0, s45, 0, s45);
+    auto relative = relative_box_axes(a.get_x_axis(), a.get_y_axis(), a.get_z_axis(),
+                                     b.get_x_axis(), b.get_y_axis(), b.get_z_axis());
+    CHECK(near_v(relative.x, {0,-1,0}));
+    CHECK(near_v(relative.y, {0,0,-1}));
+    CHECK(near_v(relative.z, {1,0,0}));
+    // A common world rotation cannot change relative geometry.
+    Quaternion common = Quaternion(0.2f, -0.4f, 0.1f, 0.85f).normalize();
+    Quaternion ca = common * a, cb = common * b;
+    auto rotated = relative_box_axes(ca.get_x_axis(), ca.get_y_axis(), ca.get_z_axis(),
+                                    cb.get_x_axis(), cb.get_y_axis(), cb.get_z_axis());
+    CHECK(near_v(rotated.x, relative.x) && near_v(rotated.y, relative.y) && near_v(rotated.z, relative.z));
+    auto identical = relative_box_axes(ca.get_x_axis(), ca.get_y_axis(), ca.get_z_axis(),
+                                      ca.get_x_axis(), ca.get_y_axis(), ca.get_z_axis());
+    CHECK(near_v(identical.x, {1,0,0}) && near_v(identical.y, {0,1,0}) && near_v(identical.z, {0,0,1}));
   }
 
   if (g_failures == 0) { std::printf("math_tests: ALL PASSED\n"); }

@@ -28,3 +28,15 @@ Contents of `local-changes.patch`:
   operators and a `reinterpret_cast` in `uses()` so the inline-task-with-head
   API used by this project compiles.
 - `src/impl_core.hpp`: add the missing newline at end of file (warning fix).
+- `cmake/deps.cmake`: pick the Slang release archive that matches the host
+  (`linux-x86_64.tar.gz` / `macos-aarch64.zip` / `windows-x86_64.zip`). Upstream 3.6
+  hardcodes the Windows `.zip`, so a Linux configure downloaded `slang.dll`/`slang.lib`
+  and the build died with `Slang_LIBRARY-NOTFOUND, needed by beat-box`. The same block
+  also accepts the version-suffixed `libslang-glslang-<ver>.so` the Linux tarball ships
+  (there is no unversioned symlink, so the plain name only ever matched on Windows).
+- `src/utils/impl_task_graph_ui.cpp`, `src/utils/impl_resource_viewer.cpp`,
+  `src/utils/impl_task_graph.cpp`: Daxa 3.6 assumes MSVC's `size_t == unsigned long long`
+  and writes `std::min(255ull, name.size())` / `auto x = 0ull` next to `u64`. On Linux
+  `size_t` is `unsigned long`, so template deduction fails
+  (`no matching function for call to 'min(long long unsigned int, ...size_type)'`).
+  Spell the type out instead of leaning on the literal suffix.

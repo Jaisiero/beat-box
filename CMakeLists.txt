@@ -19,10 +19,13 @@ add_executable(${PROJECT_NAME} ${SRCS})
 # RigidBodyManager::create() instantiates dozens of large task objects as locals in a
 # single function, producing a very large stack frame. The default 1 MB stack overflows
 # on entry (STATUS_STACK_OVERFLOW). Give the main thread generous headroom.
+# Linux needs no flag here: the main-thread stack is 8 MB by default (vs Windows' 1 MB) and the
+# frame fits -- verified by a full scene_7 run on the RTX 4090. Do NOT re-add -Wl,-z,stacksize:
+# that is a Solaris linker directive, GNU ld silently ignores it and prints
+# "warning: -z stacksize=33554432 ignored", so it was pure noise. If a future refactor does
+# overflow 8 MB, raise it at launch (ulimit -s 65536) rather than pretending a link flag works.
 if (MSVC)
     target_link_options(${PROJECT_NAME} PRIVATE /STACK:33554432) # 32 MB
-else()
-    target_link_options(${PROJECT_NAME} PRIVATE -Wl,-z,stacksize=33554432)
 endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC include)
@@ -56,24 +59,21 @@ if (WIN32)
     )
 endif()
 
-# Copy runtime shader sources/includes to the build output directory so the
-# pipeline manager can compile shaders when the executable is launched there.
-# PURGE the destinations first: copy_directory never removes foreign/stale files, and a
-# leftover file in the destination can SHADOW the real one through relative includes
-# (measured: a stale simulation/extensions.slang from an old tree silently supplied
-# copy_rigid_body_fields to every exe-dir launch for two weeks).
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E rm -rf
-    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/include"
-    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/src/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${PROJECT_SOURCE_DIR}/include"
-    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/include"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${PROJECT_SOURCE_DIR}/src/shaders"
-    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/src/shaders"
-    COMMENT "Copying runtime shader sources and includes to target directory (destinations purged first)..."
+# Synchronize runtime sources on every build, including shader-only edits. Preserve
+# timestamps of identical files for Daxa's SPIR-V cache and remove stale shadow files.
+add_custom_target(${PROJECT_NAME}_runtime_sources ALL
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_TREE=${PROJECT_SOURCE_DIR}/include"
+        "-DDESTINATION_TREE=$<TARGET_FILE_DIR:${PROJECT_NAME}>/include"
+        -P "${PROJECT_SOURCE_DIR}/cmake/sync_runtime_sources.cmake"
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_TREE=${PROJECT_SOURCE_DIR}/src/shaders"
+        "-DDESTINATION_TREE=$<TARGET_FILE_DIR:${PROJECT_NAME}>/src/shaders"
+        -P "${PROJECT_SOURCE_DIR}/cmake/sync_runtime_sources.cmake"
+    COMMENT "Synchronizing runtime shader sources and includes"
+    VERBATIM
 )
+add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_runtime_sources)
 
 # Copy assets to the build output directory so they are available when running from there
 if (EXISTS "${PROJECT_SOURCE_DIR}/assets")
@@ -115,3 +115,7 @@ add_custom_target(warm_shader_cache
     COMMENT "Warming the Slang->SPIR-V cache (spirv_cache/) so the first launch is fast"
     USES_TERMINAL
 )
+
+add_executable(runtime_diagnostics_tests tests/runtime_diagnostics_tests.cpp)
+target_include_directories(runtime_diagnostics_tests PRIVATE src)
+add_test(NAME runtime_diagnostics_tests COMMAND runtime_diagnostics_tests)

@@ -324,7 +324,8 @@ int RendererManager::render()
   // process diverges, the source is process-specific (addresses/driver state).
   bool det_inproc = std::getenv("BB_DET_INPROC") != nullptr;
   int det_pass = 1; daxa_u32 det_hashA = 0u; daxa_u32 det_acc = 0u;
-  if (det_steps > 0) { status_manager->request_scene(3); } // self-contained: load scene_3 fresh
+  if (det_steps > 0 && !std::getenv("BB_SCENE") && !std::getenv("BB_SCENE_FILE"))
+    { status_manager->request_scene(3); } // default only; honor explicit test scene
   auto const run_start = std::chrono::steady_clock::now();
   // The acceleration-structure build runs async on COMPUTE_0, and the render graph waits the SIM
   // timeline (sim_wait_span) -- which is ONLY advanced/signalled by a sim step, never by the scene-load
@@ -510,6 +511,8 @@ int RendererManager::render()
                         << ((det_hashA == det_acc) ? "  => IN-PROCESS MATCH (deterministic; cross-process source)"
                                                    : "  => IN-PROCESS DIFF (GPU-kernel non-determinism)") << std::endl;
             }
+            if (const char *dump = std::getenv("BB_DET_DUMP"))
+              scene_manager->dump_scene_live(dump);
             break;
           }
         }
@@ -780,7 +783,7 @@ int RendererManager::render()
   return metrics_exit_code;
 }
 
-RendererManager::~RendererManager() {}
+RendererManager::~RendererManager() { gpu->synchronize(); destroy(); }
 
 daxa_u32 RendererManager::get_previous_frame_index()
 {

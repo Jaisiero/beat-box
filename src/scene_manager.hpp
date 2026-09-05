@@ -1276,10 +1276,15 @@ public:
         .name = "scene_dump_staging",
     });
     {
-      auto rec = device.create_command_recorder({});
+      device.wait_idle(); // scene edits and host readback require a completed publication
+      auto rec = device.create_command_recorder({.queue_type = daxa::QueueType::COMPUTE});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                            .dst_access = daxa::AccessConsts::TRANSFER_READ});
       rec.copy_buffer_to_buffer({.src_buffer = src, .dst_buffer = staging, .size = size});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                            .dst_access = daxa::AccessConsts::HOST_READ});
       auto cmds = rec.complete_current_commands();
-      device.submit_commands({.command_lists = std::array{cmds}});
+      device.submit_commands({.queue = daxa::QUEUE_COMPUTE_0, .command_lists = std::array{cmds}});
       device.wait_idle();
     }
     RigidBody const *live = device.buffer_host_address_as<RigidBody>(staging).value();
@@ -1290,6 +1295,7 @@ public:
       device.destroy_buffer(staging);
       return;
     }
+    out.precision(9); // round-trip float32 poses for independent geometry checks
     out << "# F12 live dump: px py pz [h m e fr qx qy qz qw] / vox <shape> px py pz qx qy qz qw\n";
     daxa_u32 n = 0u;
     for (daxa_u32 i = 0u; i < count; ++i)
@@ -1542,10 +1548,15 @@ public:
         .name = "fracture_live_sync_staging",
     });
     {
-      auto rec = device.create_command_recorder({});
+      device.wait_idle(); // scene edits and host readback require a completed publication
+      auto rec = device.create_command_recorder({.queue_type = daxa::QueueType::COMPUTE});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                            .dst_access = daxa::AccessConsts::TRANSFER_READ});
       rec.copy_buffer_to_buffer({.src_buffer = src, .dst_buffer = staging, .size = size});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
+                            .dst_access = daxa::AccessConsts::HOST_READ});
       auto cmds = rec.complete_current_commands();
-      device.submit_commands({.command_lists = std::array{cmds}});
+      device.submit_commands({.queue = daxa::QUEUE_COMPUTE_0, .command_lists = std::array{cmds}});
       device.wait_idle();
     }
     RigidBody const *live = device.buffer_host_address_as<RigidBody>(staging).value();
@@ -2168,7 +2179,7 @@ public:
       if (rigid_body.shape_index == 0u)
       {
         // legacy OBB body: cuboid inertia + a single box primitive
-        rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.inv_mass, rigid_body.minimum, rigid_body.maximum);
+        rigid_body.inv_inertia = cuboid_get_inverse_intertia(rigid_body.mass, rigid_body.minimum, rigid_body.maximum);
         aabb.push_back(Aabb(rigid_body.minimum, rigid_body.maximum));
       }
       else

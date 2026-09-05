@@ -78,6 +78,7 @@ static const daxa_f32 LINEAR_DAMPING = 0.1f;
 static const daxa_f32 ANGULAR_DAMPING = 0.1f;
 static const daxa_f32 POINT_SIZE = 0.01f;
 static const daxa_f32 MIN_CONTACT_HERTZ = 30.0f;
+static const daxa_f32 TGS_CONTACT_HERTZ = 120.0f; // still capped to one third of substep frequency
 static const daxa_f32 _PI = 3.14159265359f;
 static const daxa_f32 PENETRATION_FACTOR = 0.01f;
 static const daxa_f32 BIAS_FACTOR = 0.2f;
@@ -735,6 +736,7 @@ struct SimConfig
                                   // dbg_pen (interior samples emit no contact; boundary samples
                                   // measure cell-local depth <= 1 cell). scene_5 investigation.
   daxa_f32 dt;
+  daxa_u32 tgs_substeps; // must match the host-recorded TGS loop
   daxa_f32 gravity;
   SimFlag flags;
   GlobalCollisionInfo g_c_info;
@@ -1007,18 +1009,14 @@ static const daxa_f32 BB_AVBD_BETA = 100000.0f; // (iter16+2e5 convergence exper
 static const daxa_f32 BB_AVBD_GAMMA = 0.99f;
 static const daxa_f32 BB_AVBD_PENALTY_MIN = 1.0f;
 static const daxa_f32 BB_AVBD_PENALTY_MAX = 1000000000.0f;
-// DEEP-EXTRACTION (post-stab only): a static buried contact's lambda decays to ~0 under the
-// alpha=1 main sweeps (no delta -> no re-ramp), so its k decays to ~19 and it is too weak to
-// dominate the 6x6 block solve -> it is overruled by shallower contacts and never extracts
-// (trace 2026-06-16: deepest contact pen 208mm, lambda~0, k~19). In the VELOCITY-FREE post-stab
-// (alpha=0, runs after velocity reconstruction so it cannot inject the boil that alpha=0.99 did),
-// floor k for deep contacts so they dominate and push out. Trace is the objective judge:
-// global_pen should drop, maxv must NOT spike (a spike = too strong -> avalanche, lower the floor).
-static const daxa_f32 BB_AVBD_DEEP_EXTRACT_THRESH = 0.08f; // contacts deeper than 80mm
-static const daxa_f32 BB_AVBD_DEEP_EXTRACT_K = 8000.0f;    // k floor in post-stab for unloaded deep contacts. 2000 was too weak to push them out (lambda~0, sideways overlaps never extracted); 50000 boils the rain pile (extracts up to the 0.25m cap/frame = teleport->avalanche). 8000 is the measured window: deep200 0, no boil, canonicals untouched (floor only fires >80mm).
+// Unloaded contacts can retain overlap after the velocity solve. The positional
+// pass must start correcting them at the same tolerance used by OBB sleeping,
+// rather than allowing up to 80 mm of overlap before applying a stiffness floor.
+static const daxa_f32 BB_AVBD_DEEP_EXTRACT_THRESH = PENETRATION_FACTOR;
+static const daxa_f32 BB_AVBD_DEEP_EXTRACT_K = 32000.0f;
 // TGS_SOFT (Box2D v3 / solver2d): N sub-steps per frame, each integrates positions and updates
-// contact separations -> stable stacking + fast convergence. Catto's default is 4 sub-steps.
-static const daxa_u32 BB_TGS_SUBSTEPS = 4u;
+// contact separations. Eight sub-steps meet the F7 pool's 1 cm overlap tolerance.
+static const daxa_u32 BB_TGS_SUBSTEPS = 8u;
 static const daxa_f32 BB_AVBD_MARGIN = 0.0005f;     // collision margin (avoids flickering contacts)
 static const daxa_f32 BB_AVBD_STICK_THRESH = 0.01f; // max anchor drift to keep static-friction anchors
 static const daxa_f32 BB_AVBD_STICK_SLOP = 0.001f;  // anchor drift deadband: below this no positional
@@ -1228,6 +1226,7 @@ struct Island
   daxa_u32 count;
   daxa_u32 contact_island_index;
   daxa_u32 max_manifold_count; // atomic add
+  daxa_u32 sleep_veto; // reset by island creation, atomic OR by contact sleep veto
 };
 DAXA_DECL_BUFFER_PTR(Island)
 
@@ -1532,7 +1531,7 @@ struct BroadPhasePushConstants
 // NARROW PHASE DISPATCHER
 DAXA_DECL_TASK_HEAD_BEGIN(NarrowPhaseDispatcherTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_DECL_TASK_HEAD_END
 
 struct NarrowPhaseDispatcherPushConstants
@@ -1635,6 +1634,7 @@ DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(Dis
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Manifold), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(Island), islands)
 DAXA_DECL_TASK_HEAD_END
 
 struct SleepPushConstants
@@ -1828,7 +1828,7 @@ struct CollisionSolverPushConstants
 
 DAXA_DECL_TASK_HEAD_BEGIN(IntegratePositionsTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(RigidBody), rigid_bodies)
 DAXA_DECL_TASK_HEAD_END
 
@@ -1855,7 +1855,7 @@ struct CollisionSolverRelaxationPushConstants
 
 DAXA_DECL_TASK_HEAD_BEGIN(RigidBodyUpdateTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 // rigid_bodies is READ-ONLY here (the shader only reads it; it writes the separate
 // rigid_bodies_update buffer). Declaring it READ_WRITE made the task graph think this
 // pass overwrites rigid_bodies -> false WAW with the solver -> solver writes culled.
@@ -1901,7 +1901,7 @@ struct UpdateInstancesPushConstants
 
 DAXA_DECL_TASK_HEAD_BEGIN(CreatePointsTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Manifold), collisions)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(daxa_u32), manifold_color)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(daxa_u32), body_color) // AVBD body coloring (graph-debug tint)

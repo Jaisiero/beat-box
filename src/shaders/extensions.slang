@@ -61,7 +61,7 @@ extension RigidBody
   {
     // TGS_SOFT integrates velocity per sub-step (h = dt/N); every other solver uses the full dt.
     daxa_f32 h = (sim_config->solver_type == SimSolverType::TGS_SOFT)
-                 ? sim_config->dt / daxa_f32(BB_TGS_SUBSTEPS) : sim_config->dt;
+                 ? sim_config->dt / daxa_f32(sim_config->tgs_substeps) : sim_config->dt;
     if(has_flag(RigidBodyFlag::GRAVITY)){
       // gravity is an ACCELERATION (m/s^2): apply it DIRECTLY to velocity. The old code routed it
       // through apply_impulse(), which does v += impulse*inv_mass -> gravity got scaled by inv_mass,
@@ -264,9 +264,8 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
     // physically the same contact seen from the other side - the old normal points the
     // opposite way and the anchors belong to the opposite bodies. The hand-off below:
     // dot-gate against the FLIPPED old normal, fp pass skipped (incident ids live on the
-    // other body now), anchors swapped at inheritance, tangent lambda[0] negated
-    // (compute_basis(-n) yields t0' = -t0, t1' = +t1), normal lambda kept (scalar along
-    // a flipped axis = the same physical force).
+    // other body now), anchors swapped at inheritance, and the WORLD tangent impulse
+    // negated before projecting into the new basis. Normal lambda remains nonnegative.
     daxa_f32 old_n_sign = swapped != 0u ? -1.0f : 1.0f;
     bool cross_key = key != old_manifold->key || swapped != 0u;
     if (cross_key) {
@@ -306,8 +305,11 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
         Contact* old_contact = &old_manifold->contacts[j];
         if(is_same_contact(old_contact, contacts[i].fp, contacts[i].position)) {
             contacts[i].normal_impulse = old_contact->normal_impulse;
-            contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0];
-            contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
+            daxa_f32vec2 ti = reproject_tangent_impulse(otv0, otv1,
+                daxa_f32vec2(old_contact->tangent_impulse[0], old_contact->tangent_impulse[1]),
+                tangent_vectors[0], tangent_vectors[1], old_n_sign);
+            contacts[i].tangent_impulse[0] = ti.x;
+            contacts[i].tangent_impulse[1] = ti.y;
             // AVBD: the penalty parameters must persist across steps (PGS overwrites these
             // fields in pre_step, so copying them is harmless for the PGS family)
             contacts[i].mass_coefficient = old_contact->mass_coefficient;
@@ -379,9 +381,11 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
           daxa_u32 i = daxa_u32(best_i);
           Contact* old_contact = &old_manifold->contacts[daxa_u32(best_j)];
           contacts[i].normal_impulse = old_contact->normal_impulse;
-          // swapped roles: old basis t0 = -t0_new, t1 = +t1_new (compute_basis algebra)
-          contacts[i].tangent_impulse[0] = old_contact->tangent_impulse[0] * old_n_sign;
-          contacts[i].tangent_impulse[1] = old_contact->tangent_impulse[1];
+          daxa_f32vec2 ti = reproject_tangent_impulse(otv0, otv1,
+              daxa_f32vec2(old_contact->tangent_impulse[0], old_contact->tangent_impulse[1]),
+              tangent_vectors[0], tangent_vectors[1], old_n_sign);
+          contacts[i].tangent_impulse[0] = ti.x;
+          contacts[i].tangent_impulse[1] = ti.y;
           contacts[i].mass_coefficient = old_contact->mass_coefficient;
           contacts[i].tangent_mass[0] = old_contact->tangent_mass[0];
           contacts[i].tangent_mass[1] = old_contact->tangent_mass[1];

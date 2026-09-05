@@ -35,7 +35,7 @@ struct VertexStageOutput
 
 // Vertex  Shader
 [shader("vertex")] VertexStageOutput entry_vertex(
-    uint vertexID : SV_VertexID  // Current vertex index
+    uint vertexID : SV_VulkanVertexID  // Current vertex index
 )
 {
   VertexStageOutput output;
@@ -83,7 +83,7 @@ struct VertexLineStageOutput
 
 // Vertex  Shader
 [shader("vertex")] VertexLineStageOutput entry_line_vertex(
-    uint vertexID : SV_VertexID  // Current vertex index
+    uint vertexID : SV_VulkanVertexID  // Current vertex index
 )
 {
   VertexLineStageOutput output;
@@ -120,7 +120,7 @@ static const daxa_f32vec3 AXIS_Z_COLOR = daxa_f32vec3(0.0, 0.0, 1.0);
 
 // Vertex  Shader
 [shader("vertex")] VertexLineStageOutput entry_axes_vertex(
-    uint vertexID : SV_VertexID  // Current vertex index
+    uint vertexID : SV_VulkanVertexID  // Current vertex index
 )
 {
   VertexLineStageOutput output;
