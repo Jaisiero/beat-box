@@ -178,7 +178,7 @@ void InputManager::on_key(i32 key, i32 action)
   case GLFW_KEY_F8:
     if (action == GLFW_PRESS) { status_mngr->request_scene(8); status_mngr->reset_accumulation_count(); }
     break;
-  // F9: fracture strength showcase (scene 9)
+  // F9: interactive demolition (left hold to swing, release to throw)
   case GLFW_KEY_F9:
     if (action == GLFW_PRESS) { status_mngr->request_scene(9); status_mngr->reset_accumulation_count(); }
     break;

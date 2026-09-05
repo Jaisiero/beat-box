@@ -1443,12 +1443,13 @@ DAXA_DECL_BUFFER_PTR(RigidBodyEntry)
 // Mouse pick-and-drag (review v3 feature): a tiny host-visible bridge buffer.
 // The HOST writes the input half every render frame (camera ray + button flags);
 // the GPU pick/spring pass writes the state half (picked body + grab anchor).
-// The two halves have disjoint writers, so no copy/sync beyond submission order is needed.
-#define BB_PICK_REQUEST 1u  // pick button pressed this frame -> ray-cast and grab
+// REQUEST is consumed by the GPU. Host access follows the existing simulation-completion
+// wait; mapped memory coherence alone would not protect concurrent CPU/GPU access.
+#define BB_PICK_REQUEST 1u  // latched press -> ray-cast once on the next physics step
 #define BB_PICK_DRAGGING 2u // pick button held -> keep applying the drag spring
 struct PickState
 {
-  // host-written input (every render frame)
+  // host-written input (every render frame); GPU clears the REQUEST flag
   daxa_f32vec3 ray_origin;
   daxa_u32 flags; // BB_PICK_* bits
   daxa_f32vec3 ray_dir;

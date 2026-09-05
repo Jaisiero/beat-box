@@ -113,15 +113,18 @@ struct RigidBodyManager{
   daxa::TaskBuffer task_pick_state{{.buffer = {}, .name = "RB_pick_state_task"}};
 
   // Mouse pick input, called once per render frame from the render loop: the camera ray under the
-  // cursor + button edges. `request` grabs (ray-cast) on the middle-press edge; `dragging` keeps
-  // the spring alive while held. Writes ONLY the host half of PickState (GPU owns the other half).
+  // cursor + button edges. `request` grabs (ray-cast) on the left-press edge; `dragging` keeps
+  // the spring alive while held. The GPU consumes REQUEST; the existing post-simulation wait protects host access.
   void set_pick_input(daxa_f32vec3 ray_origin, daxa_f32vec3 ray_dir, bool request, bool dragging)
   {
     if (!initialized) { return; }
     auto *ps = device.buffer_host_address_as<PickState>(pick_state_buffer).value();
     ps->ray_origin = ray_origin;
     ps->ray_dir = ray_dir;
-    ps->flags = (request ? BB_PICK_REQUEST : 0u) | (dragging ? BB_PICK_DRAGGING : 0u);
+    // Render frames can outnumber physics steps: retain an unconsumed edge while
+    // held. Release cancels it. The pick pass clears REQUEST after one raycast.
+    bool const pending = dragging && (request || (ps->flags & BB_PICK_REQUEST) != 0u);
+    ps->flags = (pending ? BB_PICK_REQUEST : 0u) | (dragging ? BB_PICK_DRAGGING : 0u);
   }
 
   // The currently grabbed body's persistent id (MAX_U32 = none) — a host read of the GPU-written

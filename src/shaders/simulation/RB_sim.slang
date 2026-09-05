@@ -2084,16 +2084,15 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
 // active (AVBD folds velocity into its inertial target; PGS/TGS advect it).
 //
 // PickState is a tiny host-visible bridge: the host writes the ray + button flags each render
-// frame; this pass writes the grab state (picked body, local anchor, grab distance). The two
-// halves have disjoint writers.
+// frame; this pass consumes REQUEST and writes the grab state. Host access is serialized
+// by the existing completion wait after each simulation step.
 //
 // Grab: ray-cast the CURRENT poses (ray -> each dynamic body's local frame -> slab test on its
 // local AABB, exactly the sandwich the RT intersection shader uses), keep the nearest hit, and
 // remember the hit point in the body's LOCAL frame + the hit distance along the ray.
 // Drag: the target is the CURRENT ray at the ORIGINAL grab distance; a critically-damped-ish
-// velocity spring pulls the grabbed anchor toward it. Gain < 1 because the impulse is applied at
-// a point (the effective mass there is lower than the body mass); the per-step repetition at
-// 60 Hz converges smoothly instead of overshooting.
+// velocity spring pulls the grabbed anchor toward it. Each row uses the point effective mass
+// and under-relaxes its velocity correction; no explicit angular damping is applied.
 [shader("compute")]
     [numthreads(1, 1, 1)] void entry_pick_spring(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
@@ -2106,6 +2105,7 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
   // --- grab: pick button pressed this frame -> ray-cast the live scene ---
   if ((flags & BB_PICK_REQUEST) != 0u)
   {
+    pick->flags = flags & ~BB_PICK_REQUEST; // consume once, including catch-up steps
     pick->grab_count += 1u; // diagnostic: counts EXECUTED raycasts (should be ~1 per click)
     daxa_f32 best_t = 1e30f;
     daxa_u32 best_i = MAX_U32;
@@ -2137,7 +2137,7 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
     pick->anchor_local = best_anchor;
   }
 
-  // --- drag: middle button held -> velocity spring toward the ray point at the grab distance ---
+  // --- drag: left button held -> velocity spring toward the ray point at the grab distance ---
   if ((flags & BB_PICK_DRAGGING) != 0u && pick->picked_id != MAX_U32)
   {
     // Resolve the persistent id to THIS step's row by SEARCHING (1 thread x N bodies: trivial).
@@ -2167,25 +2167,29 @@ const static daxa_u32 AXES_POINT_COUNT = 6;
                                        // shoving what it TOUCHES (real collisions); the spring
                                        // itself only ever writes the grabbed body
       daxa_f32 GAIN = 0.5f;            // velocity under-relaxation (smooth convergence at 60 Hz)
-      daxa_f32 OMEGA_DAMP = 0.85f;     // per-step spin damping while held
-
       daxa_f32vec3 target = pick->ray_origin + pick->ray_dir * pick->grab_t;
       daxa_f32vec3 anchor_w = r->object_to_world(pick->anchor_local);
-      daxa_f32vec3 dx = target - anchor_w;
+      daxa_f32vec3 arm = anchor_w - r->position;
+      daxa_f32vec3 desired_v = (target - anchor_w) * PULL_RATE;
+      daxa_f32 speed = length(desired_v);
+      if (speed > MAX_PULL_SPEED) { desired_v *= MAX_PULL_SPEED / speed; }
 
-      daxa_f32vec3 desired_v = dx * PULL_RATE;
-      daxa_f32 dv_len = length(desired_v);
-      if (dv_len > MAX_PULL_SPEED) { desired_v *= MAX_PULL_SPEED / dv_len; }
-
-      // Pull from the CENTER of mass (no torque) and damp any spin while held. The v1 spring
-      // applied the full-mass impulse AT the anchor point: the effective mass at an off-center
-      // point is lower, so every step over-corrected rotationally, the spin displaced the anchor,
-      // the spring chased it, and the box whirled endlessly instead of gliding to the cursor
-      // (the classic mouse-joint instability). dx is still measured at the grabbed point, so the
-      // grabbed CORNER aims at the cursor; the pull itself is torque-free and the damping brings
-      // the box to a calm carry within a few steps.
-      r->velocity += (desired_v - r->velocity) * GAIN;
-      r->omega *= OMEGA_DAMP;
+      // Sequential point-constraint rows include rotational effective mass. Using
+      // body mass alone over-corrects an off-center grab and makes the spring spin.
+      // Recompute point velocity after each row; release preserves both velocities.
+      daxa_f32mat3x3 inv_i = r->get_transformed_inertia();
+      [unroll]
+      for (daxa_u32 axis = 0u; axis < 3u; ++axis)
+      {
+        daxa_f32vec3 n = daxa_f32vec3(0.0f);
+        n[axis] = 1.0f;
+        daxa_f32vec3 angular_j = cross(arm, n);
+        daxa_f32 k = r->inv_mass + dot(angular_j, mul(inv_i, angular_j));
+        daxa_f32vec3 point_v = r->velocity + cross(r->omega, arm);
+        daxa_f32 impulse = GAIN * dot(desired_v - point_v, n) / max(k, 1.0e-8f);
+        r->velocity += n * (impulse * r->inv_mass);
+        r->omega += mul(inv_i, angular_j) * impulse;
+      }
     }
   }
   else if ((flags & BB_PICK_DRAGGING) == 0u)

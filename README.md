@@ -86,9 +86,9 @@ fails the same way, which is the quickest way to tell this apart from an app bug
 |---|---|
 | `Space` | start / pause the simulation |
 | `R` | reset the current scene |
-| `F1`–`F8` | switch scene (resets + pauses) |
+| `F1`–`F11` | switch scene (resets + pauses) |
 | `1` / `2` / `3` / `4` | solver: PGS / PGS soft / **AVBD** / TGS soft |
-| **Left mouse** | **pick & drag a body** (hold and move — a spring pulls it to the cursor) |
+| **Left mouse** | **grab, swing and release to throw** (grab an end to apply torque) |
 | Right mouse | orbit the camera |
 | `W A S D` / arrows | move camera (hold `Shift` for precision) |
 | `X` / `Z` | camera up / down |
@@ -113,6 +113,7 @@ fails the same way, which is the quickest way to tell this apart from an app bug
 | `F6` | deterministic stability probe (resting stacks; the bitwise-determinism baseline) |
 | `F7` | **box pool** — 432 cubes rain into a pit (the canonical stress scene) |
 | `F8` | single-cube free-fall A/B (solver timing comparison) |
+| `F9` | [interactive demolition](docs/INTERACTIVE_DEMOLITION.md): steel club and breakable timber frames (AVBD) |
 
 Custom scenes: write a text file (one cube per line — `px py pz [half] [mass] [restitution]
 [friction]`) and launch with `BB_SCENE_FILE=path`. Dump any built-in scene into that format with
