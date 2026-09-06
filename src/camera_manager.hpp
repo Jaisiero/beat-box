@@ -13,6 +13,7 @@ struct CameraManager{
   daxa::BufferId camera_buffer;
   // Camera
   Camera camera;
+  CameraView camera_view = {};
   // boolean to check if the camera manager is initialized
   bool initialized = false;
 
@@ -29,7 +30,6 @@ struct CameraManager{
 
     camera_buffer = device.create_buffer({
         .size = sizeof(CameraView),
-        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
         .name = camera_name,
     });
 
@@ -56,14 +56,15 @@ struct CameraManager{
     camera_set_aspect(camera, extent.x, extent.y);
 
     // Update camera buffer
-    CameraView camera_view = {
+    camera_view = {
         .inv_view = get_inverse_view_matrix(camera),
         .inv_proj = get_inverse_projection_matrix(camera, true),
         .view = get_view_matrix(camera),
         .proj = get_projection_matrix(camera, true),
     };
 
-    device.buffer_host_address_as<CameraView>(camera_buffer).value()[0] = camera_view;
+    // The render task snapshots this CPU value into its timeline-managed upload
+    // allocator. Never overwrite a mapped buffer while an earlier frame reads it.
   }
 
 };
