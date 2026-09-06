@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "shared.inl"
+#include "fragment_finalization.inl"
 #include <daxa/daxa.hpp>
 using namespace daxa::types;
 #include <daxa/utils/pipeline_manager.hpp>
@@ -975,6 +976,17 @@ struct VoxelPrimsBuildInfo {
       .shader_info = compute_shader,
       .push_constant_size = sizeof(VoxelSdfBuildPushConstants),
       .name = voxel_prims_build_pipeline_name,
+  };
+};
+
+struct FragmentFinalizeInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {
+          .source = daxa::ShaderFile{"fragment_finalization.slang"},
+          .compile_options = {.entry_point = "entry_fragment_finalize"},
+      },
+      .push_constant_size = sizeof(FragmentFinalizePushConstants),
+      .name = "Finalize Fragment Bodies",
   };
 };
 

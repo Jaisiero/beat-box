@@ -2,6 +2,7 @@
 
 #include "defines.hpp"
 #include "math.hpp"
+#include "fragment_finalization_reference.hpp"
 #include "free_list_pool.hpp" // FRACTURE memory pools (shared with the AS manager)
 #include "camera_manager.hpp"
 #include "rigid_body_manager.hpp"
@@ -659,10 +660,41 @@ public:
   // THE GPU (entry_voxel_prims_build) between the host upload and the BLAS build. Both
   // build_accel_structs call sites (load + reset) must pass it - the CPU aabb entries for
   // voxel ranges are zeros unless BB_SDF_VERIFY authored the oracle values.
-  std::function<void(daxa::BufferId)> voxel_prims_hook()
+  std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> voxel_prims_hook(
+      std::span<FragmentFinalizePushConstants const> finalizations = {})
   {
-    return [this](daxa::BufferId prims_buffer) {
-      rigid_body_manager->build_voxel_prims_gpu(voxel_shape_cpu, voxel_prim_sites, prims_buffer, aabb);
+    return [this, inputs = std::vector<FragmentFinalizePushConstants>(finalizations.begin(), finalizations.end())]
+        (daxa::BufferId prims_buffer, daxa::BufferId body_buffer, daxa::BufferId instance_buffer) mutable {
+      for (auto &pc : inputs)
+      {
+        pc.bodies_addr = device.device_address(body_buffer).value();
+        pc.instances_addr = device.device_address(instance_buffer).value();
+      }
+      rigid_body_manager->build_voxel_prims_gpu(voxel_shape_cpu, voxel_prim_sites, prims_buffer, aabb, inputs);
+      // The existing primitive-build wait and HOST_READ barrier cover these
+      // mapped buffers. Refresh only changed host records for subsequent splits;
+      // no derived-property staging copy, submission, or extra wait is needed.
+      if (!inputs.empty())
+      {
+        auto const *bodies = device.buffer_host_address_as<RigidBody>(body_buffer).value();
+        auto const *shapes = device.buffer_host_address_as<VoxelShape>(rigid_body_manager->get_voxel_shapes_buffer()).value();
+        std::vector<VoxelShapeDerived> reference_derived;
+        bool const verify = bb_getenv("BB_FRAGMENT_VERIFY") != nullptr;
+        if (verify) rigid_body_manager->read_voxel_derived(static_cast<daxa_u32>(voxel_shape_cpu.size()), reference_derived);
+        for (auto const &pc : inputs)
+        {
+          if (verify)
+          {
+            auto expected = bodies[pc.body];
+            auto shape = shapes[expected.shape_index - 1u];
+            fragment_finalize_reference(expected, shape, reference_derived[expected.shape_index - 1u], pc);
+            fragment_verify_finalization(expected, shape, bodies[pc.body], shapes[expected.shape_index - 1u], pc.body);
+          }
+          rigid_bodies[pc.body] = bodies[pc.body];
+          auto const si = rigid_bodies[pc.body].shape_index - 1u;
+          voxel_shape_cpu[si] = shapes[si];
+        }
+      }
     };
   }
 
@@ -1956,51 +1988,19 @@ public:
       }
     }
     rigid_body_manager->build_voxel_pools_gpu(voxel_shape_cpu, voxel_sdf_cpu, voxel_surf_cpu, voxel_derived_cpu, &dirty_shapes);
-    // 3. the GPU mass-property reduce is the AUTHORITY for the affected records
-    std::vector<VoxelShapeDerived> derived;
-    rigid_body_manager->read_voxel_derived((daxa_u32)voxel_shape_cpu.size(), derived);
+    // Finalize after the AS manager uploads body/instance inputs. The derived
+    // records stay on the GPU and feed finalization in the AABB-generation submit.
+    std::vector<FragmentFinalizePushConstants> finalizations;
+    finalizations.reserve(fixes.size());
     for (auto const &fx : fixes)
     {
-      auto &b = rigid_bodies[fx.body];
-      daxa_u32 const si = b.shape_index - 1u;
-      VoxelShapeDerived const &d = derived[si];
-      if (d.count == 0u) { continue; } // pulverization-clamp path: record untouched
-      b.mass = fx.voxel_mass * (f32)d.count;
-      b.inv_mass = 1.0f / b.mass;
-      glm::mat3 I;
-      I[0] = glm::vec3(d.unit_inertia.x.x, d.unit_inertia.x.y, d.unit_inertia.x.z);
-      I[1] = glm::vec3(d.unit_inertia.y.x, d.unit_inertia.y.y, d.unit_inertia.y.z);
-      I[2] = glm::vec3(d.unit_inertia.z.x, d.unit_inertia.z.y, d.unit_inertia.z.z);
-      b.inv_inertia = daxa_mat3_from_glm_mat3(glm::inverse(I * fx.voxel_mass));
-      // shape frame: com back at the body origin. com_new is in the CROPPED grid frame; the
-      // shape's grid_origin puts that com at the origin.
-      glm::vec3 const com_new(d.com.x, d.com.y, d.com.z);
-      VoxelShape &sh = voxel_shape_cpu[si];
-      sh.grid_origin = daxa_f32vec3(-com_new.x, -com_new.y, -com_new.z);
-      b.minimum = sh.grid_origin;
-      b.maximum = daxa_f32vec3(sh.grid_origin.x + sh.dims.x * sh.voxel_size,
-                               sh.grid_origin.y + sh.dims.y * sh.voxel_size,
-                               sh.grid_origin.z + sh.dims.z * sh.voxel_size);
-      // kinematics from the CAPTURED parent frame: same world voxels, new com ->
-      // pos' = pos + R*(com_parent - com_old); v' = v + omega x (pos' - pos). com_parent
-      // lifts the cropped-frame com back into the parent grid frame (crop_off = bbox_min*vs).
-      glm::vec3 const com_parent = com_new + fx.crop_off;
-      glm::vec3 const shift = com_parent - fx.com_old;
-      daxa_f32vec3 const ws = quat_rotate(fx.parent_rot, daxa_f32vec3(shift.x, shift.y, shift.z));
-      b.rotation = fx.parent_rot;
-      b.position = daxa_f32vec3(fx.parent_pos.x + ws.x, fx.parent_pos.y + ws.y, fx.parent_pos.z + ws.z);
-      glm::vec3 const w(fx.parent_omega.x, fx.parent_omega.y, fx.parent_omega.z);
-      glm::vec3 const dv = glm::cross(w, glm::vec3(ws.x, ws.y, ws.z));
-      b.velocity = daxa_f32vec3(fx.parent_vel.x + dv.x, fx.parent_vel.y + dv.y, fx.parent_vel.z + dv.z);
-      b.omega = fx.parent_omega;
-      b.prev_velocity = b.velocity;
-      b.prev_omega = b.omega;
-      // a fracture wakes what it touches
-      b.flags = RigidBodyFlag(daxa_u32(b.flags) & ~daxa_u32(RigidBodyFlag::SLEEPING));
-      b.sleep_timer = 0u;
+      finalizations.push_back({.bodies_addr = 0, .instances_addr = 0, .shapes_addr = 0, .derived_addr = 0,
+          .body = fx.body, .voxel_mass = fx.voxel_mass,
+          .com_old = {fx.com_old.x, fx.com_old.y, fx.com_old.z},
+          .parent_pos = fx.parent_pos, .parent_rot = fx.parent_rot,
+          .parent_vel = fx.parent_vel, .parent_omega = fx.parent_omega,
+          .crop_off = {fx.crop_off.x, fx.crop_off.y, fx.crop_off.z}});
     }
-    // 4. records with fixed grid_origins back to the GPU (the prims pass reads them)
-    rigid_body_manager->upload_voxel_shapes(voxel_shape_cpu);
     // 5. primitive lists in body order (same layout rule as load)
     aabb.clear();
     voxel_prim_sites.clear();
@@ -2032,14 +2032,14 @@ public:
     if (_as_full)
     {
       accel_struct_mngr->reset_for_reload();
-      _ok = accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook());
+      _ok = accel_struct_mngr->build_accel_structs(rigid_bodies, aabb, voxel_prims_hook(finalizations));
     }
     else
     {
       std::vector<daxa_u32> changed_bodies;
       changed_bodies.reserve(fixes.size());
       for (auto const &fx : fixes) changed_bodies.push_back(fx.body);
-      _ok = accel_struct_mngr->update_accel_structs_incremental(rigid_bodies, aabb, voxel_prims_hook(), changed_bodies);
+      _ok = accel_struct_mngr->update_accel_structs_incremental(rigid_bodies, aabb, voxel_prims_hook(finalizations), changed_bodies);
     }
     if (!_ok)
     {
