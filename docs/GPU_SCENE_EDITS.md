@@ -26,7 +26,7 @@ Evidence: `/root/beat-box/work/gpu-scene-edits/` on LXC 110. Baseline is merged 
 
 ## Remaining host coordination
 
-- Synchronous SimConfig readback, sleep/min-height decisions and spawn cadence still run on the CPU.
+- SimConfig still returns to the CPU for sleep/min-height decisions and spawn cadence. Its separate submission/wait is removed by [simulation-owned publication](SIM_CONFIG_PUBLICATION.md).
 - The CPU consumes impact events and records per-parent fracture work; a GPU work queue would require suitable scratch allocation and indirect scheduling.
 - Compact geometry metadata still returns to the CPU for AS handles, build-size queries and command recording. BLAS/TLAS construction itself executes on the GPU.
 - Renderer-wide queue waits require a separate lifetime/dependency audit before removal, especially for resources shared with tracing.
