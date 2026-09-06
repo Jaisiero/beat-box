@@ -2,6 +2,7 @@
 #include "acceleration_structure_manager.hpp"
 #include "renderer_manager.hpp"
 #include "gui_manager.hpp"
+#include <numeric>
 #include <cstdlib> // std::getenv (BB_RESPAWN_TIMING incremental-AS diagnostic)
 
 BB_NAMESPACE_BEGIN
@@ -224,8 +225,8 @@ void AccelerationStructureManager::build_AS()
   // AS_build_TG only writes to whichever buffer task_rigid_bodies happens to be bound
   // to at execute time (which depends on the frame index dance in load_scene, ending
   // up as buffer[1]). But the render and the first simulation step read buffer[0].
-  // The authoritative scene data lives in rigid_body_scratch_buffer (memcpy'd from the
-  // CPU array in build_accel_structs), so copy it into both buffers to guarantee a
+  // The authoritative scene data lives in rigid_body_scratch_buffer (uploaded on
+  // initial load, assembled on GPU at runtime), so copy it into both buffers for a
   // consistent starting state regardless of the current frame index.
   auto const rb_data_size = static_cast<daxa::usize>(current_rigid_body_count) * sizeof(RigidBody);
   if (rb_data_size > 0)
@@ -250,7 +251,7 @@ void AccelerationStructureManager::build_AS()
 }
 
 bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
-                                                       std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload)
+                                                       std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload, bool gpu_scene)
 {
   if(!initialized) {
     std::cerr << "ERROR: AccelerationStructureManager is not initialized inside build_accel_structs!" << std::endl;
@@ -258,7 +259,8 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   }
   // Get the number of rigid bodies and primitives
   auto rigid_body_count = static_cast<u32>(rigid_bodies.size());
-  auto primitive_count = static_cast<u32>(primitives.size());
+  auto primitive_count = gpu_scene ? std::accumulate(rigid_bodies.begin(),rigid_bodies.end(),0u,
+      [](u32 count,RigidBody const &body) { return count+body.primitive_count; }) : static_cast<u32>(primitives.size());
 
   // Check if the number of rigid bodies and primitives is within the limits
   if (current_rigid_body_count + rigid_body_count > MAX_RIGID_BODY_COUNT || current_primitive_count + primitive_count > MAX_PRIMITIVE_COUNT)
@@ -278,7 +280,7 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   // load, scene switch, runtime spawn) and feeds BOTH the render AS and the sim rigid_body buffers.
   // Downstream the hot conversions (to_matrix / rotate_vector) rely on it instead of paying a per-call
   // normalize. (NOT normalized per-call in those: they are on the per-pair / per-ray hot path.)
-  for (size_t i = 0; i < rigid_bodies.size(); ++i)
+  for (size_t i = 0; !gpu_scene && i < rigid_bodies.size(); ++i)
   {
     auto &rb = rigid_bodies[i];
     daxa_f32 m2 = rb.rotation.v.x * rb.rotation.v.x + rb.rotation.v.y * rb.rotation.v.y +
@@ -294,7 +296,7 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   }
 
   // Copy primitives to the buffer
-  std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
+  if (!gpu_scene) std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
 
   // BUILDING BLAS
   auto clear_build_AS = [&]()
@@ -421,7 +423,7 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
     proc_blas_buffer_offset += blas_instance_offset;
 
     blas_instances_data[i] = {
-        .transform = rigid_body.get_instance_transform(),
+        .transform = gpu_scene ? daxa_f32mat3x4{} : rigid_body.get_instance_transform(),
         .instance_custom_index = i,
         .mask = 0xFF,
         .instance_shader_binding_table_record_offset = 0,
@@ -431,7 +433,7 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
   }
 
   // Copy rigid bodies to the buffer
-  std::memcpy(device.buffer_host_address_as<RigidBody>(rigid_body_scratch_buffer).value(), rigid_bodies.data(), rigid_body_count * sizeof(RigidBody));
+  if (!gpu_scene) std::memcpy(device.buffer_host_address_as<RigidBody>(rigid_body_scratch_buffer).value(), rigid_bodies.data(), rigid_body_count * sizeof(RigidBody));
 
   // Increment the rigid body scratch offset
   rigid_body_scratch_offset += rigid_body_count * sizeof(RigidBody);
@@ -518,7 +520,7 @@ void AccelerationStructureManager::seed_incremental_state(std::vector<RigidBody>
     u64 const sz = get_aligned(blas_build_sizes.at(i).acceleration_structure_size, ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT);
     body_blas_[i] = proc_blas[i];
     body_blas_region_[i] = {off, sz};
-    body_built_hash_[i] = hash_prim_span(primitives, rigid_bodies[i].primitive_offset, rigid_bodies[i].primitive_count);
+    body_built_hash_[i] = hash_body_geometry(rigid_bodies[i],primitives);
     off += sz;
   }
   // any slot beyond the current scene must not carry a stale handle/region into the next diff
@@ -541,7 +543,7 @@ void AccelerationStructureManager::seed_incremental_state(std::vector<RigidBody>
 // identical content). Falls back to a full build until one has seeded the baseline.
 bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies,
                                                                     std::vector<Aabb> const &primitives,
-                                                                    std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload, std::span<daxa_u32 const> changed_bodies)
+                                                                    std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload, std::span<daxa_u32 const> changed_bodies, bool gpu_scene)
 {
   if (!initialized)
   {
@@ -551,11 +553,12 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
   // No baseline yet (fresh load / post-reset) -> do a full build, which seeds it.
   if (!incremental_ready_)
   {
-    return build_accel_structs(rigid_bodies, primitives, post_primitive_upload);
+    return build_accel_structs(rigid_bodies, primitives, post_primitive_upload, gpu_scene);
   }
 
   u32 const rigid_body_count = static_cast<u32>(rigid_bodies.size());
-  u32 const primitive_count = static_cast<u32>(primitives.size());
+  u32 const primitive_count = gpu_scene ? std::accumulate(rigid_bodies.begin(),rigid_bodies.end(),0u,
+      [](u32 count,RigidBody const &body) { return count+body.primitive_count; }) : static_cast<u32>(primitives.size());
   if (rigid_body_count > MAX_RIGID_BODY_COUNT || primitive_count > MAX_PRIMITIVE_COUNT)
   {
     std::cerr << "ERROR: incremental AS exceeded max rigid bodies (" << rigid_body_count << "/" << MAX_RIGID_BODY_COUNT
@@ -571,7 +574,7 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
 
   // 1. UNIT-QUATERNION INVARIANT (identical to the full build; the TLAS instance transform and the
   //    ray tracer's quaternion sandwich both rely on |q| == 1).
-  for (size_t i = 0; i < rigid_bodies.size(); ++i)
+  for (size_t i = 0; !gpu_scene && i < rigid_bodies.size(); ++i)
   {
     auto &rb = rigid_bodies[i];
     daxa_f32 m2 = rb.rotation.v.x * rb.rotation.v.x + rb.rotation.v.y * rb.rotation.v.y +
@@ -585,7 +588,7 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
   //    AS_build_TG's copy task then blits [0, primitive_scratch_offset) into primitive_buffer at
   //    previous_primitive_count(0). Cheap; keeps unchanged bodies' content consistent at their
   //    (possibly shifted) offsets so their baked BLAS still intersects correctly.
-  std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
+  if (!gpu_scene) std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
 
   previous_primitive_count = 0;
   previous_rigid_body_count = 0;
@@ -617,7 +620,7 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
   for (u32 i = 0; i < rigid_body_count; ++i)
   {
     auto &rigid_body = rigid_bodies[i];
-    u64 const hash = hash_prim_span(primitives, rigid_body.primitive_offset, rigid_body.primitive_count);
+    u64 const hash = hash_body_geometry(rigid_body,primitives);
     bool const dirty = geometry_changed[i] || body_blas_[i].is_empty() || hash != body_built_hash_[i];
 
     if (dirty)
@@ -677,7 +680,7 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
     // instance for EVERY body (dirty or not): transform is refreshed per-frame by the TLAS update
     // pass, but seed it here; the BLAS address is this body's current (kept or rebuilt) handle.
     blas_instances_data[i] = {
-        .transform = rigid_body.get_instance_transform(),
+        .transform = gpu_scene ? daxa_f32mat3x4{} : rigid_body.get_instance_transform(),
         .instance_custom_index = i,
         .mask = 0xFF,
         .instance_shader_binding_table_record_offset = 0,
@@ -687,7 +690,7 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
   }
 
   // copy rigid bodies to the scratch (AS_build_TG blits them into the rigid-body buffer)
-  std::memcpy(device.buffer_host_address_as<RigidBody>(rigid_body_scratch_buffer).value(), rigid_bodies.data(), rigid_body_count * sizeof(RigidBody));
+  if (!gpu_scene) std::memcpy(device.buffer_host_address_as<RigidBody>(rigid_body_scratch_buffer).value(), rigid_bodies.data(), rigid_body_count * sizeof(RigidBody));
 
   // bind the BLAS task to a live handle (any non-empty body BLAS; placeholder only if empty scene)
   {

@@ -597,28 +597,6 @@ static const daxa_f32 PI = 3.14159265359f;
 static const daxa_f32 COLLISION_GUARD = 1e-3f;
 static const daxa_u32 AABB_CORNER_COUNT = 8;
 
-// FRACTURE (MVP): one impact strong enough to break a body. Latched by the impact pass
-// (which already computes each row's stopping impulse); consumed by the host orchestrator
-// (carve + connected components + fragment respawn). World-space contact data.
-static const daxa_u32 BB_MAX_FRACTURE_EVENTS = 8;
-struct FractureEvent
-{
-  daxa_u32 body_id;      // PERSISTENT body id (rows reorder every step)
-  daxa_f32 impulse;      // max fired-row impulse on this body (kg*m/s)
-  daxa_f32vec3 position; // contact point, world
-  daxa_f32vec3 normal;   // manifold normal, world
-};
-// DEDICATED host-visible bridge buffer (pick_state pattern), addressed through
-// SimConfig::fracture_events_addr. NOT inside SimConfig: the sim config is re-uploaded
-// from the host template EVERY STEP (that is how sim_flags propagate), which would wipe
-// any event state stored there - measured: a serial written by the impact pass survived
-// exactly one step. This buffer is written ONLY by the impact pass (GPU) and read/reset
-// ONLY by the host; the monotonic serial ring survives multi-step catch-up bursts.
-struct FractureEventBuffer
-{
-  daxa_u32 serial; // monotonic; slot = serial % BB_MAX_FRACTURE_EVENTS
-  FractureEvent events[BB_MAX_FRACTURE_EVENTS];
-};
 
 struct GlobalCollisionInfo
 {
@@ -937,6 +915,36 @@ static const daxa_u32 BB_MAX_VOXEL_SDF_F32S = 65536;   // shared NODE signed-dis
 static const daxa_u32 BB_MAX_BROAD_PAIR_COUNT = 65536; // broad-phase candidate pairs (8 B each)
 static const daxa_u32 BB_MAX_COLLISION_COUNT = 32768;  // manifolds (~460 B each, x2 parities + scratch)
 static const daxa_u32 BB_MAX_MANIFOLD_NODE_COUNT = BB_MAX_COLLISION_COUNT * 2;
+
+// GPU impact reduction publishes at most one strongest event per persistent body.
+static const daxa_u32 BB_MAX_FRACTURE_EVENTS = BB_MAX_RIGID_BODY_COUNT;
+struct FractureEvent
+{
+  daxa_u32 body_id;
+  daxa_f32 impulse;
+  daxa_f32vec3 position;
+  daxa_f32vec3 normal;
+};
+struct FractureImpactScratch
+{
+  // One writer per manifold. Reset once per simulation step, including catch-up steps.
+  FractureEvent candidates[BB_MAX_COLLISION_COUNT];
+  FractureEvent selected[BB_MAX_RIGID_BODY_COUNT];
+  FractureEvent pending[BB_MAX_RIGID_BODY_COUNT];
+};
+struct FractureEventBuffer
+{
+  daxa_u64 scratch_addr;
+  // Generation/acknowledgement handshake. Pending impacts are coalesced per
+  // body across catch-up steps, so bursts never overwrite another body.
+  daxa_u32 serial, consumed_serial, count;
+  FractureEvent events[BB_MAX_FRACTURE_EVENTS];
+};
+struct FractureImpactPushConstants
+{
+  daxa_u64 config_addr, bodies_addr, nodes_addr, map_addr, manifolds_addr;
+};
+
 // Graph-coloring solver: a contact gets one of BB_MAX_COLORS colors (bit per color in a u32 body mask);
 // within a color no body repeats, so all that color's contacts solve in parallel. Leftovers go to an
 // overflow bucket (index BB_MAX_COLORS) solved serially. 32 fits a u32 mask and a stacked box's degree.
@@ -1338,6 +1346,7 @@ struct VoxelShapeDerived
 static const daxa_u32 BB_MAX_FRACTURE_SITES = 32;
 struct VoxelFracturePushConstants
 {
+  daxa_u64 context_addr; // resident parent context, including procedural sites
   daxa_u64 occupancy_addr;
   daxa_u64 labels_addr;      // u32 per cell of the target shape (connected-component label)
   daxa_u64 site_labels_addr; // u32 per cell: nearest Voronoi site index (scratch[1]); the

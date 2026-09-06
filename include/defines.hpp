@@ -10,8 +10,11 @@
 
 #include "shared.inl"
 #include "fragment_finalization.inl"
+#include "fracture_setup.inl"
+#include "body_list.inl"
+#include "fracture_allocator.inl"
 #include "fragment_census.inl"
-#include "fragment_packing.inl"
+#include "fragment_plan.inl"
 #include "gpu_pool_allocator.inl"
 #include <daxa/daxa.hpp>
 using namespace daxa::types;
@@ -988,7 +991,7 @@ struct FragmentFinalizeInfo {
           .source = daxa::ShaderFile{"fragment_finalization.slang"},
           .compile_options = {.entry_point = "entry_fragment_finalize"},
       },
-      .push_constant_size = sizeof(FragmentFinalizePushConstants),
+      .push_constant_size = sizeof(FracturePublicationPushConstants),
       .name = "Finalize Fragment Bodies",
   };
 };
@@ -1002,12 +1005,67 @@ struct GpuPoolValidationInfo {
   };
 };
 
-struct FragmentPackingInfo {
+struct BodyListInfo {
   daxa::ComputePipelineCompileInfo info = {
-      .shader_info = {.source = daxa::ShaderFile{"fragment_packing.slang"},
-                      .compile_options = {.entry_point = "entry_fragment_pack"}},
-      .push_constant_size = sizeof(FragmentPackingPushConstants),
-      .name = "Fragment occupancy packing",
+    .shader_info = {.source = daxa::ShaderFile{"body_list.slang"},
+                    .compile_options = {.entry_point = "entry_body_list"}},
+    .push_constant_size = sizeof(BodyListPushConstants), .name = "GPU active body list"};
+};
+
+struct FractureSceneEditInfo {
+  daxa::ComputePipelineCompileInfo info = {
+    .shader_info = {.source = daxa::ShaderFile{"fracture_scene_edits.slang"},
+                    .compile_options = {.entry_point = "entry_fracture_scene_edit"}},
+    .push_constant_size = sizeof(FractureSceneEditPushConstants), .name = "GPU scene retirement and spawning"};
+};
+struct FractureLayoutInfo {
+  daxa::ComputePipelineCompileInfo info = {
+    .shader_info = {.source = daxa::ShaderFile{"fracture_layout.slang"},
+                    .compile_options = {.entry_point = "entry_fracture_layout"}},
+    .push_constant_size = sizeof(FracturePublicationPushConstants), .name = "GPU body and primitive layout"};
+};
+
+struct FractureAllocatorInfo {
+  daxa::ComputePipelineCompileInfo info = {
+    .shader_info = {.source = daxa::ShaderFile{"fracture_allocator.slang"},
+                    .compile_options = {.entry_point = "entry_fracture_allocate"}},
+    .push_constant_size = sizeof(FractureAllocatorPushConstants), .name = "GPU fracture allocator"};
+};
+struct FractureBatchPackingInfo {
+  daxa::ComputePipelineCompileInfo info = {
+    .shader_info = {.source = daxa::ShaderFile{"fragment_batch_packing.slang"},
+                    .compile_options = {.entry_point = "entry_fragment_batch_pack"}},
+    .push_constant_size = sizeof(FractureBatchPackingPushConstants), .name = "GPU allocated fragment packing"};
+};
+
+struct FractureSetupInfo {
+  daxa::ComputePipelineCompileInfo info = {
+    .shader_info = {.source = daxa::ShaderFile{"fracture_setup.slang"},
+                    .compile_options = {.entry_point = "entry_fracture_setup"}},
+    .push_constant_size = sizeof(FractureSetupPushConstants), .name = "GPU fracture setup"};
+};
+struct FractureGatherInfo {
+  daxa::ComputePipelineCompileInfo info = {
+    .shader_info = {.source = daxa::ShaderFile{"fracture_gather.slang"},
+                    .compile_options = {.entry_point = "entry_fracture_gather"}},
+    .push_constant_size = sizeof(FractureGatherPushConstants), .name = "GPU live body publication"};
+};
+
+struct FractureImpactInfo {
+  static daxa::ComputePipelineCompileInfo make(char const *entry) {
+    return {.shader_info = {.source = daxa::ShaderFile{"fracture_impact.slang"},
+                            .compile_options = {.entry_point = entry}},
+            .push_constant_size = sizeof(FractureImpactPushConstants),
+            .name = entry};
+  }
+};
+
+struct FragmentPlanInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {.source = daxa::ShaderFile{"fragment_plan.slang"},
+                      .compile_options = {.entry_point = "entry_fragment_plan"}},
+      .push_constant_size = sizeof(FragmentPlanPushConstants),
+      .name = "GPU fragment decisions",
   };
 };
 
