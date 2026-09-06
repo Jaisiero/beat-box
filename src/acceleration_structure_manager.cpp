@@ -1026,12 +1026,15 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
 
 void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances_TG, TaskGraph &build_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline)
 {
-  auto user_callback_UI = [update_AS_pipeline](daxa::TaskInterface ti, auto &)
+  auto user_callback_UI = [this, update_AS_pipeline](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*update_AS_pipeline);
     ti.recorder.push_constant(UpdateInstancesPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(UpdateInstancesTaskHead::AT.dispatch_buffer).id,
-                                   .offset = 0});
+    // Fracture may grow the body list after the last solver dispatch. Its
+    // indirect group count is stale until the next simulation step (e.g. 32 ->
+    // 34 bodies leaves instances 32/33 untouched). Publish every current body.
+    ti.recorder.dispatch({.x = (current_rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1u) / RIGID_BODY_SIM_COMPUTE_X,
+                          .y = 1, .z = 1});
   };
 
   using TTaskUI = TaskTemplate<UpdateInstancesTaskHead::Task, decltype(user_callback_UI)>;

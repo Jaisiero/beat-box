@@ -63,3 +63,13 @@ escenas, resoluciones o arquitecturas.
 Evidencia: `/root/beat-box/work/publication/`, incluidos `checks.log`,
 `timings.json`, logs/CSV de cada repetición y los backtraces de los intentos
 de combinar graphs.
+
+
+## Visibilidad tras roturas
+
+Una comprobación posterior detectó dos defectos preexistentes en la publicación:
+rotación transpuesta en las instancias creadas por C++ y dispatch indirecto con
+el número de grupos anterior a la rotura. La reproducción 32 -> 34 cuerpos,
+corrección y test de regresión están en [FRAGMENT_VISIBILITY.md](FRAGMENT_VISIBILITY.md).
+Los replays de física y synchronization validation no cubrían esa condición de
+visibilidad; la instrumentación de instancias sí la detectó.
