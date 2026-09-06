@@ -351,8 +351,9 @@ private:
   bool narrow_phase_timing = false;
   bool narrow_phase_query_pending = false;
   daxa::TimelineQueryPool narrow_phase_queries = {};
-  daxa::TimelineQueryPool avbd_stage_queries = {};
-  bool avbd_stage_query_pending = false;
+  daxa::TimelineQueryPool solver_stage_queries = {};
+  bool solver_stage_query_pending = false;
+  SimSolverType stage_query_solver = SimSolverType::AVBD;
   daxa::BufferId morton_codes = {};
   daxa::BufferId tmp_morton_codes = {};
   daxa::BufferId lbvh_nodes[DOUBLE_BUFFERING] = {};

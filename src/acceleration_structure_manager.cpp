@@ -796,9 +796,12 @@ bool AccelerationStructureManager::update()
   daxa_u32 total_instances = current_rigid_body_count;
 
   // Generate LBVH BLAS
-  if(renderer_manager->is_bvh_enabled())
+  if(renderer_manager->is_bvh_enabled() && current_rigid_body_count > 0u)
   {
-    u32 lbvh_primitive_count = (2 * current_primitive_count - 1);
+    // The broad-phase tree has one leaf per BODY, not per render primitive.
+    // Voxel bodies contain many primitives; using their count reads unbuilt
+    // nodes and can exceed the MAX_LBVH_NODE_COUNT buffer when L is enabled.
+    u32 const lbvh_primitive_count = 2u * current_rigid_body_count - 1u;
 
     blas_geometries.at(0).push_back({
         .data = device.device_address(rigid_body_manager->get_lbvh_node_buffer()).value(),

@@ -60,7 +60,6 @@ struct RendererManager
   daxa::TaskImage task_rt_target{{.is_swapchain_image = false, .name = "rt_target"}};
   daxa::TaskBuffer task_camera_buffer{{.buffer = {}, .name = "camera_buffer"}};
   daxa::TaskBuffer task_ray_tracing_config{{.buffer = {}, .name = "ray_tracing_config"}};
-  daxa::TaskBuffer task_ray_tracing_config_host{{.buffer = {}, .name = "ray_tracing_config_host"}};
   daxa::TaskImage task_stbn_texture{{.is_swapchain_image = false, .name = "stbn_texture_task"}};
 
   explicit RendererManager(std::shared_ptr<GPUcontext> gpu, std::shared_ptr<TaskManager> task_manager, WindowManager& window, std::shared_ptr<CameraManager> camera_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr, std::shared_ptr<RigidBodyManager> rigid_body_manager, std::shared_ptr<SceneManager> scene_manager, std::shared_ptr<StatusManager> status_manager, std::shared_ptr<GUIManager> gui_manager, std::shared_ptr<ImageManager> image_manager);
@@ -100,8 +99,7 @@ struct RendererManager
 private:
   bool execute();
 
-  daxa::BufferId ray_tracing_config_buffer[DOUBLE_BUFFERING];
-  daxa::BufferId ray_tracing_config_host_buffer[DOUBLE_BUFFERING];
+  daxa::BufferId ray_tracing_config_buffer;
 
   daxa::ImageId accumulation_buffer;
   daxa::ImageId rt_target_image = {};

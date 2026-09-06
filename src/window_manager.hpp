@@ -147,8 +147,11 @@ struct WindowManager{
             return false;
         }
 
-        if(minimized)
+        if(minimized || glfwGetWindowAttrib(glfw_window_ptr, GLFW_ICONIFIED))
         {
+            // Keep close/restore events responsive without polling at full CPU
+            // speed while no swapchain image can be rendered.
+            glfwWaitEventsTimeout(0.1);
             return false;
         }
 

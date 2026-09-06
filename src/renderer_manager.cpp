@@ -24,19 +24,13 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
     return false;
   }
 
-  for(auto f = 0u; f < DOUBLE_BUFFERING; f++) {
-    ray_tracing_config_buffer[f] = gpu->device.create_buffer({
-        .size = sizeof(RayTracingConfig),
-        .name = "ray_tracing_config" + std::to_string(f),
-    });
+  // A stable task resource retains cross-frame dependencies. Uploads are staged
+  // per execution; the device buffer is reused only through ordered graph access.
+  ray_tracing_config_buffer = gpu->device.create_buffer({
+      .size = sizeof(RayTracingConfig),
+      .name = "ray_tracing_config",
+  });
 
-    ray_tracing_config_host_buffer[f] = gpu->device.create_buffer({
-        .size = sizeof(RayTracingConfig),
-        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
-        .name = "ray_tracing_config_host" + std::to_string(f),
-    });
-  }
-  
   RT_pipeline = pipeline;
 
   // render scale (BB_RENDER_SCALE=0.25..1.0): trace at a reduced resolution and upscale.
@@ -75,8 +69,8 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   
   daxa::InlineTaskInfo task_update_RT_config({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, 
-          task_ray_tracing_config_host),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE,
+          task_camera_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, 
            task_ray_tracing_config),
       },
@@ -90,22 +84,19 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
         auto flags = accumulating ? RayTracingFlag::RT_ACCUMULATE : RayTracingFlag::RT_NONE;
         if (validate_rt) flags |= RayTracingFlag::RT_VALIDATE;
         flags |= show_islands ? RayTracingFlag::RT_SHOW_ISLANDS : show_normals ? RayTracingFlag::RT_SHOW_NORMALS : show_collisions ? RayTracingFlag::RT_SHOW_COLLISIONS : RayTracingFlag::RT_NONE;
-        ti.device.buffer_host_address_as<RayTracingConfig>(ti.get(task_ray_tracing_config_host).id).value()[0] = RayTracingConfig{
+        // Per-execution staging allocations stay live until their GPU submit
+        // completes. Task accesses order uploads after earlier shader readers.
+        allocate_fill_copy(ti, camera_manager->camera_view, ti.get(task_camera_buffer));
+        allocate_fill_copy(ti, RayTracingConfig{
             .flags = flags,
             .max_bounces = MAX_BOUNCES,
             .current_frame_index = status_manager->get_frame_count(),
             .frame_count = accumulating ? status_manager->get_accumulation_count() : 0,
             .light_count = scene_manager->get_light_count(),
             .instance_count = rigid_body_manager->get_sim_config_reference().rigid_body_count,
-        };
-
-        ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = ti.get(task_ray_tracing_config_host).id,
-            .dst_buffer = ti.get(task_ray_tracing_config).id,
-            .size = sizeof(RayTracingConfig),
-        });
+        }, ti.get(task_ray_tracing_config));
       },
-      .name = "copy rigid bodies and primitives",
+      .name = "upload camera and ray tracing config",
   });
 
   auto user_callback = [this, SBT](daxa::TaskInterface ti, auto &)
@@ -168,7 +159,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
 
   
 
-  std::array<daxa::TaskBuffer, 14> buffers = {
+  std::array<daxa::TaskBuffer, 13> buffers = {
     task_camera_buffer, 
     rigid_body_manager->task_rigid_body_entries,
     rigid_body_manager->task_rigid_bodies,
@@ -179,7 +170,6 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
     gui_manager->task_axes_vertex_buffer,
     scene_manager->task_material_buffer, 
     task_ray_tracing_config, 
-    task_ray_tracing_config_host, 
     scene_manager->task_lights_buffer, 
     rigid_body_manager->task_islands, 
     rigid_body_manager->task_contact_islands};
@@ -249,10 +239,7 @@ void RendererManager::destroy()
     return;
   }
 
-  for(auto f = 0u; f < DOUBLE_BUFFERING; f++) {
-    gpu->device.destroy_buffer(ray_tracing_config_buffer[f]);
-    gpu->device.destroy_buffer(ray_tracing_config_host_buffer[f]);
-  }
+  gpu->device.destroy_buffer(ray_tracing_config_buffer);
 
   gpu->device.destroy_image(accumulation_buffer);
   gpu->device.destroy_image(rt_target_image);
@@ -289,8 +276,7 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
   // The swapchain image rotates every frame and its sync is acquire/present semaphores.
   task_swapchain_image.set_image(swapchain_image);
   if (task_camera_buffer.id() != cam_mngr.camera_buffer) { task_camera_buffer.set_buffer(cam_mngr.camera_buffer); }
-  if (task_ray_tracing_config.id() != ray_tracing_config_buffer[get_frame_index()]) { task_ray_tracing_config.set_buffer(ray_tracing_config_buffer[get_frame_index()]); }
-  if (task_ray_tracing_config_host.id() != ray_tracing_config_host_buffer[get_frame_index()]) { task_ray_tracing_config_host.set_buffer(ray_tracing_config_host_buffer[get_frame_index()]); }
+  if (task_ray_tracing_config.id() != ray_tracing_config_buffer) { task_ray_tracing_config.set_buffer(ray_tracing_config_buffer); }
   if (task_accumulation_buffer.id() != accumulation_buffer) { task_accumulation_buffer.set_image(accumulation_buffer); }
   if (task_rt_target.id() != rt_target_image) { task_rt_target.set_image(rt_target_image); }
   if (task_stbn_texture.id() != image_manager->get_spatiotemporal_blue_noise_image()) { task_stbn_texture.set_image(image_manager->get_spatiotemporal_blue_noise_image()); }

@@ -100,3 +100,7 @@ Raw evidence: `/root/beat-box/work/convergence-origin/`, including
 `validation-*`, `tgs-f7-*` and `realtime-*`. Earlier draft performance and
 convergence interpretations in `work/sdf-pair-prefilter/` are historical;
 the corrected controls above supersede their unresolved F7 conclusions.
+
+TGS now also batches its color sweeps and exposes solver-specific GPU stage
+queries through the same opt-in flag. See [TGS_SDF_PERFORMANCE.md](TGS_SDF_PERFORMANCE.md)
+for the separate TGS analysis, measurements and regression checks.
