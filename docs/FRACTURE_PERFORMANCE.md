@@ -86,8 +86,7 @@ material fixture is a regression case, not a recommended material setting.
 intervals (`FRACTURE-FRAME`), including their step counts and simulation-phase wall
 time. These are CPU loop intervals, not display/presentation timestamps. No new
 GPU completion wait is added. The existing SC completion wait also makes a pair
-of optional narrow-phase GPU timestamp queries readable (`FRACTURE-NP`, samples
-at least 5 ms). With catch-up, this query reports the last step before readback.
+of optional narrow-phase GPU timestamp queries readable (`FRACTURE-NP`, every measured step when enabled). With catch-up, this query reports the last step before readback.
 The query pool is reset on COMPUTE_0 inside the narrow-phase callback; the existing
 per-step completion synchronization prevents reuse while a prior step is running.
 
@@ -131,3 +130,9 @@ validation enabled. There are no validation errors, synchronization hazards,
 conservation warnings or pool invariant failures. The validated CSVs match the
 normal final fixed-step CSVs. The instrumentation does not add a shader ABI field
 or a new environment flag; it extends `BB_RESPAWN_TIMING` and `BB_POCKET_TRACE`.
+
+`BB_RESPAWN_TIMING` also reports `[SDF-BUILD] gpu_ms=... shapes=...` for the
+voxel-pool GPU dispatch chain. Queries are read after the existing MAIN submit
+wait; this instrumentation introduces no additional wait. See
+[SDF_PERFORMANCE.md](SDF_PERFORMANCE.md) for controlled measurements and rejected
+experiments.

@@ -2097,7 +2097,15 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
   else { idx.resize(shapes.size()); for (daxa_u32 i = 0u; i < (daxa_u32)shapes.size(); ++i) { idx[i] = i; } }
   if (idx.empty()) { return; }
 
+  daxa::TimelineQueryPool build_queries = {};
+  if (narrow_phase_timing)
+    build_queries = device.create_timeline_query_pool({.query_count = 2, .name = "voxel_pool_build"});
   auto rec = device.create_command_recorder({});
+  if (narrow_phase_timing)
+  {
+    rec.reset_timestamps({.query_pool = build_queries, .start_index = 0, .count = 2});
+    rec.write_timestamp({.query_pool = build_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 0});
+  }
   auto const barrier = [&rec]() {
     rec.pipeline_barrier({
         .src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
@@ -2161,10 +2169,23 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
                         .dst_access = daxa::AccessConsts::READ});
   rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
                         .dst_access = daxa::AccessConsts::HOST_READ});
+  if (narrow_phase_timing)
+    rec.write_timestamp({.query_pool = build_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 1});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
   device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
       .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
+
+  if (narrow_phase_timing)
+  {
+    // The existing MAIN submit wait above already guarantees query availability.
+    auto const results = build_queries.get_query_results(0, 2);
+    if (results[1] != 0u && results[3] != 0u)
+    {
+      double const ms = double(results[2] - results[0]) * device.properties().limits.timestamp_period / 1.0e6;
+      std::cout << "[SDF-BUILD] gpu_ms=" << ms << " shapes=" << idx.size() << std::endl;
+    }
+  }
 
   // BB_SDF_VERIFY: read the GPU field back and compare against the CPU brute force (the
   // debug oracle the GPU-first directive keeps around). Exactness argument in voxel_sdf.slang;
@@ -2544,8 +2565,7 @@ bool RigidBodyManager::read_back_sim_config()
     if (results[1] != 0u && results[3] != 0u)
     {
       double const ms = double(results[2] - results[0]) * device.properties().limits.timestamp_period / 1.0e6;
-      if (ms >= 5.0)
-        std::cout << "[FRACTURE-NP] gpu_ms=" << ms << std::endl;
+      std::cout << "[FRACTURE-NP] gpu_ms=" << ms << std::endl;
     }
     narrow_phase_query_pending = false;
   }

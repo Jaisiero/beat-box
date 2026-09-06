@@ -112,6 +112,9 @@ static const daxa_f32 VSB_INF = 1.0e30f;
     for (daxa_u32 i = 0u; i < L; ++i)
     {
       daxa_f32 best = colv[i];
+      // Squared distances are nonnegative. A zero is already the exact minimum;
+      // this thread owns the column and its existing field value is already zero.
+      if (best == 0.0f) { continue; }
       for (daxa_u32 j = 0u; j < L; ++j)
       {
         daxa_f32 d = daxa_f32(daxa_i32(i) - daxa_i32(j));
