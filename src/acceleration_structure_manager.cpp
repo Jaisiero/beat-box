@@ -3,6 +3,7 @@
 #include "renderer_manager.hpp"
 #include "gui_manager.hpp"
 #include <numeric>
+#include <chrono>
 #include <cstdlib> // std::getenv (BB_RESPAWN_TIMING incremental-AS diagnostic)
 
 BB_NAMESPACE_BEGIN
@@ -16,6 +17,12 @@ AccelerationStructureManager::AccelerationStructureManager(daxa::Device &device,
       ? properties.acceleration_structure_properties.value().min_acceleration_structure_scratch_offset_alignment
       : ACCELERATION_STRUCTURE_BUILD_OFFSET_ALIGMENT;
 
+    publication_timing = std::getenv("BB_AS_TIMING") != nullptr;
+    if (publication_timing)
+    {
+      publication_queries = device.create_timeline_query_pool({.query_count = 4, .name = "AS publication phases"});
+      tlas_queries = device.create_timeline_query_pool({.query_count = 2, .name = "Final TLAS build"});
+    }
     update_pipeline = task_manager->create_compute(UpdateAccelerationStructures{}.info);
   }
 }
@@ -219,34 +226,29 @@ void AccelerationStructureManager::build_AS()
   if(!initialized) {
     return;
   }
+  auto const record_start = std::chrono::steady_clock::now();
   AS_build_TG.execute();
 
-  // CRITICAL: populate BOTH double-buffered rigid body buffers with the scene data.
-  // AS_build_TG only writes to whichever buffer task_rigid_bodies happens to be bound
-  // to at execute time (which depends on the frame index dance in load_scene, ending
-  // up as buffer[1]). But the render and the first simulation step read buffer[0].
-  // The authoritative scene data lives in rigid_body_scratch_buffer (uploaded on
-  // initial load, assembled on GPU at runtime), so copy it into both buffers for a
-  // consistent starting state regardless of the current frame index.
-  auto const rb_data_size = static_cast<daxa::usize>(current_rigid_body_count) * sizeof(RigidBody);
-  if (rb_data_size > 0)
+  // The graph copies scratch -> current -> next, publishing both parities.
+  // Keep the host lifetime boundary: later scene edits may overwrite staging
+  // memory or retire AS handles. Removing it requires deferred host ownership.
+  auto const wait_start = std::chrono::steady_clock::now();
+  device.wait_idle();
+  auto const wait_end = std::chrono::steady_clock::now();
+  if (publication_timing)
   {
-    auto rec = device.create_command_recorder({});
-    rec.pipeline_barrier({.src_access = daxa::AccessConsts::READ_WRITE,
-                          .dst_access = daxa::AccessConsts::TRANSFER_READ_WRITE});
-    for (auto f = 0; f < DOUBLE_BUFFERING; ++f)
+    auto const q = publication_queries.get_query_results(0, 4);
+    bool ready = true;
+    for (u32 i = 0; i < 4; ++i) ready &= q[2*i+1] != 0;
+    if (ready)
     {
-      rec.copy_buffer_to_buffer({
-          .src_buffer = rigid_body_scratch_buffer,
-          .dst_buffer = rigid_body_buffer[f],
-          .size = rb_data_size,
-      });
+      auto const scale = device.properties().limits.timestamp_period / 1.0e6;
+      std::cout << "[AS-PUBLISH] record_ms=" << std::chrono::duration<double,std::milli>(wait_start-record_start).count()
+                << " host_wait_ms=" << std::chrono::duration<double,std::milli>(wait_end-wait_start).count()
+                << " copy_gpu_ms=" << (q[2]-q[0])*scale
+                << " blas_gpu_ms=" << (q[6]-q[4])*scale
+                << " blas_count=" << blas_build_infos.size() << std::endl;
     }
-    rec.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
-                          .dst_access = daxa::AccessConsts::READ});
-    auto cmds = rec.complete_current_commands();
-    device.submit_commands({.command_lists = std::array{cmds}});
-    device.wait_idle();
   }
 }
 
@@ -447,47 +449,8 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
     task_blas.set_blas(proc_blas.front());
   }
 
-  tlas_info[0] = {
-      .data = device.device_address(blas_instances_buffer).value(),
-      .count = rigid_body_count,
-      .is_data_array_of_pointers = false,
-      .flags = {},
-  };
-
-  // BUILDING TLAS
-  tlas_build_info = {
-      .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_BUILD,
-      .dst_tlas = {},
-      .instances = tlas_info,
-      .scratch_data = device.device_address(proc_tlas_scratch_buffer).value(),
-  };
-
-  // Get the build sizes and verify they fit the fixed AVERAGE_AS_SIZE TLAS/scratch buffers (B4)
-  tlas_build_sizes = device.tlas_build_sizes(tlas_build_info);
-  if (!tlas_within_budget("build_accel_structs"))
-  {
-    return false;
-  }
-
-  // Set the scratch offset
-  tlas_build_info.scratch_data = device.device_address(proc_tlas_scratch_buffer).value();
-
-  // TODO: Create TLAS buffer from buffer
-  // // Create TLAS buffer from buffer
-  // tlas = device.create_tlas_from_buffer(
-  //     {
-  //       {
-  //         .size = tlas_build_sizes.acceleration_structure_size,
-  //         .name = "tlas",
-  //       }
-  //     }
-  // );
-
-  // Set the TLAS buffer
-  tlas_build_info.dst_tlas = tlas[renderer_manager->get_sim_frame_index()];
-
-  // Set Task TLAS
-  task_tlas.set_tlas(tlas[renderer_manager->get_sim_frame_index()]);
+  // Both callers update instances and build the final TLAS before tracing.
+  // Do not prepare or build an intermediate TLAS from unpublished transforms.
 
   // INCREMENTAL-AS: capture this full build as the baseline the next fracture diffs against.
   seed_incremental_state(rigid_bodies, primitives);
@@ -699,25 +662,6 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
     task_blas.set_blas(bound);
   }
 
-  // TLAS over all instances (same as the full build)
-  tlas_info[0] = {
-      .data = device.device_address(blas_instances_buffer).value(),
-      .count = rigid_body_count,
-      .is_data_array_of_pointers = false,
-      .flags = {},
-  };
-  tlas_build_info = {
-      .flags = daxa::AccelerationStructureBuildFlagBits::PREFER_FAST_BUILD,
-      .dst_tlas = {},
-      .instances = tlas_info,
-      .scratch_data = device.device_address(proc_tlas_scratch_buffer).value(),
-  };
-  tlas_build_sizes = device.tlas_build_sizes(tlas_build_info);
-  if (!tlas_within_budget("update_accel_structs_incremental")) { return false; }
-  tlas_build_info.scratch_data = device.device_address(proc_tlas_scratch_buffer).value();
-  tlas_build_info.dst_tlas = tlas[renderer_manager->get_sim_frame_index()];
-  task_tlas.set_tlas(tlas[renderer_manager->get_sim_frame_index()]);
-
   // BLAS-region invariant (gated by BB_POOL_VERIFY, same switch the fracture pools use): the pool's
   // free ranges must stay sorted/coalesced and account exactly (Sigma free + live == high_water). A
   // violation means a region overlap -> a rebuilt BLAS could stomp a live one -> device-lost, so
@@ -751,6 +695,13 @@ void AccelerationStructureManager::update_TLAS()
 {
   if(!initialized) {
     return;
+  }
+  if (publication_timing && tlas_query_pending)
+  {
+    auto const q = tlas_queries.get_query_results(0, 2);
+    if (q[1] != 0u && q[3] != 0u)
+      std::cout << "[AS-TLAS] gpu_ms=" << (q[2]-q[0])*device.properties().limits.timestamp_period/1.0e6 << std::endl;
+    tlas_query_pending = false;
   }
   update_buffers();
   if (!update()) // B4: was discarded — a failed AS rebuild (size guard / offset overflow) must not proceed
@@ -870,16 +821,9 @@ bool AccelerationStructureManager::update()
     ++total_instances;
   }
 
-  // Destroy TLAS
-  if (!tlas[frame_index].is_empty())
-  {
-    device.destroy_tlas(tlas[frame_index]);
-  }
-
-  tlas[frame_index] = device.create_tlas({
-      .size = AVERAGE_AS_SIZE,
-      .name = "tlas_" + std::to_string(frame_index),
-  });
+  // Fixed-capacity TLAS objects are allocated in create(). Rebuild in place
+  // after the caller's completion boundary instead of allocating every frame.
+  // This is still a full BUILD, with the size checks below (not UPDATE mode).
 
   tlas_info[0] = {
       .data = device.device_address(blas_instances_buffer).value(),
@@ -910,7 +854,7 @@ bool AccelerationStructureManager::update()
   tlas_build_info.dst_tlas = tlas[frame_index];
 
   // Set Task TLAS
-  task_tlas.set_tlas(tlas[frame_index]);
+  if (task_tlas.id() != tlas[frame_index]) { task_tlas.set_tlas(tlas[frame_index]); }
 
   return true;
 }
@@ -938,6 +882,11 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
+        if (publication_timing)
+        {
+          ti.recorder.reset_timestamps({.query_pool = publication_queries, .start_index = 0, .count = 4});
+          ti.recorder.write_timestamp({.query_pool = publication_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 0});
+        }
         ti.recorder.copy_buffer_to_buffer({
             .src_buffer = primitive_scratch_buffer,
             .dst_buffer = ti.get(task_aabb_buffer).id,
@@ -970,6 +919,8 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
             .size = rigid_body_scratch_offset,
         });
 
+        if (publication_timing)
+          ti.recorder.write_timestamp({.query_pool = publication_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 1});
         primitive_scratch_offset = 0;
         rigid_body_scratch_offset = 0;
       },
@@ -983,35 +934,18 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
+        if (publication_timing)
+          ti.recorder.write_timestamp({.query_pool = publication_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 2});
         // build blas
         ti.recorder.build_acceleration_structures({
             .blas_build_infos = blas_build_infos,
         });
+        if (publication_timing)
+          ti.recorder.write_timestamp({.query_pool = publication_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 3});
       },
       .name = "blas build",
   });
-  daxa::InlineTaskInfo task3({
-      .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, task_blas_instance_data),
-          daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_READ, task_blas),
-          daxa::inl_attachment(daxa::TaskTlasAccess::BUILD_WRITE, task_tlas),
-      },
-      .task = [this](daxa::TaskInterface const &ti)
-      {
-        // build tlas
-        ti.recorder.build_acceleration_structures({
-            .tlas_build_infos = std::array{tlas_build_info},
-        });
-      },
-      .name = "tlas build",
-  });
-
-  std::array<daxa::InlineTaskInfo, 4> tasks = {
-      task0,
-      task1,
-      task2,
-      task3,
-  };
+  std::array<daxa::InlineTaskInfo, 3> tasks = {task0, task1, task2};
 
   std::array<daxa::TaskBuffer, 4> buffers = {
       rigid_body_manager->task_rigid_bodies,
@@ -1022,11 +956,7 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
   std::array<daxa::TaskBlas, 1> blas = {
       task_blas,
   };
-  std::array<daxa::TaskTlas, 1> task_tlases = {
-      task_tlas,
-  };
-
-  AS_TG = task_manager->create_task_graph("Build Acceleration Structures", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(task_tlases));
+  AS_TG = task_manager->create_task_graph("Build Acceleration Structures", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, std::span<daxa::TaskBlas>(blas), {});
 }
 
 void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances_TG, TaskGraph &build_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline)
@@ -1085,10 +1015,20 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
+        if (publication_timing)
+        {
+          ti.recorder.reset_timestamps({.query_pool = tlas_queries, .start_index = 0, .count = 2});
+          ti.recorder.write_timestamp({.query_pool = tlas_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 0});
+        }
         // build tlas
         ti.recorder.build_acceleration_structures({
             .tlas_build_infos = std::array{tlas_build_info},
         });
+        if (publication_timing)
+        {
+          ti.recorder.write_timestamp({.query_pool = tlas_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 1});
+          tlas_query_pending = true;
+        }
       },
       .name = "tlas update",
   });
