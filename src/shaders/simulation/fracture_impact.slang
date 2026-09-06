@@ -84,7 +84,10 @@ void entry_fracture_impact_publish(uint3 tid : SV_DispatchThreadID)
       if (precedes(candidate,best)) { best = candidate; changed = true; }
     }
     scratch->pending[id] = best;
-    if (best.impulse > 0.0f) events->events[count++] = best;
+    if (best.impulse > 0.0f) {
+      events->events[count].body_id=best.body_id;
+      events->events[count++].impulse=best.impulse;
+    }
   }
   events->count = count;
   if (changed) ++events->serial;

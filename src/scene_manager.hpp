@@ -1547,7 +1547,7 @@ public:
   }
 
   // One event: read-only GPU partition + component labels, then private fragment grids.
-  bool apply_fracture(FractureEvent const &ev, std::vector<FragFix> &fixes, daxa_u32 event_slot,
+  bool apply_fracture(FractureEventSummary const &ev, std::vector<FragFix> &fixes,
                       bool partitioned = false, std::span<FractureBatchChild const> batch = {})
   {
     if (ev.body_id >= rigid_bodies.size()) { return false; }
@@ -1573,7 +1573,7 @@ public:
         allocations.push_back(child.allocation);
       }
     } else {
-      rigid_body_manager->carve_and_label(shape, ev, event_slot, labels, components, allocations);
+      rigid_body_manager->carve_and_label(shape, ev.body_id, labels, components, allocations);
     }
 
     // GPU already merged slivers and sorted children by count/label. This is
@@ -1823,18 +1823,18 @@ public:
         if (id >= rigid_bodies.size()) continue;
         auto const &body = rigid_bodies[id];
         if (body.shape_index == 0u || (body.flags & RigidBodyFlag::DYNAMIC) == RigidBodyFlag::NONE) continue;
-        inputs.push_back({id, s, fracture_recorded_passes(voxel_shape_cpu[body.shape_index - 1u])});
+        inputs.push_back({id, fracture_recorded_passes(voxel_shape_cpu[body.shape_index - 1u])});
       }
       children = rigid_body_manager->fracture_batch_gpu(inputs);
     }
     for (daxa_u32 s = 0u; s < n; ++s)
     {
-      FractureEvent const &ev = fb.events[s];
+      FractureEventSummary const &ev = fb.events[s];
       std::cout << "[FRACTURE] body " << ev.body_id << " impulse " << ev.impulse << std::endl;
       auto first = std::find_if(children.begin(), children.end(), [&](auto const &c) { return c.parent_id == ev.body_id; });
       auto last = first;
       while (last != children.end() && last->parent_id == ev.body_id) ++last;
-      any = apply_fracture(ev, fixes, s, !verify, std::span<FractureBatchChild const>(first, last)) || any;
+      any = apply_fracture(ev, fixes, !verify, std::span<FractureBatchChild const>(first, last)) || any;
     }
     auto const fracture_split = std::chrono::steady_clock::now();
     if (any) { respawn_after_fracture(fixes); }

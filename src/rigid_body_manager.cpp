@@ -2588,7 +2588,7 @@ void RigidBodyManager::record_fragment_census(daxa::CommandRecorder &rec, daxa_u
 }
 
 void RigidBodyManager::record_fracture_partition(daxa::CommandRecorder &rec,
-    daxa_u32 body_id, daxa_u32 event_slot, daxa_u32 body_count, daxa_u64 batch_addr, daxa_u32 recorded_passes,
+    daxa_u32 body_id, daxa_u32 body_count, daxa_u64 batch_addr, daxa_u32 recorded_passes,
     bool compact, daxa::TimelineQueryPool *queries)
 {
   VoxelFracturePushConstants pc = {
@@ -2617,7 +2617,7 @@ void RigidBodyManager::record_fracture_partition(daxa::CommandRecorder &rec,
       .shapes_addr = device.device_address(voxel_shapes).value(),
       .contexts_addr = device.device_address(fracture_contexts).value(),
       .events_addr = device.device_address(fracture_events_buffer).value(),
-      .body_id = body_id, .body_count = body_count, .event_slot = event_slot});
+      .body_id = body_id, .body_count = body_count});
   rec.dispatch({.x=1u});
   // Setup produces shader inputs AND indirect dispatch arguments.
   rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,
@@ -2678,7 +2678,7 @@ void RigidBodyManager::record_fracture_partition(daxa::CommandRecorder &rec,
     rec.write_timestamp({.query_pool = *queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 1});
 }
 
-void RigidBodyManager::carve_and_label(VoxelShape const &shape, FractureEvent const &event, daxa_u32 event_slot,
+void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_u32 body_id,
                                        std::vector<daxa_u32> &out_labels, std::vector<FragmentComponent> &out_components,
                                        std::vector<FractureChildAllocation> &allocations)
 {
@@ -2728,7 +2728,7 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, FractureEvent co
   if (verify_census)
     census_queries = device.create_timeline_query_pool({.query_count = 2, .name = "fragment_census"});
   auto rec = device.create_command_recorder({});
-  record_fracture_partition(rec,event.body_id,event_slot,fracture_live_count,0u,fracture_recorded_passes(shape),
+  record_fracture_partition(rec,body_id,fracture_live_count,0u,fracture_recorded_passes(shape),
       verify_census,verify_census ? &census_queries : nullptr);
   // Only verification or compact-manifest overflow downloads cell labels.
   daxa::BufferId staging = {};
@@ -2745,7 +2745,11 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, FractureEvent co
   rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
                        .dst_access = daxa::AccessConsts::HOST_READ});
   auto cmds = rec.complete_current_commands();
-  device.submit_commands({.command_lists = std::array{cmds}});
+  // Pending impact payloads were written on COMPUTE_0. Carry their memory
+  // dependency onto MAIN explicitly, even though the CPU already read the summary.
+  device.submit_commands({.command_lists = std::array{cmds},
+      .wait_queue_submit_indices = std::array{std::pair{daxa::QUEUE_COMPUTE_0,
+          device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0)}}});
   device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
       .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
   auto const *summary = device.buffer_host_address_as<FragmentCensusOutput>(fracture_census_output).value();
@@ -2762,7 +2766,7 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, FractureEvent co
     out_components.assign(manifest->components,manifest->components+allocation_manifest->count);
     allocations.assign(allocation_manifest->children,allocation_manifest->children+allocation_manifest->count);
   } else if (allocation_manifest->status!=0u) {
-    std::cerr << "FRACTURE: GPU capacity/plan refusal; whole parent retained (body " << event.body_id << ")" << std::endl;
+    std::cerr << "FRACTURE: GPU capacity/plan refusal; whole parent retained (body " << body_id << ")" << std::endl;
     if (allocation_manifest->status==3u) { std::cerr << "GPU allocator invariant FAILED" << std::endl;std::abort(); }
   }
   if (verify_census)
@@ -3150,11 +3154,13 @@ void beatbox::RigidBodyManager::verify_fracture_events_gpu()
   check(events->events[50].impulse==4096 && events->events[51].impulse==52);
   // Equal impulses use the contact coordinates as a stable tie breaker.
   scratch->selected[50].position={0,0,0};submit(false);
-  check(events->serial==3u && events->events[50].position.x==0);
+  check(events->serial==3u && scratch->pending[50].position.x==0);
+  scratch->selected[50].normal={-1,0,0};submit(false);
+  check(events->serial==4u && scratch->pending[50].normal.x==-1);
   events->consumed_serial=events->serial;
-  submit(true);check(events->count==0u && events->serial==3u);
+  submit(true);check(events->count==0u && events->serial==4u);
   scratch->selected[7]={.body_id=7,.impulse=1};submit(false);
-  check(events->count==1u && events->serial==4u && events->events[0].body_id==7u);
+  check(events->count==1u && events->serial==5u && events->events[0].body_id==7u);
   device.destroy_buffer(config_buffer);device.destroy_buffer(events_buffer);device.destroy_buffer(scratch_buffer);
   std::cout << "[IMPACT-VERIFY] full capacity, catch-up, maximum, ties and acknowledgement MATCH" << std::endl;
 }
@@ -3412,9 +3418,12 @@ std::vector<FractureBatchChild> beatbox::RigidBodyManager::fracture_batch_gpu(st
       .batch_addr=batch_addr,.operation=2u});rec.dispatch({.x=1u});
   auto body_count=renderer_manager->get_rigid_body_count();
   for (auto const &input:inputs)
-    record_fracture_partition(rec,input.body_id,input.event_slot,body_count,batch_addr,input.recorded_passes,false);
+    record_fracture_partition(rec,input.body_id,body_count,batch_addr,input.recorded_passes,false);
   rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,.dst_access=daxa::AccessConsts::HOST_READ});
-  auto commands=rec.complete_current_commands();device.submit_commands({.command_lists=std::array{commands}});
+  auto commands=rec.complete_current_commands();
+  device.submit_commands({.command_lists=std::array{commands},
+      .wait_queue_submit_indices=std::array{std::pair{daxa::QUEUE_COMPUTE_0,
+          device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0)}}});
   device.wait_on_submit({.queue=daxa::QUEUE_MAIN,.queue_submit_index=device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
   auto const *batch=device.buffer_host_address_as<FractureBatchManifest>(fracture_batch_manifest).value();
   if (batch->status!=0u || batch->count>FRAGMENT_PLAN_CAPACITY) {

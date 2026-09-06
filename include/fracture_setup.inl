@@ -19,7 +19,7 @@ struct FractureParentContext
 struct FractureSetupPushConstants
 {
   daxa_u64 bodies_addr, shapes_addr, contexts_addr, events_addr;
-  daxa_u32 body_id, body_count, event_slot;
+  daxa_u32 body_id, body_count;
 };
 struct FractureGatherPushConstants
 {

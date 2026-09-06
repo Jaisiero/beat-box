@@ -171,7 +171,7 @@ struct RigidBodyManager{
                              daxa_u32 live_count = 0u);
   // GPU material seeding, partitioning and component planning. Only the compact
   // build manifest leaves the device; labels are downloaded only for verification.
-  void carve_and_label(VoxelShape const &shape, FractureEvent const &event, daxa_u32 event_slot,
+  void carve_and_label(VoxelShape const &shape, daxa_u32 body_id,
                        std::vector<daxa_u32> &out_labels, std::vector<FragmentComponent> &out_components,
                        std::vector<FractureChildAllocation> &allocations);
   std::vector<FractureParentContext> read_fracture_contexts();
@@ -186,8 +186,8 @@ struct RigidBodyManager{
   std::vector<FractureBatchChild> fracture_batch_gpu(std::span<FracturePartitionInput const> inputs);
   std::vector<GpuFreeList> read_fracture_pools();
   void read_voxel_derived(daxa_u32 count, std::vector<VoxelShapeDerived> &out);
-  // FRACTURE event bridge (host side): GPU-written by the impact pass, host-read here.
-  // Read/ack only after read_back_sim_config completes the simulation queue.
+  // Compact FRACTURE event bridge: geometric payloads stay in GPU pending storage.
+  // Read/ack only after simulation completion publishes the host-visible summary.
   // A scalar generation alone is not a synchronization primitive.
   void acknowledge_fracture_events(daxa_u32 serial)
   {
@@ -279,7 +279,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_impact_reset, pipeline_impact_select, pipeline_impact_publish;
   void record_fragment_census(daxa::CommandRecorder &rec, daxa_u32vec3 dims, daxa_u64 labels_addr, bool compact, daxa_u32 body_id = MAX_U32);
   void record_fracture_partition(daxa::CommandRecorder &rec,
-      daxa_u32 body_id, daxa_u32 event_slot, daxa_u32 body_count, daxa_u64 batch_addr, daxa_u32 recorded_passes,
+      daxa_u32 body_id, daxa_u32 body_count, daxa_u64 batch_addr, daxa_u32 recorded_passes,
       bool compact, daxa::TimelineQueryPool *queries = nullptr);
   std::shared_ptr<daxa::ComputePipeline> pipeline_body_list;
   std::shared_ptr<daxa::ComputePipeline> pipeline_fracture_setup, pipeline_fracture_gather, pipeline_fracture_scene_edit, pipeline_fracture_layout;

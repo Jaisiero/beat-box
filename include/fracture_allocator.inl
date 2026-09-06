@@ -47,7 +47,7 @@ struct FractureBatchManifest
 };
 struct FracturePartitionInput
 {
-  daxa_u32 body_id, event_slot, recorded_passes;
+  daxa_u32 body_id, recorded_passes;
 };
 struct FractureAllocatorPushConstants
 {
