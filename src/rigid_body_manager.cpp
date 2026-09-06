@@ -1250,7 +1250,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                           },
                           user_callback_update);
 
-  std::array<daxa::TaskBuffer, 39> buffers = {
+  std::array<daxa::TaskBuffer, 40> buffers = {
+      task_sim_config_host,
       accel_struct_mngr->task_dispatch_buffer,
       task_sim_config,
       task_old_sim_config,
@@ -1911,6 +1912,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   G.add_task(task_CP);
   G.add_task(task_update);
   profile_point(5u);
+  G.add_task(sim_config_readback_task());
   }; // end record_solve lambda
   record_solve(RB_TG_pgs,  SimSolverType::PGS_SOFT);
   record_solve(RB_TG_avbd, SimSolverType::AVBD);
@@ -1979,9 +1981,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   return initialized = true;
 }
 
-void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG)
+daxa::InlineTaskInfo RigidBodyManager::sim_config_readback_task()
 {
-  daxa::InlineTaskInfo task_readback_SC({
+  return daxa::InlineTaskInfo({
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_sim_config),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_sim_config_host),
@@ -2004,13 +2006,17 @@ void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &out_readback
       .name = "read back sim config",
   });
 
+}
+
+void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG)
+{
   std::array<daxa::TaskBuffer, 2> buffers = {
       task_sim_config,
       task_sim_config_host,
   };
 
   std::array<daxa::InlineTaskInfo, 1> tasks = {
-      task_readback_SC,
+      sim_config_readback_task(),
   };
 
   out_readback_SC_TG = task_manager->create_task_graph("Read back Simulation Configuration", std::span<daxa::InlineTaskInfo>(tasks), std::span<daxa::TaskBuffer>(buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
@@ -2934,24 +2940,25 @@ void RigidBodyManager::read_voxel_derived(daxa_u32 count, std::vector<VoxelShape
   device.destroy_buffer(staging);
 }
 
-bool RigidBodyManager::read_back_sim_config()
+bool RigidBodyManager::read_back_sim_config(bool completed_simulation_snapshot)
 {
   if (!initialized)
   {
     return !initialized;
   }
 
-  update_buffers();
-
-  readback_SC_TG.execute();
-  // Graph execution submits synchronously on this single host thread. Capture
-  // its final compute submission, then wait only for that queue timeline point.
-  // TaskSubmitInfo's additional semaphores are ignored by the installed Daxa 3.6.
-  // Keep the graph's TRANSFER_WRITE -> HOST_READ publication barrier.
-  device.wait_on_submit({
-      .queue = daxa::QUEUE_COMPUTE_0,
-      .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0),
-  });
+  // Every solver publishes SimConfig at its graph tail. Callers that already
+  // completed that simulation can consume the current parity without another
+  // submission or CPU wait. Keep the standalone path for non-stepped updates.
+  if (!completed_simulation_snapshot)
+  {
+    update_buffers();
+    readback_SC_TG.execute();
+    device.wait_on_submit({
+        .queue = daxa::QUEUE_COMPUTE_0,
+        .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0),
+    });
+  }
 
   if (narrow_phase_timing && narrow_phase_query_pending)
   {

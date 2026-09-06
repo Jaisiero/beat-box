@@ -469,6 +469,7 @@ int RendererManager::render()
     constexpr daxa_u32 MAX_CATCHUP_STEPS = 4u;
     auto const sim_phase_start = std::chrono::steady_clock::now();
     daxa_u32 sim_steps_this_frame = 0u;
+    bool completed_simulation_snapshot = false;
     if (det_steps > 0)
     {
       // Deterministic stepping: one step per frame, wall-clock ignored, scene_3 self-loaded fresh.
@@ -486,9 +487,10 @@ int RendererManager::render()
         gpu->synchronize();
         rigid_body_manager->simulate();
         gpu->wait_for_simulation();
+        completed_simulation_snapshot = true;
         sim_steps_this_frame = 1u;
         ++det_count;
-        rigid_body_manager->read_back_sim_config();
+        rigid_body_manager->read_back_sim_config(true);
         auto const &dsc = rigid_body_manager->get_sim_config_reference();
         std::cout << "DET step=" << det_count << std::hex << " ph=" << dsc.dbg_poshash
                   << " rh=" << dsc.dbg_rothash << " cp2=" << dsc.dbg_cp2_poshash
@@ -505,6 +507,7 @@ int RendererManager::render()
             det_hashA = det_acc;
             std::cout << "INPROC passA acc=" << std::hex << det_acc << std::dec << " -> reset + replay" << std::endl;
             scene_manager->reset();   // reload scene_3 to the IDENTICAL initial state
+            completed_simulation_snapshot = false; // reset replaced the published state
             sim_accum_s = 0.0;
             det_count = 0u; det_acc = 0u; det_pass = 2; det_inited = false; // re-arm for pass 2
           }
@@ -571,6 +574,7 @@ int RendererManager::render()
         gpu->synchronize();
         rigid_body_manager->simulate();
         gpu->wait_for_simulation();
+        completed_simulation_snapshot = true;
         sim_steps_this_frame = 1u;
         force_sim_step = false;
       }
@@ -605,6 +609,7 @@ int RendererManager::render()
           auto _s0 = std::chrono::high_resolution_clock::now();        // [PERF]
           rigid_body_manager->simulate();
           gpu->wait_for_simulation();                                  // [PERF] wait compute completion
+          completed_simulation_snapshot = true;
           _sim_ms_accum += std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
           _sim_ms_n++;                                                 // [PERF]
@@ -638,7 +643,7 @@ int RendererManager::render()
     // Update the acceleration structures (only when the sim actually stepped — skipped frames
     // render the unchanged state and avoid the full-pipeline synchronize + readback)
     if(sim_stepped || status_manager->is_updating()) {
-      rigid_body_manager->read_back_sim_config();
+      rigid_body_manager->read_back_sim_config(completed_simulation_snapshot);
       // FRACTURE: consume any impact-pass events (dedicated GPU->host bridge buffer).
       // GPU partitioning and publication return compact AS build metadata;
       // no-op (one generation comparison) when nothing fractured.

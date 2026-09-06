@@ -19,7 +19,8 @@ struct RigidBodyManager{
   void destroy();
 
   bool simulate();
-  bool read_back_sim_config();
+  // true requires wait_for_simulation() after the latest simulate(), with no subsequent reset or parity change.
+  bool read_back_sim_config(bool completed_simulation_snapshot = false);
   SimConfig& get_sim_config_reference();
 
   bool update();
@@ -206,6 +207,7 @@ struct RigidBodyManager{
   }
 
 private:
+  daxa::InlineTaskInfo sim_config_readback_task();
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
   void record_update_sim_config_tasks(TaskGraph &out_update_SC_TG);
   void record_active_rigid_body_list_tasks(TaskGraph &ARB_TG);
