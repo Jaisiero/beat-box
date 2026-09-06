@@ -24,7 +24,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     if (narrow_phase_timing)
     {
       narrow_phase_queries = device.create_timeline_query_pool({.query_count = 2, .name = "fracture_narrow_phase"});
-      avbd_stage_queries = device.create_timeline_query_pool({.query_count = 6, .name = "avbd_stages"});
+      solver_stage_queries = device.create_timeline_query_pool({.query_count = 6, .name = "solver_stages"});
     }
     pipeline_RBD = task_manager->create_compute(RigidBodyDispatcherInfo{}.info);
     pipeline_GMC = task_manager->create_compute(GenerateMortonCodesInfo{}.info);
@@ -1556,22 +1556,34 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     task_GCS_CSR_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CSR, c));
   }
 
-  // TGS_SOFT sub-step instances (same pipelines, tgs_phase=1 so the shader runs the TGS branch).
-  // Reuses the per-color graph-coloring dispatch (incl. the empty-color skip) -> TGS stays parallel.
-  // tgs_phase 2 reuses the PRE-SOLVER pipeline for Box2D v3's separate per-sub-step warm start
-  // stage, so no extra pipeline is compiled -- the shader branches on the phase.
-  std::vector<TTask_GCS> task_TGS_CPS_vec, task_TGS_WS_vec, task_TGS_CS_vec, task_TGS_CSR_vec;
-  task_TGS_CPS_vec.reserve(MAX_COLORS_SOLVE);
-  task_TGS_WS_vec.reserve(MAX_COLORS_SOLVE);
-  task_TGS_CS_vec.reserve(MAX_COLORS_SOLVE);
-  task_TGS_CSR_vec.reserve(MAX_COLORS_SOLVE);
-  for (daxa_u32 c = 0u; c < MAX_COLORS_SOLVE; ++c)
-  {
-    task_TGS_CPS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CPS, c, 1));
-    task_TGS_WS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CPS, c, 2));
-    task_TGS_CS_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CS, c, 1));
-    task_TGS_CSR_vec.emplace_back(gc_solve_views, make_gcs(pipeline_GCS_CSR, c, 1));
-  }
+  // TGS keeps the same color dispatches and temporal order, but records a whole
+  // sweep as one task. Overflow remains a separate ordered task after each sweep.
+  auto make_tgs_sweep = [this](std::shared_ptr<daxa::ComputePipeline> pl, daxa_i32 phase) {
+    return [this, pl, phase](daxa::TaskInterface ti, auto &) {
+      ti.recorder.set_pipeline(*pl);
+      for (daxa_u32 c = 0u; c < BB_MAX_COLORS_SOLVE; ++c)
+      {
+        ti.recorder.push_constant(GraphColorSolvePushConstants{
+            .task_head = ti.attachment_shader_blob, .color = c, .tgs_phase = phase});
+        ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(GraphColorSolveTaskHead::AT.dispatch_buffer).id,
+            .offset = sizeof(daxa_u32vec3) * (GRAPH_COLOR_SOLVE_DISPATCH_OFFSET + c)});
+        if (c + 1u < BB_MAX_COLORS_SOLVE)
+        {
+          // Adjacent colors may share bodies. Publish velocities and manifold
+          // impulses before the next color; arguments and color IDs are read-only.
+          ti.recorder.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+                                        .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
+        }
+      }
+      // GraphColorSolveTaskHead supplies the final dependency to overflow,
+      // integration or the following sweep, including indirect argument access.
+    };
+  };
+  using TTask_TGS_SWEEP = TaskTemplate<GraphColorSolveTaskHead::Task, decltype(make_tgs_sweep(pipeline_GCS_CS, 1))>;
+  TTask_TGS_SWEEP task_TGS_CPS(gc_solve_views, make_tgs_sweep(pipeline_GCS_CPS, 1));
+  TTask_TGS_SWEEP task_TGS_WS(gc_solve_views, make_tgs_sweep(pipeline_GCS_CPS, 2));
+  TTask_TGS_SWEEP task_TGS_CS(gc_solve_views, make_tgs_sweep(pipeline_GCS_CS, 1));
+  TTask_TGS_SWEEP task_TGS_CSR(gc_solve_views, make_tgs_sweep(pipeline_GCS_CSR, 1));
 
   // overflow bucket: serial single-thread solve of manifolds the per-color dispatches skip
   // (uncolored / color>=MAX_COLORS_SOLVE). Early-outs on graph_color_overflow==0, so it is
@@ -1598,18 +1610,18 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   auto record_solve = [&](TaskGraph &G, SimSolverType solver)
   {
   auto profile_point = [&](daxa_u32 index) {
-    if (!narrow_phase_timing || solver != SimSolverType::AVBD) return;
+    if (!narrow_phase_timing || (solver != SimSolverType::AVBD && solver != SimSolverType::TGS_SOFT)) return;
     G.add_task(daxa::InlineTaskInfo{
       // Anchor the marker to the ordered simulation chain. An attachment-free
       // task could be rescheduled and would not measure the intended boundary.
       .attachments = {daxa::inl_attachment(daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE, task_sim_config)},
-      .task = [this, index](daxa::TaskInterface const &ti) {
+      .task = [this, index, solver](daxa::TaskInterface const &ti) {
         if (index == 0u)
-          ti.recorder.reset_timestamps({.query_pool = avbd_stage_queries, .start_index = 0, .count = 6});
-        ti.recorder.write_timestamp({.query_pool = avbd_stage_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = index});
-        if (index == 5u) avbd_stage_query_pending = true;
+          ti.recorder.reset_timestamps({.query_pool = solver_stage_queries, .start_index = 0, .count = 6});
+        ti.recorder.write_timestamp({.query_pool = solver_stage_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = index});
+        if (index == 5u) { solver_stage_query_pending = true; stage_query_solver = solver; }
       },
-      .name = "AVBD profiling boundary",
+      .name = "Solver profiling boundary",
     });
   };
   profile_point(0u);
@@ -1707,7 +1719,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     G.add_task(task_AVBD_DUAL);
   }
   } // end AVBD primal/dual
-  profile_point(3u);
+  if (solver == SimSolverType::AVBD) profile_point(3u);
   if (solver == SimSolverType::PGS || solver == SimSolverType::PGS_SOFT)
   {
   if (static_cast<daxa_u32>(sim_flags & SimFlag::USE_GRAPH_COLORING) != 0u)
@@ -1777,43 +1789,46 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     }
   }
   } // end AVBD FIN/impact/post-stab
-  profile_point(4u);
+  if (solver == SimSolverType::AVBD) profile_point(4u);
   if (solver == SimSolverType::TGS_SOFT)
   {
+  profile_point(2u);
   // Diagnostic: change convergence work while keeping dt, substeps and contact refresh fixed.
   daxa_u32 const tgs_sweeps = std::getenv("BB_TGS_SWEEPS")
       ? static_cast<daxa_u32>(std::clamp(std::atoi(std::getenv("BB_TGS_SWEEPS")), 1, 16)) : 2u;
   // TGS_SOFT (Box2D v3 / solver2d): sub-stepped soft solver, integrated with graph coloring.
-  // All tasks early-return unless solver_type==TGS_SOFT, so this block is free for the other solvers.
+  // This block is recorded only in the TGS graph.
   // Prepare once (soft coeffs at sub-step h + local anchors), then BB_TGS_SUBSTEPS sub-steps of:
   // integrate velocity (gravity*h) -> per-color WARM START -> per-color solve (bias) ->
   // integrate positions (x+=v*h) -> per-color relax (no bias). The separation is re-derived from
   // the pose each sub-step (TGS temporal). This mirrors Box2D v3's stage order exactly; the warm
   // start in particular belongs INSIDE the loop (b2WarmStartContactsTask runs per sub-step) and is
   // what carries the contact load across sub-steps.
-  for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
-    G.add_task(task_TGS_CPS_vec[c]);
+  if (!beat_box_diagnostics::options().tgs_serial)
+    G.add_task(task_TGS_CPS);
   G.add_task(task_TGS_CPS_OV);
+  profile_point(3u);
   for (daxa_u32 s = 0u; s < tgs_substep_count; ++s)
   {
     G.add_task(task_tgs_advect);
-    for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
-      G.add_task(task_TGS_WS_vec[c]);
+    if (!beat_box_diagnostics::options().tgs_serial)
+      G.add_task(task_TGS_WS);
     G.add_task(task_TGS_WS_OV);
     for (daxa_u32 sweep = 0u; sweep < tgs_sweeps; ++sweep)
     {
-      for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
-        G.add_task(task_TGS_CS_vec[c]);
+      if (!beat_box_diagnostics::options().tgs_serial)
+        G.add_task(task_TGS_CS);
       G.add_task(task_TGS_CS_OV);
     }
     G.add_task(task_tgs_ip);
     for (daxa_u32 sweep = 0u; sweep < tgs_sweeps; ++sweep)
     {
-      for (daxa_u32 c = 0u; c < (beat_box_diagnostics::options().tgs_serial ? 0u : MAX_COLORS_SOLVE); ++c)
-        G.add_task(task_TGS_CSR_vec[c]);
+      if (!beat_box_diagnostics::options().tgs_serial)
+        G.add_task(task_TGS_CSR);
       G.add_task(task_TGS_CSR_OV);
     }
   }
+  profile_point(4u);
   } // end TGS sub-step loop
   if (solver == SimSolverType::AVBD && std::getenv("BB_POCKET_TRACE"))
     G.add_task(task_AVBD_PKTR); // diagnostic (AVBD only)
@@ -2582,20 +2597,23 @@ bool RigidBodyManager::read_back_sim_config()
     narrow_phase_query_pending = false;
   }
 
-  if (narrow_phase_timing && avbd_stage_query_pending)
+  if (narrow_phase_timing && solver_stage_query_pending)
   {
-    auto const results = avbd_stage_queries.get_query_results(0, 6);
+    auto const results = solver_stage_queries.get_query_results(0, 6);
     bool available = true;
     for (daxa_u32 i = 0u; i < 6u; ++i) available &= results[2u*i+1u] != 0u;
     if (available)
     {
-      static constexpr char const *names[] = {"setup_ms", "prepare_ms", "main_ms", "post_ms", "finalize_ms"};
-      std::cout << "[AVBD-STAGES]";
+      static constexpr char const *avbd_names[] = {"setup_ms", "prepare_ms", "main_ms", "post_ms", "finalize_ms"};
+      static constexpr char const *tgs_names[] = {"setup_ms", "prepare_ms", "contacts_ms", "substeps_ms", "finalize_ms"};
+      bool const tgs = stage_query_solver == SimSolverType::TGS_SOFT;
+      auto const *names = tgs ? tgs_names : avbd_names;
+      std::cout << (tgs ? "[TGS-STAGES]" : "[AVBD-STAGES]");
       for (daxa_u32 i = 0u; i < 5u; ++i)
         std::cout << ' ' << names[i] << '=' << double(results[2u*(i+1u)] - results[2u*i]) * device.properties().limits.timestamp_period / 1.0e6;
       std::cout << std::endl;
     }
-    avbd_stage_query_pending = false;
+    solver_stage_query_pending = false;
   }
 
   return initialized;
