@@ -22,7 +22,10 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
   {
     narrow_phase_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr;
     if (narrow_phase_timing)
+    {
       narrow_phase_queries = device.create_timeline_query_pool({.query_count = 2, .name = "fracture_narrow_phase"});
+      avbd_stage_queries = device.create_timeline_query_pool({.query_count = 6, .name = "avbd_stages"});
+    }
     pipeline_RBD = task_manager->create_compute(RigidBodyDispatcherInfo{}.info);
     pipeline_GMC = task_manager->create_compute(GenerateMortonCodesInfo{}.info);
     pipeline_RBRSH = task_manager->create_compute(RigidBodyRadixSortHistogramInfo{}.info);
@@ -1454,43 +1457,43 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   using TTask_AVBD_WS = TaskTemplate<AvbdTaskHead::Task, decltype(user_callback_AVBD_WS)>;
   TTask_AVBD_WS task_AVBD_WS(avbd_views, user_callback_AVBD_WS);
 
-  auto make_avbd_primal = [this, avbd_dispatch](daxa_u32 c, daxa_f32 stab_alpha, daxa_u32 ps_depth, daxa_f32 relax = 1.0f)
+  // One recorded task per color sweep, rather than one task per color. The
+  // dispatches and Gauss-Seidel order are unchanged; only host task overhead and
+  // redundant pipeline binds are removed. The task head preserves dependencies
+  // at sweep boundaries, including indirect-argument visibility.
+  auto make_avbd_primal_sweep = [this](daxa_f32 stab_alpha, daxa_u32 ps_depth, daxa_f32 relax = 1.0f)
   {
-    // A1: dispatch_indirect at this color's own workgroup count (0 if the body color is unused) instead
-    // of the full body grid for all 32 colors early-outing 25/32 of them. Written by task_AVBD_CDISP.
-    // A2: for the SHOCK CASCADE (ps_depth != MAX_U32) use the per-(layer,color) count instead, so a
-    // used color in an EMPTY layer (above the pile height) is also skipped. Written by task_AVBD_CASCD.
-    daxa_u32 disp_off = (ps_depth == MAX_U32) ? (AVBD_COLOR_SOLVE_DISPATCH_OFFSET + c)
-                                              : (AVBD_CASCADE_DISPATCH_OFFSET + ps_depth * BB_MAX_COLORS + c);
-    return [this, avbd_dispatch, c, stab_alpha, ps_depth, disp_off, relax](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_PRIM, c, stab_alpha, disp_off, ps_depth, relax); };
+    return [this, stab_alpha, ps_depth, relax](daxa::TaskInterface ti, auto &) {
+      ti.recorder.set_pipeline(*pipeline_AVBD_PRIM);
+      for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+      {
+        daxa_u32 const offset = ps_depth == MAX_U32
+            ? AVBD_COLOR_SOLVE_DISPATCH_OFFSET + c
+            : AVBD_CASCADE_DISPATCH_OFFSET + ps_depth * BB_MAX_COLORS + c;
+        ti.recorder.push_constant(AvbdPushConstants{.task_head = ti.attachment_shader_blob,
+            .color = c, .stab_alpha = stab_alpha, .ps_depth = ps_depth, .relax = relax});
+        ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(AvbdTaskHead::AT.dispatch_buffer).id,
+            .offset = sizeof(daxa_u32vec3) * offset});
+        if (c + 1u < BB_AVBD_MAX_BODY_COLORS)
+        {
+          // Later colors read positions/rotations written by earlier colors.
+          // Global compute visibility also covers SimConfig residual writes.
+          // Indirect arguments are read-only throughout this sweep.
+          ti.recorder.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+                                        .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
+        }
+      }
+      // The task graph supplies the final dependency to the next sweep/dual.
+    };
   };
-  using TTask_AVBD_PRIM = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_primal(0u, 1.0f, MAX_U32))>;
-  std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_vec;     // main sweeps: alpha = 1 (delta-only constraint)
-  std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_PS_vec;  // post-stab cascade: alpha = 0 (full C0),
-                                                       // ORDERED by support depth (Guendelman):
-                                                       // entry [d * COLORS + c]
-  std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_PS_plain_vec; // post-stab without the layer
-                                                            // filter (symmetric polish sweeps)
-  std::vector<TTask_AVBD_PRIM> task_AVBD_PRIM_PS_relax_vec; // EXTRA post-stab sweeps at
-                                                            // BB_AVBD_PS_RELAX step scale
-                                                            // (damped: more sweeps converge)
-  task_AVBD_PRIM_vec.reserve(BB_AVBD_MAX_BODY_COLORS);
-  task_AVBD_PRIM_PS_vec.reserve(BB_AVBD_SHOCK_LAYERS * BB_AVBD_MAX_BODY_COLORS);
-  task_AVBD_PRIM_PS_plain_vec.reserve(BB_AVBD_MAX_BODY_COLORS);
-  task_AVBD_PRIM_PS_relax_vec.reserve(BB_AVBD_MAX_BODY_COLORS);
-  for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
-  {
-    task_AVBD_PRIM_vec.emplace_back(avbd_views, make_avbd_primal(c, 1.0f, MAX_U32));
-    task_AVBD_PRIM_PS_plain_vec.emplace_back(avbd_views, make_avbd_primal(c, 0.0f, MAX_U32));
-    task_AVBD_PRIM_PS_relax_vec.emplace_back(avbd_views, make_avbd_primal(c, 0.0f, MAX_U32, BB_AVBD_PS_RELAX));
-  }
+  using TTask_AVBD_SWEEP = TaskTemplate<AvbdTaskHead::Task, decltype(make_avbd_primal_sweep(1.0f, MAX_U32))>;
+  TTask_AVBD_SWEEP task_AVBD_PRIM(avbd_views, make_avbd_primal_sweep(1.0f, MAX_U32));
+  TTask_AVBD_SWEEP task_AVBD_PRIM_PS_plain(avbd_views, make_avbd_primal_sweep(0.0f, MAX_U32));
+  TTask_AVBD_SWEEP task_AVBD_PRIM_PS_relax(avbd_views, make_avbd_primal_sweep(0.0f, MAX_U32, BB_AVBD_PS_RELAX));
+  std::vector<TTask_AVBD_SWEEP> task_AVBD_PRIM_PS_vec;
+  task_AVBD_PRIM_PS_vec.reserve(BB_AVBD_SHOCK_LAYERS);
   for (daxa_u32 d = 0u; d < BB_AVBD_SHOCK_LAYERS; ++d)
-  {
-    for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
-    {
-      task_AVBD_PRIM_PS_vec.emplace_back(avbd_views, make_avbd_primal(c, 0.0f, d));
-    }
-  }
+    task_AVBD_PRIM_PS_vec.emplace_back(avbd_views, make_avbd_primal_sweep(0.0f, d));
 
   // shock propagation: support-depth BFS over the contact graph (reset + N relax passes)
   auto user_callback_AVBD_DRST = [this, avbd_dispatch](daxa::TaskInterface ti, auto &) { avbd_dispatch(ti, pipeline_AVBD_DRST, 0u, 1.0f, RIGID_BODY_DISPATCH_COUNT_OFFSET); };
@@ -1594,6 +1597,22 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   // dispatches/frame (the cross-solver overhead that made them slow since AVBD landed).
   auto record_solve = [&](TaskGraph &G, SimSolverType solver)
   {
+  auto profile_point = [&](daxa_u32 index) {
+    if (!narrow_phase_timing || solver != SimSolverType::AVBD) return;
+    G.add_task(daxa::InlineTaskInfo{
+      // Anchor the marker to the ordered simulation chain. An attachment-free
+      // task could be rescheduled and would not measure the intended boundary.
+      .attachments = {daxa::inl_attachment(daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE, task_sim_config)},
+      .task = [this, index](daxa::TaskInterface const &ti) {
+        if (index == 0u)
+          ti.recorder.reset_timestamps({.query_pool = avbd_stage_queries, .start_index = 0, .count = 6});
+        ti.recorder.write_timestamp({.query_pool = avbd_stage_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = index});
+        if (index == 5u) avbd_stage_query_pending = true;
+      },
+      .name = "AVBD profiling boundary",
+    });
+  };
+  profile_point(0u);
   G.add_task(task_PS); // mouse pick-and-drag spring (velocity injection BEFORE the step)
   G.add_task(task_RC);
   G.add_task(task_CRB);
@@ -1611,6 +1630,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   G.add_task(task_NPD);
   G.add_task(task_NP);
   G.add_task(task_CHS); // determinism: canonical chain sort (post-NP, before advect)
+  profile_point(1u);
   G.add_task(task_advect);
   G.add_task(task_IC);
   G.add_task(task_CS_dispatcher);
@@ -1680,15 +1700,14 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   }
   G.add_task(task_AVBD_MAXD);  // A2: reduce max support-depth (BFS converged; support_depth not touched after this)
   G.add_task(task_AVBD_CASCD); // A2: per-(layer,color) cascade dispatch args (skip empty upper layers)
+  profile_point(2u);
   for (daxa_u32 it = 0u; it < BB_AVBD_ITERATIONS; ++it)
   {
-    for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
-    {
-      G.add_task(task_AVBD_PRIM_vec[c]);
-    }
+    G.add_task(task_AVBD_PRIM);
     G.add_task(task_AVBD_DUAL);
   }
   } // end AVBD primal/dual
+  profile_point(3u);
   if (solver == SimSolverType::PGS || solver == SimSolverType::PGS_SOFT)
   {
   if (static_cast<daxa_u32>(sim_flags & SimFlag::USE_GRAPH_COLORING) != 0u)
@@ -1741,17 +1760,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   // cascade-only plateaued at 42mm vs 27-31mm for symmetric sweeps).
   for (daxa_u32 d = 0u; d < BB_AVBD_SHOCK_LAYERS; ++d)
   {
-    for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
-    {
-      G.add_task(task_AVBD_PRIM_PS_vec[d * BB_AVBD_MAX_BODY_COLORS + c]);
-    }
+    G.add_task(task_AVBD_PRIM_PS_vec[d]);
   }
   for (daxa_u32 ps = 1u; ps < BB_AVBD_POST_STAB_SWEEPS; ++ps)
   {
-    for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
-    {
-      G.add_task(task_AVBD_PRIM_PS_plain_vec[c]);
-    }
+    G.add_task(task_AVBD_PRIM_PS_plain);
   }
   // EXTRA damped sweeps - knob currently 0 (MEASURED WORSE, see BB_AVBD_POST_STAB_RELAXED
   // in shared.inl); if constexpr keeps the falsified-but-kept mechanism from emitting the
@@ -1760,13 +1773,11 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     for (daxa_u32 ps = 0u; ps < BB_AVBD_POST_STAB_RELAXED; ++ps)
     {
-      for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
-      {
-        G.add_task(task_AVBD_PRIM_PS_relax_vec[c]);
-      }
+      G.add_task(task_AVBD_PRIM_PS_relax);
     }
   }
   } // end AVBD FIN/impact/post-stab
+  profile_point(4u);
   if (solver == SimSolverType::TGS_SOFT)
   {
   // Diagnostic: change convergence work while keeping dt, substeps and contact refresh fixed.
@@ -1808,6 +1819,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     G.add_task(task_AVBD_PKTR); // diagnostic (AVBD only)
   G.add_task(task_CP);
   G.add_task(task_update);
+  profile_point(5u);
   }; // end record_solve lambda
   record_solve(RB_TG_pgs,  SimSolverType::PGS_SOFT);
   record_solve(RB_TG_avbd, SimSolverType::AVBD);
@@ -2097,7 +2109,15 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
   else { idx.resize(shapes.size()); for (daxa_u32 i = 0u; i < (daxa_u32)shapes.size(); ++i) { idx[i] = i; } }
   if (idx.empty()) { return; }
 
+  daxa::TimelineQueryPool build_queries = {};
+  if (narrow_phase_timing)
+    build_queries = device.create_timeline_query_pool({.query_count = 2, .name = "voxel_pool_build"});
   auto rec = device.create_command_recorder({});
+  if (narrow_phase_timing)
+  {
+    rec.reset_timestamps({.query_pool = build_queries, .start_index = 0, .count = 2});
+    rec.write_timestamp({.query_pool = build_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 0});
+  }
   auto const barrier = [&rec]() {
     rec.pipeline_barrier({
         .src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
@@ -2161,10 +2181,23 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
                         .dst_access = daxa::AccessConsts::READ});
   rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
                         .dst_access = daxa::AccessConsts::HOST_READ});
+  if (narrow_phase_timing)
+    rec.write_timestamp({.query_pool = build_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 1});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
   device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
       .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
+
+  if (narrow_phase_timing)
+  {
+    // The existing MAIN submit wait above already guarantees query availability.
+    auto const results = build_queries.get_query_results(0, 2);
+    if (results[1] != 0u && results[3] != 0u)
+    {
+      double const ms = double(results[2] - results[0]) * device.properties().limits.timestamp_period / 1.0e6;
+      std::cout << "[SDF-BUILD] gpu_ms=" << ms << " shapes=" << idx.size() << std::endl;
+    }
+  }
 
   // BB_SDF_VERIFY: read the GPU field back and compare against the CPU brute force (the
   // debug oracle the GPU-first directive keeps around). Exactness argument in voxel_sdf.slang;
@@ -2544,10 +2577,25 @@ bool RigidBodyManager::read_back_sim_config()
     if (results[1] != 0u && results[3] != 0u)
     {
       double const ms = double(results[2] - results[0]) * device.properties().limits.timestamp_period / 1.0e6;
-      if (ms >= 5.0)
-        std::cout << "[FRACTURE-NP] gpu_ms=" << ms << std::endl;
+      std::cout << "[FRACTURE-NP] gpu_ms=" << ms << std::endl;
     }
     narrow_phase_query_pending = false;
+  }
+
+  if (narrow_phase_timing && avbd_stage_query_pending)
+  {
+    auto const results = avbd_stage_queries.get_query_results(0, 6);
+    bool available = true;
+    for (daxa_u32 i = 0u; i < 6u; ++i) available &= results[2u*i+1u] != 0u;
+    if (available)
+    {
+      static constexpr char const *names[] = {"setup_ms", "prepare_ms", "main_ms", "post_ms", "finalize_ms"};
+      std::cout << "[AVBD-STAGES]";
+      for (daxa_u32 i = 0u; i < 5u; ++i)
+        std::cout << ' ' << names[i] << '=' << double(results[2u*(i+1u)] - results[2u*i]) * device.properties().limits.timestamp_period / 1.0e6;
+      std::cout << std::endl;
+    }
+    avbd_stage_query_pending = false;
   }
 
   return initialized;

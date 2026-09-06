@@ -116,3 +116,8 @@ it does not claim to fix the destruction solver.
 
 Evidence: `/root/beat-box/work/shader-modules`, with `cache-probe/results.json`,
 `f5-*.csv`, `f6-*.csv`, `f7-*.csv`, `fragments-*.csv` and their logs.
+
+The narrow-phase entry uses one pipeline, including the pair-level SDF prefilter.
+The provisional second specialization was removed after finding uninitialized
+contact feature IDs as the convergence defect. A collision-detection edit compiles
+one narrow-phase entry. See [CONVERGENCE_ORIGIN.md](CONVERGENCE_ORIGIN.md).
