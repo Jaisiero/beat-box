@@ -165,7 +165,8 @@ struct RigidBodyManager{
   void build_voxel_prims_gpu(std::vector<VoxelShape> const &shapes,
                              std::vector<std::pair<daxa_u32, daxa_u32>> const &bodies,
                              daxa::BufferId prims_buffer,
-                             std::vector<Aabb> const &cpu_reference);
+                             std::vector<Aabb> const &cpu_reference,
+                             std::span<FragmentFinalizePushConstants const> finalizations = {});
   // FRACTURE: carve an impact sphere out of a shape's live occupancy slice and label its
   // fragments, all on the GPU (labels in the EDT scratch buffer). When `sites` is non-empty
   // the impact zone (within voronoi_radius of the carve center) is partitioned along those
@@ -260,6 +261,7 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_SURF;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_INERTIA;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_PRIMS;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_fragment_finalize;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_CARVE;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_VORONOI;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_FLOOD_INIT;

@@ -48,16 +48,16 @@ struct AccelerationStructureManager
 
   // NOTE: queue sync assures double buffering is filled
   void build_AS();
-  // post_primitive_upload: optional hook run between the host primitive upload and the
-  // BLAS build - the GPU voxel-prims pass writes each voxel body's AABB range into the
-  // scratch buffer here (GPU-first; the CPU-filled ranges are only the verify oracle).
+  // Post-upload hook, after all host writes and before AS construction.
+  // Arguments: primitive scratch, body scratch, and instance data. GPU fragment
+  // finalization may update these inputs; the hook must finish before returning.
   bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
-                           std::function<void(daxa::BufferId)> const &post_primitive_upload = {});
+                           std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload = {});
   // Incremental sibling of build_accel_structs (see the member note by blas_region_pool_): same
   // dense prim layout + full re-upload, but (re)builds only the BLAS whose prim content changed,
   // keeping every unchanged body's baked BLAS. Falls back to the full build until seeded by one.
   bool update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
-                                        std::function<void(daxa::BufferId)> const &post_primitive_upload = {},
+                                        std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload = {},
                                         std::span<daxa_u32 const> changed_bodies = {});
   void update_TLAS();
   // Zero the incremental upload counters so the next build_accel_structs() re-fills from offset 0

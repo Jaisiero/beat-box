@@ -250,7 +250,7 @@ void AccelerationStructureManager::build_AS()
 }
 
 bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
-                                                       std::function<void(daxa::BufferId)> const &post_primitive_upload)
+                                                       std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload)
 {
   if(!initialized) {
     std::cerr << "ERROR: AccelerationStructureManager is not initialized inside build_accel_structs!" << std::endl;
@@ -295,9 +295,6 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
   // Copy primitives to the buffer
   std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
-  // GPU-first hook: voxel bodies' AABB ranges are built ON the GPU straight into this
-  // scratch (overwriting the oracle-only CPU ranges) before the BLAS build reads it
-  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer); }
 
   // BUILDING BLAS
   auto clear_build_AS = [&]()
@@ -492,6 +489,9 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
   // INCREMENTAL-AS: capture this full build as the baseline the next fracture diffs against.
   seed_incremental_state(rigid_bodies, primitives);
+  // All host writes must precede GPU finalization. The hook can update bodies,
+  // instance transforms, and voxel AABBs before AS_build_TG consumes them.
+  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer, rigid_body_scratch_buffer, blas_instances_buffer); }
 
   return true;
 }
@@ -541,7 +541,7 @@ void AccelerationStructureManager::seed_incremental_state(std::vector<RigidBody>
 // identical content). Falls back to a full build until one has seeded the baseline.
 bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies,
                                                                     std::vector<Aabb> const &primitives,
-                                                                    std::function<void(daxa::BufferId)> const &post_primitive_upload, std::span<daxa_u32 const> changed_bodies)
+                                                                    std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload, std::span<daxa_u32 const> changed_bodies)
 {
   if (!initialized)
   {
@@ -580,12 +580,12 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
   }
 
   // 2. DENSE PRIM LAYOUT + FULL RE-UPLOAD (exactly the full build's model): copy every prim to the
-  //    scratch, run the GPU voxel-prims hook, and assign each body a sequential primitive_offset.
+  //    scratch and assign each body a sequential primitive_offset. The GPU hook runs after
+  //    all body and instance uploads below.
   //    AS_build_TG's copy task then blits [0, primitive_scratch_offset) into primitive_buffer at
   //    previous_primitive_count(0). Cheap; keeps unchanged bodies' content consistent at their
   //    (possibly shifted) offsets so their baked BLAS still intersects correctly.
   std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
-  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer); }
 
   previous_primitive_count = 0;
   previous_rigid_body_count = 0;
@@ -735,6 +735,8 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
       std::abort();
     }
   }
+
+  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer, rigid_body_scratch_buffer, blas_instances_buffer); }
 
   if (std::getenv("BB_RESPAWN_TIMING")) { std::cout << "[INCR-AS] dirty=" << dirty_count << "/" << rigid_body_count
                                                     << " blas_pool_live=" << blas_region_pool_.live_bytes

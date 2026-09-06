@@ -133,3 +133,9 @@ if (Python3_Interpreter_FOUND)
     add_test(NAME shader_dependencies_tests
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/shader_dependencies_tests.py)
 endif()
+
+# Analytical mass/kinematics checks for the CPU oracle used by BB_FRAGMENT_VERIFY.
+add_executable(fragment_finalization_tests tests/fragment_finalization_tests.cpp)
+target_include_directories(fragment_finalization_tests PRIVATE include)
+target_link_libraries(fragment_finalization_tests PRIVATE daxa::daxa glm::glm)
+add_test(NAME fragment_finalization_tests COMMAND fragment_finalization_tests)

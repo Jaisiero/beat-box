@@ -37,6 +37,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_VSB_SURF = task_manager->create_compute(VoxelSurfaceBuildInfo{}.info);
     pipeline_VSB_INERTIA = task_manager->create_compute(VoxelInertiaReduceInfo{}.info);
     pipeline_VSB_PRIMS = task_manager->create_compute(VoxelPrimsBuildInfo{}.info);
+    pipeline_fragment_finalize = task_manager->create_compute(FragmentFinalizeInfo{}.info);
     pipeline_VFR_CARVE = task_manager->create_compute(VoxelCarveInfo{}.info);
     pipeline_VFR_VORONOI = task_manager->create_compute(VoxelVoronoiAssignInfo{}.info);
     pipeline_VFR_FLOOD_INIT = task_manager->create_compute(VoxelFloodInitInfo{}.info);
@@ -2344,7 +2345,8 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
 void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shapes,
                                              std::vector<std::pair<daxa_u32, daxa_u32>> const &bodies,
                                              daxa::BufferId prims_buffer,
-                                             std::vector<Aabb> const &cpu_reference)
+                                             std::vector<Aabb> const &cpu_reference,
+                                             std::span<FragmentFinalizePushConstants const> finalizations)
 {
   if (!initialized || bodies.empty()) { return; }
   auto const occ_addr = device.device_address(voxel_occupancy).value();
@@ -2352,6 +2354,23 @@ void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shap
   auto const prims_addr = device.device_address(prims_buffer).value();
 
   auto rec = device.create_command_recorder({});
+  if (!finalizations.empty())
+  {
+    // The preceding derived build has completed. Finalize into the already
+    // uploaded body/instance scratch, then expose shape origins to AABB generation.
+    rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                          .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
+    rec.set_pipeline(*pipeline_fragment_finalize);
+    for (auto pc : finalizations)
+    {
+      pc.shapes_addr = shapes_addr;
+      pc.derived_addr = device.device_address(voxel_derived).value();
+      rec.push_constant(pc);
+      rec.dispatch({.x = 1, .y = 1, .z = 1});
+    }
+    rec.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+                          .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ});
+  }
   for (auto const &[shape_index, prim_offset] : bodies)
   {
     auto const &s = shapes[shape_index];
