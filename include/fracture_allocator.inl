@@ -61,9 +61,12 @@ struct FractureBatchPackingPushConstants
   daxa_u32 parent_id;
 };
 
+static const daxa_u32 FRACTURE_EDIT_RETIRE = 1u;
+static const daxa_u32 FRACTURE_EDIT_SPAWN = 2u;
+
 struct FractureSceneEditManifest
 {
-  daxa_u32 status, count, source_template;
+  daxa_u32 status, retired_count, spawn_template, spawn_id;
   daxa_u32 ids[BB_MAX_RIGID_BODY_COUNT];
 };
 struct FractureSceneEditPushConstants

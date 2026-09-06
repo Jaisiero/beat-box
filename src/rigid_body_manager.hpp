@@ -181,7 +181,7 @@ struct RigidBodyManager{
   std::vector<daxa_u32> read_voxel_occupancy(daxa_u32 count);
   void initialize_fracture_allocator(std::array<daxa_u32, GPU_POOL_COUNT> const &high_water,
                                      std::span<RigidBody const> spawn_templates = {});
-  FractureSceneEditManifest edit_fracture_scene_gpu(bool spawn, daxa_f32 kill_y);
+  FractureSceneEditManifest edit_fracture_scene_gpu(bool cull, bool spawn, daxa_f32 kill_y);
   std::vector<FractureBatchChild> fracture_batch_gpu(std::span<FracturePartitionInput const> inputs);
   std::vector<GpuFreeList> read_fracture_pools();
   void read_voxel_derived(daxa_u32 count, std::vector<VoxelShapeDerived> &out);
