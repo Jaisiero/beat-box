@@ -11,6 +11,8 @@
 #include "shared.inl"
 #include "fragment_finalization.inl"
 #include "fragment_census.inl"
+#include "fragment_packing.inl"
+#include "gpu_pool_allocator.inl"
 #include <daxa/daxa.hpp>
 using namespace daxa::types;
 #include <daxa/utils/pipeline_manager.hpp>
@@ -988,6 +990,24 @@ struct FragmentFinalizeInfo {
       },
       .push_constant_size = sizeof(FragmentFinalizePushConstants),
       .name = "Finalize Fragment Bodies",
+  };
+};
+
+struct GpuPoolValidationInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {.source = daxa::ShaderFile{"gpu_pool_validation.slang"},
+                      .compile_options = {.entry_point = "entry_gpu_pool_validation"}},
+      .push_constant_size = sizeof(GpuPoolValidationPushConstants),
+      .name = "GPU pool validation",
+  };
+};
+
+struct FragmentPackingInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {.source = daxa::ShaderFile{"fragment_packing.slang"},
+                      .compile_options = {.entry_point = "entry_fragment_pack"}},
+      .push_constant_size = sizeof(FragmentPackingPushConstants),
+      .name = "Fragment occupancy packing",
   };
 };
 

@@ -3,6 +3,8 @@
 #include "defines.hpp"
 #include "math.hpp"
 #include "fragment_finalization_reference.hpp"
+#include "gpu_pool_allocator.inl"
+#include "pool_storage.hpp"
 #include "free_list_pool.hpp" // FRACTURE memory pools (shared with the AS manager)
 #include "camera_manager.hpp"
 #include "rigid_body_manager.hpp"
@@ -1332,13 +1334,14 @@ public:
       if (avbd && awake) { out << ",\"start_position\":"; v(states[i].pos_start); out << ",\"start_rotation\":"; q(states[i].rot_start); }
       out << '}';
     }
+    auto gpu_occupancy = read.template operator()<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer(), static_cast<u32>(voxel_occ_cpu.size()));
     out << "],\"shapes\":[";
     for (u32 i = 0; i < voxel_shape_cpu.size(); ++i) {
       auto const &sh = voxel_shape_cpu[i]; if (i) out << ',';
       out << "{\"dims\":"; v(sh.dims); out << ",\"origin\":"; v(sh.grid_origin);
       out << ",\"voxel_size\":" << sh.voxel_size << ",\"occupancy\":[";
       u32 const words = (sh.dims.x * sh.dims.y * sh.dims.z + 31u) / 32u;
-      for (u32 j = 0; j < words; ++j) { if (j) out << ','; out << voxel_occ_cpu[sh.occ_offset+j]; }
+      for (u32 j = 0; j < words; ++j) { if (j) out << ','; out << gpu_occupancy[sh.occ_offset+j]; }
       out << "],\"surface_count\":" << sh.surf_count << ",\"gpu_surface_count\":" << gpu_shapes[i].surf_count << ",\"surface\":[";
       for (u32 j = 0; j < gpu_shapes[i].surf_count && gpu_shapes[i].surf_offset + j < gpu_surface.size(); ++j) {
         if (j) out << ',';
@@ -1480,8 +1483,7 @@ public:
     bool ok = false;
     daxa_u32 const off = pool.alloc(size, cap, ok);
     if (!ok) { return 0xFFFFFFFFu; }
-    if ((size_t)off + size > vec.size()) { vec.resize((size_t)off + size, fill); }        // fresh: grow
-    else { std::fill(vec.begin() + off, vec.begin() + off + size, fill); }                 // reused hole: clear
+    prepare_pool_storage(vec, off, size, fill);
     return off;
   }
 
@@ -1764,7 +1766,7 @@ public:
       }
     }
 
-    // GPU: Voronoi assignment, connected components, and census for large grids. Carve
+    // GPU: Voronoi assignment, connected components, and compact census. Carve
     // radius 0 => NO material removed (conservation): the shape is only PARTITIONED, so the
     // union of all component labels == the original solid set (nothing vanishes).
     std::vector<daxa_u32> labels;
@@ -1788,10 +1790,11 @@ public:
     // sub-MIN_FRAG slivers at cell boundaries. Instead of DROPPING them (that would destroy those
     // voxels AND spawn degenerate 1-2 voxel bodies that tunnel through the floor), reassign each
     // sliver's voxels to the nearest KEPT component by centroid. Mass is then exactly preserved
-    // and the fragment set stays clean (no degenerate bodies). Done on the host labels[] before
-    // the census/bbox/emit passes below, which all read the merged result.
+    // and the fragment set stays clean (no degenerate bodies). CPU merges the
+    // compact summaries; GPU packing applies the same map to resident labels.
     daxa_u32 const MIN_FRAG = 3u;
     std::map<daxa_u32, std::array<daxa_u32, 6>> bbox;
+    std::map<daxa_u32, daxa_u32> remap;
     {
       struct Cen { double x = 0, y = 0, z = 0; daxa_u32 n = 0; };
       std::map<daxa_u32, Cen> cen;
@@ -1810,7 +1813,6 @@ public:
         targets.emplace_back(largest_label, glm::vec3(e.x / e.n, e.y / e.n, e.z / e.n));
       }
       // remap each sliver -> nearest target (kept components map to themselves)
-      std::map<daxa_u32, daxa_u32> remap;
       for (auto const &[l, e] : cen)
       {
         if (e.n >= MIN_FRAG) { remap[l] = l; continue; }
@@ -1819,7 +1821,7 @@ public:
         for (auto const &[tl, tc] : targets) { double const d = glm::dot(cc - tc, cc - tc); if (d < bestd) { bestd = d; best = tl; } }
         remap[l] = best;
       }
-      for (daxa_u32 c = 0u; c < cells; ++c) { daxa_u32 const l = labels[c]; if (l != MAX_U32) { labels[c] = remap[l]; } }
+      for (daxa_u32 c = 0u; c < labels.size(); ++c) { daxa_u32 const l = labels[c]; if (l != MAX_U32) { labels[c] = remap[l]; } }
       // Merged counts and bounds are unions of component summaries; no further
       // per-cell census or bbox scan is necessary.
       comp_counts.clear();
@@ -1853,6 +1855,53 @@ public:
     std::sort(comps.begin(), comps.end(), [](auto const &a, auto const &b) {
       return a.second != b.second ? a.second > b.second : a.first < b.first;
     });
+    // Admission is all-or-nothing. Keep the parent's allocations live while
+    // checking every child, so construction cannot overwrite its own source.
+    // Shared C++/Slang allocator representation. Admission still runs on the
+    // host while body/shape slot ownership belongs to SceneManager; the GPU
+    // packing pass only consumes the accepted offsets.
+    auto &reservation = fracture_reservations_;
+    reservation.phase = 0u; // abandon the previous admission-only shadow state
+    auto import_pool = [&](daxa_u32 index, FreeListPool const &source, daxa_u32 capacity) {
+      auto &target = reservation.committed[index];
+      target.range_count = 0u;
+      target.capacity = capacity;
+      target.high_water = source.high_water;
+      target.live_units = source.live_bytes;
+      if (source.free_ranges.size() > GPU_POOL_RANGE_CAPACITY) return false;
+      for (auto const &[offset,size] : source.free_ranges)
+        target.ranges[target.range_count++] = {offset,size};
+      return target.valid();
+    };
+    bool fits = import_pool(0, occ_pool_, BB_MAX_VOXEL_OCC_U32S) &&
+                import_pool(1, sdf_pool_, BB_MAX_VOXEL_SDF_F32S) &&
+                import_pool(2, surf_pool_, BB_MAX_VOXEL_SURF_COUNT);
+    // Primitive count is conserved. Shape/body pools here represent available
+    // slot credits; actual persistent IDs remain assigned by SceneManager.
+    reservation.committed[4].capacity = static_cast<daxa_u32>(free_shape_slots_.size() + BB_MAX_VOXEL_SHAPE_COUNT - voxel_shape_cpu.size());
+    reservation.committed[5].capacity = static_cast<daxa_u32>(free_body_slots_.size() + MAX_RIGID_BODY_COUNT - rigid_bodies.size());
+    fits = fits && reservation.begin();
+    for (size_t k = 0; fits && k < comps.size(); ++k)
+    {
+      auto const &b = bbox.at(comps[k].first);
+      daxa_u32 const x=b[3]-b[0]+1u, y=b[4]-b[1]+1u, z=b[5]-b[2]+1u;
+      GpuPoolRequest request{};
+      request.units[0]=(x*y*z+31u)/32u;
+      request.units[1]=(x+1u)*(y+1u)*(z+1u);
+      request.units[2]=x*y*z;
+      request.units[4]=1u;
+      request.units[5]=k==0 ? 0u : 1u;
+      fits = reservation.reserve(request).offsets[0] != GPU_POOL_INVALID;
+    }
+    if (!fits)
+    {
+      std::cerr << "FRACTURE: capacity exhausted; whole parent retained (body " << ev.body_id << ")" << std::endl;
+      return false;
+    }
+    std::vector<FragmentPackingPushConstants> packing_jobs;
+    std::vector<FragmentLabelRemap> packing_remap;
+    for (auto const &[source,target] : remap) packing_remap.push_back({source,target});
+
     // Component bounding boxes already include the conservation merge above.
     daxa_u32 const DX = dims.x, DY = dims.y;
     bool const verify_surface = bb_getenv("BB_CENSUS_VERIFY") != nullptr || bb_getenv("BB_SDF_VERIFY") != nullptr;
@@ -1881,7 +1930,7 @@ public:
       ns.surf_offset = pool_alloc(voxel_surf_cpu, surf_pool_, ccells, BB_MAX_VOXEL_SURF_COUNT, 0u);
       ns.sdf_offset = pool_alloc(voxel_sdf_cpu, sdf_pool_, cnodes, BB_MAX_VOXEL_SDF_F32S, 0.0f);
       // re-pack: parent cell (x,y,z) with this label -> cropped cell (x-lo, y-lo, z-lo)
-      for (daxa_u32 c = 0u; c < cells; ++c)
+      for (daxa_u32 c = 0u; verify_surface && c < labels.size(); ++c)
       {
         if (labels[c] != label) { continue; }
         daxa_u32 const x = c % DX, y = (c / DX) % DY, z = c / (DX * DY);
@@ -1893,6 +1942,13 @@ public:
             labels[c - DX * DY] != label || labels[c + DX * DY] != label))
           ++ns.surf_count;
       }
+      packing_jobs.push_back({
+          .parent_dims = dims,
+          .crop_min = daxa_u32vec3(b[0],b[1],b[2]),
+          .crop_dims = cd,
+          .target_label = label,
+          .occ_offset = ns.occ_offset,
+      });
       daxa_u32 const nsi = alloc_shape_slot();
       voxel_shape_cpu[nsi] = ns;
       shape_private[nsi] = true;
@@ -1902,11 +1958,11 @@ public:
     };
 
     // largest component: the BODY keeps living, but on a fresh cropped shape (the old
-    // parent slice is freed at the end). If even the largest can't fit, refuse the whole
-    // carve (respawn restores the pre-carve GPU slice from the untouched host occupancy).
+    // parent slice is freed at the end). Admission already reserved room for all
+    // components before any body or shape metadata changed.
     glm::vec3 crop0;
     daxa_u32 const shape0 = emit_cropped(comps[0].first, comps[0].second, crop0);
-    if (shape0 == 0xFFFFFFFFu) { std::cerr << "FRACTURE: pools full, carve refused (body " << ev.body_id << ")" << std::endl; return true; }
+    if (shape0 == MAX_U32) { std::cerr << "FRACTURE: reservation invariant failed" << std::endl; std::abort(); }
     body.shape_index = shape0 + 1u;
     body.primitive_count = comps[0].second;
     { FragFix ff = parent_ctx; ff.body = ev.body_id; ff.crop_off = crop0; fixes.push_back(ff); }
@@ -1919,12 +1975,12 @@ public:
     {
       if (rigid_bodies.size() >= MAX_RIGID_BODY_COUNT && free_body_slots_.empty())
       {
-        std::cerr << "FRACTURE: body cap reached, fragment dropped" << std::endl;
-        break;
+        std::cerr << "FRACTURE: body reservation invariant failed" << std::endl;
+        std::abort();
       }
       glm::vec3 cropk;
       daxa_u32 const fsi = emit_cropped(comps[k].first, comps[k].second, cropk);
-      if (fsi == 0xFFFFFFFFu) { std::cerr << "FRACTURE: pools full, fragment dropped" << std::endl; break; }
+      if (fsi == MAX_U32) { std::cerr << "FRACTURE: reservation invariant failed" << std::endl; std::abort(); }
 
       RigidBody frag = fragment_template; // stable snapshot across vector growth
       frag.shape_index = fsi + 1u;
@@ -1946,13 +2002,14 @@ public:
       ff.crop_off = cropk;
       fixes.push_back(ff);
     }
+    rigid_body_manager->pack_fragments_gpu(packing_remap, packing_jobs);
     // Free a private parent only after emitting all fragments. Shared source shapes
     // remain resident for their other bodies and scene spawners.
     if (shape_private[shape_i]) retire_shape(shape_i); // shared source shapes still serve siblings
     return true;
   }
 
-  // the mini-reload: pools up, GPU rebuild chain, derived readback -> final records, AS + sim refresh
+  // Publish GPU-owned geometry and refreshed body/AS metadata.
   void respawn_after_fracture(std::vector<FragFix> const &fixes)
   {
     // BB_RESPAWN_TIMING: coarse per-phase respawn timing (env-gated tooling for the
@@ -1961,19 +2018,11 @@ public:
     auto _now = [] { return std::chrono::high_resolution_clock::now(); };
     auto _ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
     auto _t0 = _now();
-    // 1. pools upload. Only the HOST-authoritative buffers are uploaded: shape RECORDS (dims /
-    //    offsets / grid_origin) and OCCUPANCY (emit_cropped writes the bitmask on the host).
-    //    The SDF and SURFACE-LIST buffers are GPU-AUTHORITATIVE - they are computed only by
-    //    build_voxel_pools_gpu (the host voxel_sdf_cpu/voxel_surf_cpu are zero-filled pool
-    //    placeholders unless BB_SDF_VERIFY populates the oracle). Uploading those host zeros here
-    //    used to WIPE every shape's GPU-computed SDF/surface; the INCREMENTAL rebuild then only
-    //    restored the ~dirty shapes, leaving every UNCHANGED shape with a zero SDF -> its voxel
-    //    narrow phase found no surface -> the body fell through the floor. So do NOT upload them:
-    //    unchanged shapes keep their valid GPU SDF/surface, dirty shapes are rebuilt below.
+    // Only shape metadata is host-owned. Occupancy packing, SDF and surfaces
+    // are GPU-owned: uploading host placeholders here would erase live shapes.
     std::memcpy(device.buffer_host_address_as<VoxelShape>(rigid_body_manager->get_voxel_shapes_buffer()).value(),
                 voxel_shape_cpu.data(), voxel_shape_cpu.size() * sizeof(VoxelShape));
-    std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer()).value(),
-                voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
+
     // 2. GPU rebuild chain (SDF + surface + inertia), INCREMENTAL: only the shapes created
     // this batch (the fixed bodies' shapes) changed geometry; the rest are already correct on
     // the GPU. A cull-only respawn (empty fixes) rebuilds nothing.
@@ -1987,6 +2036,19 @@ public:
       }
     }
     rigid_body_manager->build_voxel_pools_gpu(voxel_shape_cpu, voxel_sdf_cpu, voxel_surf_cpu, voxel_derived_cpu, &dirty_shapes);
+    if (bb_getenv("BB_CENSUS_VERIFY") != nullptr || bb_getenv("BB_SDF_VERIFY") != nullptr)
+    {
+      auto const occupancy = rigid_body_manager->read_voxel_occupancy(static_cast<daxa_u32>(voxel_occ_cpu.size()));
+      auto const *gpu = occupancy.data();
+      for (auto si : dirty_shapes)
+      {
+        auto const &sh = voxel_shape_cpu[si];
+        auto const words = (sh.dims.x*sh.dims.y*sh.dims.z+31u)/32u;
+        if (std::memcmp(gpu+sh.occ_offset, voxel_occ_cpu.data()+sh.occ_offset, words*sizeof(daxa_u32)))
+        { std::cerr << "[PACK-VERIFY] FAILED shape=" << si << std::endl; std::abort(); }
+        std::cout << "[PACK-VERIFY] shape=" << si << " words=" << words << " MATCH" << std::endl;
+      }
+    }
     // Finalize after the AS manager uploads body/instance inputs. The derived
     // records stay on the GPU and feed finalization in the AABB-generation submit.
     std::vector<FragmentFinalizePushConstants> finalizations;
@@ -2279,16 +2341,9 @@ public:
     {
       std::memcpy(device.buffer_host_address_as<VoxelShape>(rigid_body_manager->get_voxel_shapes_buffer()).value(),
                   voxel_shape_cpu.data(), voxel_shape_cpu.size() * sizeof(VoxelShape));
-      std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_occupancy_buffer()).value(),
-                  voxel_occ_cpu.data(), voxel_occ_cpu.size() * sizeof(daxa_u32));
-      std::memcpy(device.buffer_host_address_as<daxa_u32>(rigid_body_manager->get_voxel_surface_buffer()).value(),
-                  voxel_surf_cpu.data(), voxel_surf_cpu.size() * sizeof(daxa_u32));
-      std::memcpy(device.buffer_host_address_as<daxa_f32>(rigid_body_manager->get_voxel_sdf_buffer()).value(),
-                  voxel_sdf_cpu.data(), voxel_sdf_cpu.size() * sizeof(daxa_f32));
-      // GPU-first: the node SDF, the surface-voxel list and the mass-property reduce are
-      // (re)built ON THE GPU from the occupancy bitmask - the CPU values uploaded above
-      // are only the BB_SDF_VERIFY oracles (the GPU results overwrite them, including each
-      // shape's surf_count). This is the path future runtime shape edits (destruction) re-run.
+      rigid_body_manager->upload_voxel_occupancy(voxel_occ_cpu);
+      // SDF and surface buffers are device-owned and entirely authored by the
+      // builder. CPU arrays are optional reference data, never GPU initialization.
       rigid_body_manager->build_voxel_pools_gpu(voxel_shape_cpu, voxel_sdf_cpu, voxel_surf_cpu, voxel_derived_cpu);
     }
 
@@ -2475,6 +2530,7 @@ private:
   // these. free_shape_slots_ recycles VoxelShape indices (and the parallel per-shape
   // vectors) of retired shapes.
   FreeListPool occ_pool_, surf_pool_, sdf_pool_;
+  GpuPoolTransaction fracture_reservations_{}; // reused: no per-fracture 98 KB allocation/clear
   std::vector<daxa_u32> free_shape_slots_;
   std::vector<daxa_u32> free_body_slots_; // retired (tombstoned) rigid_bodies indices, reused by new fragments
   bool pools_synced_ = false;

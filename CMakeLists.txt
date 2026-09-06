@@ -144,3 +144,8 @@ add_executable(fragment_census_tests tests/fragment_census_tests.cpp)
 target_include_directories(fragment_census_tests PRIVATE include)
 target_link_libraries(fragment_census_tests PRIVATE daxa::daxa glm::glm)
 add_test(NAME fragment_census_tests COMMAND fragment_census_tests)
+
+add_executable(gpu_pool_allocator_tests tests/gpu_pool_allocator_tests.cpp)
+target_include_directories(gpu_pool_allocator_tests PRIVATE include)
+target_link_libraries(gpu_pool_allocator_tests PRIVATE daxa::daxa glm::glm)
+add_test(NAME gpu_pool_allocator_tests COMMAND gpu_pool_allocator_tests)
