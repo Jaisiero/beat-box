@@ -15,9 +15,9 @@ void entry_fracture_scene_edit(uint3 tid : SV_DispatchThreadID)
 {
   FractureAllocationState* state=(FractureAllocationState*)P.allocator_addr;
   FractureSceneEditManifest* out=(FractureSceneEditManifest*)P.output_addr;
-  out->status=0u;out->count=0u;out->source_template=0u;
+  out->status=0u;out->retired_count=0u;out->spawn_template=0u;out->spawn_id=MAX_U32;
   if (state->active!=0u || state->failures!=0u) { out->status=3u;return; }
-  if (P.operation==0u)
+  if ((P.operation & FRACTURE_EDIT_RETIRE)!=0u)
   {
     RigidBody* bodies=(RigidBody*)P.bodies_addr;
     VoxelShape* shapes=(VoxelShape*)P.shapes_addr;
@@ -31,11 +31,10 @@ void entry_fracture_scene_edit(uint3 tid : SV_DispatchThreadID)
       valid=state->pools[5].release(live.id,1u) && valid;
       if (!valid) { ++state->failures;out->status=3u;return; }
       state->body_edits[live.id].kind=2u;
-      out->ids[out->count++]=live.id;
+      out->ids[out->retired_count++]=live.id;
     }
-    return;
   }
-  if (P.template_count==0u) return;
+  if ((P.operation & FRACTURE_EDIT_SPAWN)==0u || P.template_count==0u) return;
   uint slot=state->pools[5].allocate(1u);
   if (slot==GPU_POOL_INVALID) { out->status=2u;return; }
   uint rng=state->spawn_seed;
@@ -57,5 +56,5 @@ void entry_fracture_scene_edit(uint3 tid : SV_DispatchThreadID)
   ((RigidBody*)P.spawn_addr)[0]=body;
   state->body_edits[slot].kind=3u;
   state->spawn_seed=rng;
-  out->source_template=source;out->count=1u;out->ids[0]=slot;
+  out->spawn_template=source;out->spawn_id=slot;
 }

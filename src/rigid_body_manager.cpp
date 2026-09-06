@@ -2590,7 +2590,7 @@ void RigidBodyManager::record_fracture_partition(daxa::CommandRecorder &rec, Vox
       .occ_offset = shape.occ_offset,
       .use_voronoi = 1u,
   };
-  rec.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE,
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::READ_WRITE,
                        .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
   auto const barrier = [&rec]() {
     rec.pipeline_barrier({
@@ -3265,16 +3265,62 @@ void beatbox::RigidBodyManager::verify_fracture_allocator_gpu()
     for (auto const &[label,target]:reference.remap) check(plan_remap[label]==target);
   }
   std::cout << "[PLAN-VERIFY] empty, all-slivers, 131 roots and capacity rejection MATCH" << std::endl;
+  // A full body pool must reject a standalone spawn, but a combined edit
+  // can retire a body and reuse that exact slot before any AS publication.
+  auto edit_bodies_buffer=make(sizeof(RigidBody)*2u);
+  auto edit_template_buffer=make(sizeof(RigidBody));
+  auto edit_spawn_buffer=make(sizeof(RigidBody));
+  auto edit_output_buffer=make(sizeof(FractureSceneEditManifest));
+  auto *edit_bodies=device.buffer_host_address_as<RigidBody>(edit_bodies_buffer).value();
+  auto *edit_template=device.buffer_host_address_as<RigidBody>(edit_template_buffer).value();
+  auto *edit_spawn=device.buffer_host_address_as<RigidBody>(edit_spawn_buffer).value();
+  auto *edit_output=device.buffer_host_address_as<FractureSceneEditManifest>(edit_output_buffer).value();
+  *state={};state->spawn_seed=123u;
+  std::array<daxa_u32,6> edit_initial{2,16,2,0,2,2};
+  for (size_t i=0;i<6;++i) { state->pools[i].capacity=capacity[i];state->pools[i].allocate(edit_initial[i]); }
+  state->private_shapes[0]=1u;
+  shapes[0]={.dims={1,1,1}};
+  shapes[1]={.dims={1,1,1},.occ_offset=1u,.surf_offset=1u,.sdf_offset=8u};
+  edit_bodies[0]={.id=0u,.position={0,-10,0},.rotation=Quaternion(0,0,0,1)}; // a static below the kill plane must survive
+  edit_bodies[1]={.id=1u,.flags=RigidBodyFlag::DYNAMIC,.primitive_count=1u,.shape_index=1u,
+                  .position={0,-1,0},.rotation=Quaternion(0,0,0,1)};
+  *edit_template={.flags=RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY,
+                  .primitive_count=1u,.shape_index=2u,.rotation=Quaternion(0,0,0,1)};
+  auto run_edit=[&](daxa_u32 operation) {
+    auto rec=device.create_command_recorder({});
+    rec.pipeline_barrier({.src_access=daxa::AccessConsts::WRITE,.dst_access=daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
+    rec.set_pipeline(*pipeline_fracture_scene_edit);
+    rec.push_constant(FractureSceneEditPushConstants{address(state_buffer),address(edit_bodies_buffer),
+        address(shapes_buffer),address(edit_template_buffer),address(edit_spawn_buffer),address(edit_output_buffer),2u,1u,operation,0.0f});
+    rec.dispatch({.x=1u});
+    rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,.dst_access=daxa::AccessConsts::HOST_READ});
+    auto commands=rec.complete_current_commands();device.submit_commands({.command_lists=std::array{commands}});
+    device.wait_on_submit({.queue=daxa::QUEUE_MAIN,.queue_submit_index=device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
+  };
+  run_edit(FRACTURE_EDIT_SPAWN);
+  check(edit_output->status==2u && edit_output->retired_count==0u && edit_output->spawn_id==MAX_U32);
+  check(state->spawn_seed==123u && state->pools[5].live_units==2u && state->private_shapes[0]==1u);
+  run_edit(FRACTURE_EDIT_RETIRE | FRACTURE_EDIT_SPAWN);
+  check(edit_output->status==0u && edit_output->retired_count==1u && edit_output->ids[0]==1u);
+  check(edit_output->spawn_id==1u && edit_output->spawn_template==0u);
+  check(edit_spawn->id==1u && edit_spawn->shape_index==2u && edit_spawn->position.y>=10.6f && edit_spawn->position.y<=11.4f);
+  check(state->pools[5].live_units==2u && state->pools[4].live_units==1u && state->private_shapes[0]==0u);
+  check(state->body_edits[1].kind==3u && state->body_edits[0].kind==0u);
+  check(edit_bodies[0].position.y==-10.0f && edit_bodies[1].shape_index==1u);
+  for (auto &pool:state->pools) check(pool.valid());
+  run_edit(0u);
+  check(edit_output->status==0u && edit_output->retired_count==0u && edit_output->spawn_id==MAX_U32);
+  std::cout << "[SCENE-EDIT-VERIFY] full-pool refusal, retire-and-reuse, static preservation and no-op MATCH" << std::endl;
   for (auto buffer:buffers) device.destroy_buffer(buffer);
   std::cout << "[ALLOCATION-VERIFY] reservation, indirect packing, retirement and last-pool rollback MATCH" << std::endl;
 }
 
-FractureSceneEditManifest beatbox::RigidBodyManager::edit_fracture_scene_gpu(bool spawn, daxa_f32 kill_y)
+FractureSceneEditManifest beatbox::RigidBodyManager::edit_fracture_scene_gpu(bool cull, bool spawn, daxa_f32 kill_y)
 {
-  // Previous AS readers must finish before the following publication reuses resources.
-  device.wait_on_submit({.queue=daxa::QUEUE_MAIN,.queue_submit_index=device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
+  // Submit after previous MAIN readers instead of waiting before recording.
+  // The result wait below still completes them before host AS retirement.
   auto rec=device.create_command_recorder({});
-  rec.pipeline_barrier({.src_access=daxa::AccessConsts::WRITE,.dst_access=daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
+  rec.pipeline_barrier({.src_access=daxa::AccessConsts::READ_WRITE,.dst_access=daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
   rec.set_pipeline(*pipeline_fracture_scene_edit);
   rec.push_constant(FractureSceneEditPushConstants{
       .allocator_addr=device.device_address(fracture_allocator).value(),
@@ -3284,13 +3330,13 @@ FractureSceneEditManifest beatbox::RigidBodyManager::edit_fracture_scene_gpu(boo
       .spawn_addr=device.device_address(fracture_spawn_body).value(),
       .output_addr=device.device_address(fracture_scene_manifest).value(),
       .body_count=renderer_manager->get_rigid_body_count(),.template_count=fracture_spawn_template_count,
-      .operation=spawn ? 1u : 0u,.kill_y=kill_y});
+      .operation=(cull ? FRACTURE_EDIT_RETIRE : 0u) | (spawn ? FRACTURE_EDIT_SPAWN : 0u),.kill_y=kill_y});
   rec.dispatch({.x=1u});
   rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,.dst_access=daxa::AccessConsts::HOST_READ});
   auto list=rec.complete_current_commands();device.submit_commands({.command_lists=std::array{list}});
   device.wait_on_submit({.queue=daxa::QUEUE_MAIN,.queue_submit_index=device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
   auto result=*device.buffer_host_address_as<FractureSceneEditManifest>(fracture_scene_manifest).value();
-  if (result.status==3u || result.count>BB_MAX_RIGID_BODY_COUNT) { std::cerr << "GPU scene edit FAILED" << std::endl;std::abort(); }
+  if (result.status==3u || result.retired_count>BB_MAX_RIGID_BODY_COUNT) { std::cerr << "GPU scene edit FAILED" << std::endl;std::abort(); }
   return result;
 }
 
@@ -3299,7 +3345,7 @@ std::vector<FractureBatchChild> beatbox::RigidBodyManager::fracture_batch_gpu(st
   if (inputs.empty()) return {};
   auto rec=device.create_command_recorder({});
   auto batch_addr=device.device_address(fracture_batch_manifest).value();
-  rec.pipeline_barrier({.src_access=daxa::AccessConsts::WRITE,.dst_access=daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
+  rec.pipeline_barrier({.src_access=daxa::AccessConsts::READ_WRITE,.dst_access=daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
   rec.set_pipeline(*pipeline_fracture_allocate);
   rec.push_constant(FractureAllocatorPushConstants{.state_addr=device.device_address(fracture_allocator).value(),
       .batch_addr=batch_addr,.operation=2u});rec.dispatch({.x=1u});

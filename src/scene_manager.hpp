@@ -1115,30 +1115,7 @@ public:
         .inv_inertia=shape.inv_inertia,.friction=0.6f,
         .fracture_impulse=spawn_strengths_[si],.fracture_material=si==3u ? 1u : 0u};
   }
-  void spawn_one()
-  {
-    auto const edit=rigid_body_manager->edit_fracture_scene_gpu(true,kill_y());
-    if (edit.count==0u) return;
-    auto body=spawn_template(edit.source_template); // AS metadata mirror
-    daxa_u32 const slot=edit.ids[0];body.id=slot;
-    std::erase(free_body_slots_,slot);
-    if (slot<rigid_bodies.size()) rigid_bodies[slot]=body;
-    else if (slot==rigid_bodies.size()) rigid_bodies.push_back(body);
-    else { std::cerr << "GPU spawn slot gap FAILED" << std::endl;std::abort(); }
-    respawn_after_fracture({},std::span<daxa_u32 const>(&slot,1));
-  }
   static Quaternion Q_id() { return Quaternion(0.0f, 0.0f, 0.0f, 1.0f); }
-
-  // called each stepped frame from the render loop: drives the soak spawner on its cadence.
-  void maybe_spawn()
-  {
-    if (!spawner_on_) { return; }
-    static daxa_u32 const cadence = [] {
-      char const *e = bb_getenv("BB_FRACTURE_SPAWN_STEPS");
-      return e ? (daxa_u32)std::max(1, std::atoi(e)) : 45u; // ~0.75 s between drops by default
-    }();
-    if (++spawn_step_ >= cadence) { spawn_step_ = 0; sync_pools_if_needed(); spawn_one(); }
-  }
 
   // F3: data-driven scene from a text file (BB_SCENE_FILE=path). One dynamic cube per line:
   //   px py pz [half_extent] [mass] [restitution] [friction]   (# comments and blank lines ignored)
@@ -1831,10 +1808,8 @@ public:
     rigid_body_manager->acknowledge_fracture_events(serial);
     auto const fracture_start = std::chrono::steady_clock::now();
     sync_pools_if_needed(); // capture the post-load high-water once, before the first alloc
-    // Finish previous tracing before editing shared geometry. Live body payloads
-    // stay on the device; setup and publication read them directly.
-    device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
-        .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
+    // MAIN-queue barriers order geometry edits after prior tracing. The batch
+    // result wait completes those readers before the host retires any AS handles.
     auto const fracture_synced = std::chrono::steady_clock::now();
     bool any = false;
     std::vector<FragFix> fixes;
@@ -1877,14 +1852,41 @@ public:
   // back to the pools (that memory is what exhausts under heavy shattering; without this the
   // fragments that fly off never release their slice). Gated by the render loop on the cheap
   // dbg_min_y signal so the readback + AS rebuild only run when something actually left.
-  void cull_out_of_world()
+  // One scene edit transaction: retirement makes slots available to a spawn
+  // before the host mirrors metadata and publishes AS/body changes once.
+  void process_scene_edits(daxa_u32 dbg_min_y_encoded)
   {
+    bool const cull=any_body_below_kill_plane(dbg_min_y_encoded);
+    bool spawn=false;
+    if (spawner_on_) {
+      static daxa_u32 const cadence=[] {
+        char const *e=bb_getenv("BB_FRACTURE_SPAWN_STEPS");
+        return e ? (daxa_u32)std::max(1,std::atoi(e)) : 45u;
+      }();
+      if (++spawn_step_>=cadence) { spawn_step_=0u;spawn=true; }
+    }
+    if (!cull && !spawn) return;
     sync_pools_if_needed();
-    auto const edit=rigid_body_manager->edit_fracture_scene_gpu(false,kill_y());
-    if (edit.count==0u) return;
-    for (daxa_u32 i=0u;i<edit.count;++i) retire_body(edit.ids[i]);
-    std::cout << "[FRACTURE] GPU cull: " << edit.count << " bodies" << std::endl;
-    respawn_after_fracture({},std::span<daxa_u32 const>(edit.ids,edit.count));
+    auto const edit=rigid_body_manager->edit_fracture_scene_gpu(cull,spawn,kill_y());
+    if (edit.retired_count==0u && edit.spawn_id==MAX_U32) return;
+    std::vector<daxa_u32> changed(edit.ids,edit.ids+edit.retired_count);
+    for (auto id:changed) retire_body(id);
+    if (edit.retired_count)
+      std::cout << "[FRACTURE] GPU cull: " << edit.retired_count << " bodies" << std::endl;
+    if (edit.spawn_id!=MAX_U32) {
+      auto body=spawn_template(edit.spawn_template); // AS metadata only
+      daxa_u32 const slot=edit.spawn_id;body.id=slot;
+      std::erase(free_body_slots_,slot);
+      if (slot<rigid_bodies.size()) rigid_bodies[slot]=body;
+      else if (slot==rigid_bodies.size()) rigid_bodies.push_back(body);
+      else { std::cerr << "GPU spawn slot gap FAILED" << std::endl;std::abort(); }
+      changed.push_back(slot);
+    }
+    if (bb_getenv("BB_RESPAWN_TIMING"))
+      std::cout << "[SCENE-EDIT] retired=" << edit.retired_count
+                << " spawned=" << (edit.spawn_id!=MAX_U32 ? 1u : 0u) << std::endl;
+    // A reused retired slot may occur twice; the AS dirty mask coalesces IDs.
+    respawn_after_fracture({},changed);
   }
   // cheap gate (from the per-frame readback): is any dynamic body below the kill plane?
   bool any_body_below_kill_plane(daxa_u32 dbg_min_y_encoded)
