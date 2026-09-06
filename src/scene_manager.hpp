@@ -692,6 +692,11 @@ public:
           }
           rigid_bodies[pc.body] = bodies[pc.body];
           auto const si = rigid_bodies[pc.body].shape_index - 1u;
+          if (bb_getenv("BB_CENSUS_VERIFY") && voxel_shape_cpu[si].surf_count != shapes[si].surf_count)
+          {
+            std::cerr << "[CENSUS-VERIFY] surface count FAILED shape=" << si << std::endl;
+            std::abort();
+          }
           voxel_shape_cpu[si] = shapes[si];
         }
       }
@@ -1759,18 +1764,17 @@ public:
       }
     }
 
-    // GPU: Voronoi assign + constrained connected-component labels; tiny readbacks. carve
+    // GPU: Voronoi assignment, connected components, and census for large grids. Carve
     // radius 0 => NO material removed (conservation): the shape is only PARTITIONED, so the
     // union of all component labels == the original solid set (nothing vanishes).
-    std::vector<daxa_u32> occ_words, labels;
-    rigid_body_manager->carve_and_label(shape, grid_c, 0.0f, sites, vor_r, occ_words, labels);
+    std::vector<daxa_u32> labels;
+    std::vector<FragmentComponent> components;
+    rigid_body_manager->carve_and_label(shape, grid_c, 0.0f, sites, vor_r, labels, components);
 
-    // component census (labels are min cell indices -> deterministic identities)
+    // Integer component summaries arrive sorted by label; retain the old deterministic
+    // centroid merge and largest-component tie breaking on the host.
     std::map<daxa_u32, daxa_u32> comp_counts;
-    for (daxa_u32 c = 0u; c < cells; ++c)
-    {
-      if (labels[c] != MAX_U32) { ++comp_counts[labels[c]]; }
-    }
+    for (auto const &s : components) comp_counts[s.label] = s.count;
     if (comp_counts.empty())
     {
       // with the carve gone this is unreachable for a solid shape (every voxel is labelled),
@@ -1787,17 +1791,12 @@ public:
     // and the fragment set stays clean (no degenerate bodies). Done on the host labels[] before
     // the census/bbox/emit passes below, which all read the merged result.
     daxa_u32 const MIN_FRAG = 3u;
+    std::map<daxa_u32, std::array<daxa_u32, 6>> bbox;
     {
-      daxa_u32 const dx = dims.x, dy = dims.y;
       struct Cen { double x = 0, y = 0, z = 0; daxa_u32 n = 0; };
       std::map<daxa_u32, Cen> cen;
-      for (daxa_u32 c = 0u; c < cells; ++c)
-      {
-        daxa_u32 const l = labels[c];
-        if (l == MAX_U32) { continue; }
-        auto &e = cen[l];
-        e.x += (double)(c % dx); e.y += (double)((c / dx) % dy); e.z += (double)(c / (dx * dy)); ++e.n;
-      }
+      for (auto const &s : components)
+        cen[s.label] = {double(s.sum_x), double(s.sum_y), double(s.sum_z), s.count};
       // targets = components big enough to stand alone; if NONE reach MIN_FRAG (a body smaller
       // than the threshold), keep only the largest so it stays one whole piece.
       daxa_u32 largest_label = MAX_U32, largest_n = 0u;
@@ -1821,10 +1820,23 @@ public:
         remap[l] = best;
       }
       for (daxa_u32 c = 0u; c < cells; ++c) { daxa_u32 const l = labels[c]; if (l != MAX_U32) { labels[c] = remap[l]; } }
+      // Merged counts and bounds are unions of component summaries; no further
+      // per-cell census or bbox scan is necessary.
+      comp_counts.clear();
+      for (auto const &s : components)
+      {
+        auto const label = remap[s.label];
+        comp_counts[label] += s.count;
+        auto [it, inserted] = bbox.try_emplace(label,
+            std::array<daxa_u32,6>{s.lo_x,s.lo_y,s.lo_z,s.hi_x,s.hi_y,s.hi_z});
+        if (!inserted)
+        {
+          auto &b = it->second;
+          b[0] = std::min(b[0],s.lo_x); b[1] = std::min(b[1],s.lo_y); b[2] = std::min(b[2],s.lo_z);
+          b[3] = std::max(b[3],s.hi_x); b[4] = std::max(b[4],s.hi_y); b[5] = std::max(b[5],s.hi_z);
+        }
+      }
     }
-    // re-census after the merge (comps/bbox/emit below all read the merged labels)
-    comp_counts.clear();
-    for (daxa_u32 c = 0u; c < cells; ++c) { if (labels[c] != MAX_U32) { ++comp_counts[labels[c]]; } }
 
     // CONSERVATION INVARIANT: with no carve, every original solid voxel must land in exactly one
     // component, so the component counts sum back to the parent's solid voxel count. A mismatch
@@ -1841,21 +1853,9 @@ public:
     std::sort(comps.begin(), comps.end(), [](auto const &a, auto const &b) {
       return a.second != b.second ? a.second > b.second : a.first < b.first;
     });
-    // PHASE 2b CROP: each component is re-packed into a grid CROPPED to its bounding box, so
-    // its pool slices + sim bounds are sized to the real extent (a 3-voxel chunk of a 10x4x4
-    // block becomes a 3x2x2 shape, not a mostly-empty 10x4x4). Precompute every component's
-    // bbox in one pass. lo/hi are inclusive parent-cell coords.
+    // Component bounding boxes already include the conservation merge above.
     daxa_u32 const DX = dims.x, DY = dims.y;
-    std::map<daxa_u32, std::array<daxa_u32, 6>> bbox; // label -> {lox,loy,loz, hix,hiy,hiz}
-    for (daxa_u32 c = 0u; c < cells; ++c)
-    {
-      daxa_u32 const l = labels[c];
-      if (l == MAX_U32) { continue; }
-      daxa_u32 const x = c % DX, y = (c / DX) % DY, z = c / (DX * DY);
-      auto it = bbox.find(l);
-      if (it == bbox.end()) { bbox[l] = {x, y, z, x, y, z}; }
-      else { auto &b = it->second; b[0] = std::min(b[0], x); b[1] = std::min(b[1], y); b[2] = std::min(b[2], z); b[3] = std::max(b[3], x); b[4] = std::max(b[4], y); b[5] = std::max(b[5], z); }
-    }
+    bool const verify_surface = bb_getenv("BB_CENSUS_VERIFY") != nullptr || bb_getenv("BB_SDF_VERIFY") != nullptr;
 
     // allocate a cropped shape for `label` (count solid voxels). Returns the shape index and
     // fills crop_off (bbox_min * vs), or MAX_U32 if the pools can't fit it.
@@ -1873,10 +1873,9 @@ public:
       }
       VoxelShape ns = shape;
       ns.dims = cd;
-      // The parent surface count is invalid for this cropped component. The GPU
-      // rebuild computes the same count, but the COM fixup later uploads this CPU
-      // record again: preserve the correct value instead of restoring the parent's
-      // count and reading past the fragment's surface list into another shape.
+      // The GPU surface builder is authoritative. Its finalized shape record is
+      // copied back by voxel_prims_hook before any subsequent fracture uses it.
+      // Count on the CPU only when checking that GPU result against the oracle.
       ns.surf_count = 0u;
       ns.occ_offset = pool_alloc(voxel_occ_cpu, occ_pool_, cwords, BB_MAX_VOXEL_OCC_U32S, 0u);
       ns.surf_offset = pool_alloc(voxel_surf_cpu, surf_pool_, ccells, BB_MAX_VOXEL_SURF_COUNT, 0u);
@@ -1888,10 +1887,10 @@ public:
         daxa_u32 const x = c % DX, y = (c / DX) % DY, z = c / (DX * DY);
         daxa_u32 const cc = (x - b[0]) + (y - b[1]) * cd.x + (z - b[2]) * cd.x * cd.y;
         voxel_occ_cpu[ns.occ_offset + cc / 32u] |= 1u << (cc % 32u);
-        if (x == 0u || x + 1u == dims.x || y == 0u || y + 1u == dims.y || z == 0u || z + 1u == dims.z ||
+        if (verify_surface && (x == 0u || x + 1u == dims.x || y == 0u || y + 1u == dims.y || z == 0u || z + 1u == dims.z ||
             labels[c - 1u] != label || labels[c + 1u] != label ||
             labels[c - DX] != label || labels[c + DX] != label ||
-            labels[c - DX * DY] != label || labels[c + DX * DY] != label)
+            labels[c - DX * DY] != label || labels[c + DX * DY] != label))
           ++ns.surf_count;
       }
       daxa_u32 const nsi = alloc_shape_slot();
@@ -1936,7 +1935,7 @@ public:
       frag.active_index = MAX_U32;
       frag.sleep_timer = 0u;
       frag.flags = RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY;
-      // mass/inertia/position/velocity are PROVISIONAL until the derived readback fixup.
+      // Mass/inertia/position/velocity are provisional until GPU finalization.
       // REUSE a retired (tombstoned) body slot when one exists, else append. id == index in
       // both paths; the active bookkeeping is rebuilt wholesale by respawn.
       daxa_u32 slot;
