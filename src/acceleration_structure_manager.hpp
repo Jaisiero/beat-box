@@ -96,6 +96,10 @@ private:
   daxa::Device &device;
   // Initialization flag
   bool initialized = false;
+  bool publication_timing = false;
+  daxa::TimelineQueryPool publication_queries = {};
+  daxa::TimelineQueryPool tlas_queries = {};
+  bool tlas_query_pending = false;
   // Task manager reference
   std::shared_ptr<TaskManager> task_manager;
   // Back-references wired in create() — RAW pointers on purpose (review v3): RendererManager owns
