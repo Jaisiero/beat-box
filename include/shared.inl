@@ -925,6 +925,15 @@ struct FractureEvent
   daxa_f32vec3 position;
   daxa_f32vec3 normal;
 };
+// Host bridge metadata only; geometric impact data stays in pending GPU storage.
+struct FractureEventSummary
+{
+  daxa_u32 body_id;
+  daxa_f32 impulse;
+};
+#if defined(__cplusplus)
+static_assert(sizeof(FractureEvent)==32u && sizeof(FractureEventSummary)==8u);
+#endif
 struct FractureImpactScratch
 {
   // One writer per manifold. Reset once per simulation step, including catch-up steps.
@@ -938,7 +947,7 @@ struct FractureEventBuffer
   // Generation/acknowledgement handshake. Pending impacts are coalesced per
   // body across catch-up steps, so bursts never overwrite another body.
   daxa_u32 serial, consumed_serial, count;
-  FractureEvent events[BB_MAX_FRACTURE_EVENTS];
+  FractureEventSummary events[BB_MAX_FRACTURE_EVENTS];
 };
 struct FractureImpactPushConstants
 {

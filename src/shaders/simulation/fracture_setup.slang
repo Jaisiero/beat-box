@@ -53,7 +53,10 @@ void entry_fracture_setup(uint3 tid : SV_DispatchThreadID)
   context->cell_dispatch = uint3((cells+63u)/64u,1u,1u);
   RigidBody* body = &context->parent;
   VoxelShape* shape = &context->shape;
-  FractureEvent event = ((FractureEventBuffer*)P.events_addr)->events[P.event_slot];
+  // Pending payloads survive host acknowledgement until the next simulation
+  // publication. Read VRAM directly instead of reloading a host bridge copy.
+  FractureEventBuffer* bridge=(FractureEventBuffer*)P.events_addr;
+  FractureEvent event=((FractureImpactScratch*)bridge->scratch_addr)->pending[P.body_id];
   float3 local = body->rotate_vector_inverse(event.position - body->position);
   context->center = (local - shape->grid_origin) / shape->voxel_size;
   float overkill = event.impulse / max(body->fracture_impulse, 1e-3f);

@@ -1,6 +1,6 @@
 # GPU-derived fracture dispatches and local connectivity
 
-The production fracture input carries a body ID, event slot and command-count bound instead of a VoxelShape copy. GPU setup reads the live parent and shape, seeds fracture sites and writes indirect arguments into the parent context. Voronoi assignment, flood initialization and census use the generated workgroup count. Their shaders read dimensions and occupancy offsets from that same resident context; planning reads its cell count there. Each invocation caches dimensions locally.
+The production fracture input carries a body ID and command-count bound instead of a VoxelShape copy. [Resident impact payloads](GPU_IMPACT_PAYLOADS.md) also remove the former event-slot argument. GPU setup reads the live parent and shape, seeds fracture sites and writes indirect arguments into the parent context. Voronoi assignment, flood initialization and census use the generated workgroup count. Their shaders read dimensions and occupancy offsets from that same resident context; planning reads its cell count there. Each invocation caches dimensions locally.
 
 ## Connectivity
 
