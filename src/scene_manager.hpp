@@ -1243,6 +1243,87 @@ public:
   // This is the capture half of the repro loop: see the bad configuration -> F12 -> load the
   // file headless with BB_SCENE_FILE and debug the exact state. CPU-side by design (debug
   // tooling; the sim itself stays GPU-resident).
+  // On-demand forensic capture. Unlike the legacy scene text, this preserves actual
+  // fragment occupancy and the solver's stored contact points. Never runs per frame.
+  void dump_contact_geometry(std::string const &path)
+  {
+    auto const &sc = rigid_body_manager->get_sim_config_reference();
+    u32 const nb = sc.rigid_body_count;
+    u32 const nm = std::min(sc.g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+    if (nb == 0u) return;
+    bool const avbd = sc.solver_type == SimSolverType::AVBD;
+    // Finish both queues before copying simulation buffers or reading host pools.
+    device.wait_idle();
+    auto read = [&]<typename T>(daxa::BufferId source, u32 count) {
+      std::vector<T> result;
+      if (count == 0u) return result;
+      auto const bytes = daxa::usize(count) * sizeof(T);
+      auto staging = device.create_buffer({.size = bytes, .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM, .name = "contact_capture"});
+      auto rec = device.create_command_recorder({.queue_type = daxa::QueueType::COMPUTE});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE, .dst_access = daxa::AccessConsts::TRANSFER_READ});
+      rec.copy_buffer_to_buffer({.src_buffer = source, .dst_buffer = staging, .size = bytes});
+      rec.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE, .dst_access = daxa::AccessConsts::HOST_READ});
+      auto cmds = rec.complete_current_commands();
+      device.submit_commands({.queue = daxa::QUEUE_COMPUTE_0, .command_lists = std::array{cmds}});
+      device.wait_on_submit({.queue = daxa::QUEUE_COMPUTE_0, .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0)});
+      auto const *data = device.buffer_host_address_as<T>(staging).value();
+      result.assign(data, data + count);
+      device.destroy_buffer(staging);
+      return result;
+    };
+    auto bodies = read.template operator()<RigidBody>(rigid_body_manager->task_rigid_bodies.id(), nb);
+    auto contacts = read.template operator()<Manifold>(rigid_body_manager->task_collisions.id(), nm);
+    auto states = read.template operator()<AvbdBodyState>(rigid_body_manager->task_avbd_state.id(), avbd ? nb : 0u);
+    auto gpu_shapes = read.template operator()<VoxelShape>(rigid_body_manager->get_voxel_shapes_buffer(), u32(voxel_shape_cpu.size()));
+    auto gpu_surface = read.template operator()<daxa_u32>(rigid_body_manager->get_voxel_surface_buffer(), u32(voxel_surf_cpu.size()));
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) { std::cerr << "Contact capture: cannot open " << path << std::endl; return; }
+    out.precision(9);
+    auto v = [&](auto const &p) { out << '[' << p.x << ',' << p.y << ',' << p.z << ']'; };
+    auto q = [&](auto const &r) { out << '[' << r.v.x << ',' << r.v.y << ',' << r.v.z << ',' << r.w << ']'; };
+    out << "{\"version\":1,\"solver\":" << u32(sc.solver_type) << ",\"frame\":" << sc.frame_count << ",\"bodies\":[";
+    for (u32 i = 0; i < nb; ++i) {
+      auto const &b = bodies[i];
+      if (i) out << ',';
+      out << "{\"id\":" << b.id << ",\"shape\":" << b.shape_index << ",\"flags\":" << u32(b.flags) << ",\"position\":"; v(b.position);
+      out << ",\"rotation\":"; q(b.rotation);
+      out << ",\"velocity\":"; v(b.velocity);
+      out << ",\"omega\":"; v(b.omega);
+      out << ",\"minimum\":"; v(b.minimum); out << ",\"maximum\":"; v(b.maximum);
+      bool const awake = (b.flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE && (b.flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE;
+      out << ",\"start_valid\":" << (avbd && awake ? "true" : "false");
+      if (avbd && awake) { out << ",\"start_position\":"; v(states[i].pos_start); out << ",\"start_rotation\":"; q(states[i].rot_start); }
+      out << '}';
+    }
+    out << "],\"shapes\":[";
+    for (u32 i = 0; i < voxel_shape_cpu.size(); ++i) {
+      auto const &sh = voxel_shape_cpu[i]; if (i) out << ',';
+      out << "{\"dims\":"; v(sh.dims); out << ",\"origin\":"; v(sh.grid_origin);
+      out << ",\"voxel_size\":" << sh.voxel_size << ",\"occupancy\":[";
+      u32 const words = (sh.dims.x * sh.dims.y * sh.dims.z + 31u) / 32u;
+      for (u32 j = 0; j < words; ++j) { if (j) out << ','; out << voxel_occ_cpu[sh.occ_offset+j]; }
+      out << "],\"surface_count\":" << sh.surf_count << ",\"gpu_surface_count\":" << gpu_shapes[i].surf_count << ",\"surface\":[";
+      for (u32 j = 0; j < gpu_shapes[i].surf_count && gpu_shapes[i].surf_offset + j < gpu_surface.size(); ++j) {
+        if (j) out << ',';
+        out << gpu_surface[gpu_shapes[i].surf_offset+j];
+      }
+      out << "]}";
+    }
+    out << "],\"manifolds\":[";
+    for (u32 i = 0; i < nm; ++i) {
+      auto const &m = contacts[i]; if (i) out << ',';
+      out << "{\"a\":" << m.obb1_index << ",\"b\":" << m.obb2_index << ",\"key\":" << m.key << ",\"normal\":"; v(m.normal);
+      out << ",\"contacts\":[";
+      for (u32 j = 0; j < std::min(u32(std::max(m.contact_count,0)), MAX_CONTACT_POINT_COUNT); ++j) {
+        auto const &c = m.contacts[j]; if (j) out << ',';
+        out << "{\"position\":"; v(c.position); out << ",\"penetration\":" << c.penetration << ",\"features\":[" << c.fp.in_reference << ',' << c.fp.out_reference << ',' << c.fp.in_incident << ',' << c.fp.out_incident << "]}";
+      }
+      out << "]}";
+    }
+    out << "]}\n";
+    std::cout << "[CONTACT-CAPTURE] " << path << " bodies=" << nb << " manifolds=" << nm << std::endl;
+  }
+
   void dump_scene_live(std::string const &path)
   {
     daxa_u32 const count = rigid_body_count;
@@ -1298,6 +1379,7 @@ public:
       ++n;
     }
     device.destroy_buffer(staging);
+    dump_contact_geometry(path + ".contacts.json");
     std::cout << "[SCENE] F12 live dump wrote " << n << " bodies to '" << path << "'" << std::endl;
   }
 
@@ -1759,6 +1841,11 @@ public:
       }
       VoxelShape ns = shape;
       ns.dims = cd;
+      // The parent surface count is invalid for this cropped component. The GPU
+      // rebuild computes the same count, but the COM fixup later uploads this CPU
+      // record again: preserve the correct value instead of restoring the parent's
+      // count and reading past the fragment's surface list into another shape.
+      ns.surf_count = 0u;
       ns.occ_offset = pool_alloc(voxel_occ_cpu, occ_pool_, cwords, BB_MAX_VOXEL_OCC_U32S, 0u);
       ns.surf_offset = pool_alloc(voxel_surf_cpu, surf_pool_, ccells, BB_MAX_VOXEL_SURF_COUNT, 0u);
       ns.sdf_offset = pool_alloc(voxel_sdf_cpu, sdf_pool_, cnodes, BB_MAX_VOXEL_SDF_F32S, 0.0f);
@@ -1769,6 +1856,11 @@ public:
         daxa_u32 const x = c % DX, y = (c / DX) % DY, z = c / (DX * DY);
         daxa_u32 const cc = (x - b[0]) + (y - b[1]) * cd.x + (z - b[2]) * cd.x * cd.y;
         voxel_occ_cpu[ns.occ_offset + cc / 32u] |= 1u << (cc % 32u);
+        if (x == 0u || x + 1u == dims.x || y == 0u || y + 1u == dims.y || z == 0u || z + 1u == dims.z ||
+            labels[c - 1u] != label || labels[c + 1u] != label ||
+            labels[c - DX] != label || labels[c + DX] != label ||
+            labels[c - DX * DY] != label || labels[c + DX * DY] != label)
+          ++ns.surf_count;
       }
       daxa_u32 const nsi = alloc_shape_slot();
       voxel_shape_cpu[nsi] = ns;
@@ -1961,8 +2053,10 @@ public:
     rigid_body_manager->update_active_rigid_body_list();
     // Both update methods refresh both parities and restore current bindings.
     // Repeating them only submitted the same uploads twice and advanced the render clock.
-    accel_struct_mngr->update_TLAS();
-    if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " blas_cpu=" << _ms(_t1,_t1b) << " blas_gpu=" << _ms(_t1b,_t2) << " sim+tlas=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
+    // All callers run inside the renderer's scene-edit block. That block publishes
+    // the final TLAS once after fracture, culling and spawning, before tracing rays.
+    // Publishing here built the same TLAS twice and inserted an extra device wait.
+    if (_t) { auto _t3 = _now(); std::cout << "[RESPAWN-MS] pools+fixup=" << _ms(_t0,_t1) << " blas_cpu=" << _ms(_t1,_t1b) << " blas_gpu=" << _ms(_t1b,_t2) << " sim_upload=" << _ms(_t2,_t3) << " total=" << _ms(_t0,_t3) << " bodies=" << rigid_body_count << std::endl; }
     if (pool_verify_on()) { verify_pools("respawn"); }
     std::cout << "[FRACTURE] respawn: " << rigid_body_count << " bodies, "
               << voxel_shape_cpu.size() << " shapes" << std::endl;

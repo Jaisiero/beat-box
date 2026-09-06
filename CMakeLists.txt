@@ -124,3 +124,10 @@ add_executable(path_tracing_tests tests/path_tracing_tests.cpp)
 target_include_directories(path_tracing_tests PRIVATE include)
 target_link_libraries(path_tracing_tests PRIVATE daxa::daxa glm::glm)
 add_test(NAME path_tracing_tests COMMAND path_tracing_tests)
+
+# Structural regression guard: algorithms must not regain unrelated shader consumers.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if (Python3_Interpreter_FOUND)
+    add_test(NAME shader_dependencies_tests
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/shader_dependencies_tests.py)
+endif()

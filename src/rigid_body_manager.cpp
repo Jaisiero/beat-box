@@ -20,6 +20,9 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
   }
   if (device.is_valid())
   {
+    narrow_phase_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr;
+    if (narrow_phase_timing)
+      narrow_phase_queries = device.create_timeline_query_pool({.query_count = 2, .name = "fracture_narrow_phase"});
     pipeline_RBD = task_manager->create_compute(RigidBodyDispatcherInfo{}.info);
     pipeline_GMC = task_manager->create_compute(GenerateMortonCodesInfo{}.info);
     pipeline_RBRSH = task_manager->create_compute(RigidBodyRadixSortHistogramInfo{}.info);
@@ -714,9 +717,17 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
 
   auto user_callback_NP = [this](daxa::TaskInterface ti, auto &)
   {
+    if (narrow_phase_timing)
+    {
+      ti.recorder.reset_timestamps({.query_pool = narrow_phase_queries, .start_index = 0, .count = 2});
+      ti.recorder.write_timestamp({.query_pool = narrow_phase_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 0});
+      narrow_phase_query_pending = true;
+    }
     ti.recorder.set_pipeline(*pipeline_NP);
     ti.recorder.push_constant(NarrowPhasePushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(NarrowPhaseTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET});
+    if (narrow_phase_timing)
+      ti.recorder.write_timestamp({.query_pool = narrow_phase_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 1});
   };
 
   using TTask_NP = TaskTemplate<NarrowPhaseTaskHead::Task, decltype(user_callback_NP)>;
@@ -2525,6 +2536,19 @@ bool RigidBodyManager::read_back_sim_config()
       .queue = daxa::QUEUE_COMPUTE_0,
       .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0),
   });
+
+  if (narrow_phase_timing && narrow_phase_query_pending)
+  {
+    // Read after the existing COMPUTE_0 completion wait; no additional stall.
+    auto const results = narrow_phase_queries.get_query_results(0, 2);
+    if (results[1] != 0u && results[3] != 0u)
+    {
+      double const ms = double(results[2] - results[0]) * device.properties().limits.timestamp_period / 1.0e6;
+      if (ms >= 5.0)
+        std::cout << "[FRACTURE-NP] gpu_ms=" << ms << std::endl;
+    }
+    narrow_phase_query_pending = false;
+  }
 
   return initialized;
 }

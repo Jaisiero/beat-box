@@ -87,14 +87,12 @@ FORCE_INLINE std::filesystem::path debug_path{
 };
 #endif
 
-// Persistent SPIR-V cache. Slang->SPIR-V compilation of the ~138 compute entry points + the
-// ray-tracing pipeline (~8k LOC of shader + shared.inl included everywhere) is the dominant
-// cold-start cost (~100s, single-threaded). Daxa keys the cache on source+options, so a launch
-// that doesn't touch any .slang reuses the cached SPIR-V and starts in seconds. Editing any
-// shader (or shared.inl, which every shader includes) invalidates the affected entries -> they
-// recompile. Path is relative to the launch CWD (like root_paths above), so the cache lands next
-// to wherever the exe is run from (build/Release/Release for the harness, or the repo root for a
-// direct launch); "spirv_cache/" is gitignored so either location is safe to leave.
+// Persistent SPIR-V cache. Daxa keys artifacts by shader source identity/options and
+// validates disk dependencies by modification time. Keep runtime copies unchanged when
+// their contents match; rewriting an identical include can otherwise invalidate consumers.
+// Independent source units under simulation/passes keep algorithm edits local. Common
+// CPU/GPU layouts still invalidate every shader that consumes them.
+// The cache path is relative to the executable's working directory, like root_paths.
 FORCE_INLINE std::filesystem::path spirv_cache_path{
     "spirv_cache",
 };
@@ -219,21 +217,20 @@ struct TaskManager
 
   [[nodiscard]] auto create_ray_tracing(daxa::RayTracingPipelineCompileInfo info) -> std::shared_ptr<daxa::RayTracingPipeline>
   {
-    std::cout << "[COMPILE RT] " << std::string_view{info.name.data(), info.name.size()} << std::endl; // D1: progress (see create_compute)
+    std::cout << "[PIPELINE RT] " << std::string_view{info.name.data(), info.name.size()} << std::endl; // Loading may hit the SPIR-V cache.
     return pipeline_manager.add_ray_tracing_pipeline2(static_cast<daxa::RayTracingPipelineCompileInfo2>(info)).value();
   }
 
   [[nodiscard]] auto create_compute(daxa::ComputePipelineCompileInfo info) -> std::shared_ptr<daxa::ComputePipeline>
   {
-    // D1: progress logging. The Slang->SPIR-V compile below is eager and single-threaded (~100s cold
-    // across all pipelines, ~2s warm from spirv_cache/). Print the name+count BEFORE each so the wait
-    // is legible — the startup no longer looks like a hang, and a stall points at the exact pipeline.
+    // Log creation progress before each pipeline. This is not a compilation counter:
+    // a cache hit still creates a Vulkan pipeline without invoking the Slang compiler.
     static int _pc = 0;
     if (++_pc == 1)
     {
-      std::cout << "[COMPILE] building shader pipelines (cold ~100s Slang->SPIR-V; warm ~2s from spirv_cache/)..." << std::endl;
+      std::cout << "[PIPELINE] loading shaders; only SPIR-V cache misses require compilation..." << std::endl;
     }
-    std::cout << "[COMPILE " << _pc << "] " << std::string_view{info.name.data(), info.name.size()} << std::endl;
+    std::cout << "[PIPELINE " << _pc << "] " << std::string_view{info.name.data(), info.name.size()} << std::endl;
     auto result = pipeline_manager.add_compute_pipeline2(static_cast<daxa::ComputePipelineCompileInfo2>(info));
     if (result.is_err())
     {

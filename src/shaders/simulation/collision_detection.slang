@@ -1,4 +1,8 @@
-#include "extensions.slang"
+#include "voxel_contact_math.hpp"
+#include "rigid_body_math.slang"
+#include "transform.slang"
+#include "state_copy.slang"
+#include "contact_history.slang"
 #include "islands.slang"
 
 // credits: https://github.com/RandyGaul/qu3e
@@ -995,6 +999,20 @@ daxa_b32 voxel_occ_bit(daxa_u32* occ, VoxelShape* s, daxa_i32vec3 c)
   return ((occ[s->occ_offset + bit / 32u] >> (bit % 32u)) & 1u) != 0u;
 }
 
+// A zero SDF gradient has no orientation (common in one-cell-thick fragments).
+// Keep the individual exposed faces: summing opposite face normals would cancel.
+daxa_u32 voxel_exposed_faces(daxa_u32* occ, VoxelShape* s, daxa_i32vec3 c)
+{
+  daxa_u32 mask = 0u;
+  if (!voxel_occ_bit(occ, s, c + daxa_i32vec3( 1, 0, 0))) mask |= 1u;
+  if (!voxel_occ_bit(occ, s, c + daxa_i32vec3(-1, 0, 0))) mask |= 2u;
+  if (!voxel_occ_bit(occ, s, c + daxa_i32vec3( 0, 1, 0))) mask |= 4u;
+  if (!voxel_occ_bit(occ, s, c + daxa_i32vec3( 0,-1, 0))) mask |= 8u;
+  if (!voxel_occ_bit(occ, s, c + daxa_i32vec3( 0, 0, 1))) mask |= 16u;
+  if (!voxel_occ_bit(occ, s, c + daxa_i32vec3( 0, 0,-1))) mask |= 32u;
+  return mask;
+}
+
 // occupancy gradient at cell c (points OUT of the solid); zero when fully interior
 daxa_f32vec3 voxel_occ_gradient(daxa_u32* occ, VoxelShape* s, daxa_i32vec3 c)
 {
@@ -1194,10 +1212,15 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       // all measured CELL-LOCAL depth (<= 1 cell), so a body sunk past a thin feature's
       // midplane read ~10 mm while visually overlapping ~500 mm, and its opposing-exit
       // manifolds cancelled into a stable wedge (the scene_5 persistent interpenetration).
-      // The node SDF is exact everywhere: depth keeps growing to the midplane and the
-      // gradient always points at the real nearest exit.
+      // Node distances are exact at grid nodes; interpolation and its gradient are
+      // approximations between nodes and may be flat in solids or empty cavities.
       daxa_f32 vs2 = s2->voxel_size;
       daxa_f32vec3 l2 = r2->rotate_vector_inverse(pw - r2->position);
+      // Conservative finite-cube bound before eight SDF-node reads and cell SAT.
+      // Cropped fragments often overlap only a small part of each other's grids.
+      daxa_f32vec3 grid_max = s2->grid_origin + daxa_f32vec3(s2->dims) * vs2;
+      if (any(l2 + sup < s2->grid_origin - daxa_f32vec3(0.02f)) ||
+          any(l2 - sup > grid_max + daxa_f32vec3(0.02f))) { continue; }
       su = axk == 0u ? l2.y : l2.x;
       sv = axk == 2u ? l2.y : l2.z;
       // wedge-detector volume probe (unchanged semantics: sample center inside B's solid)
@@ -1207,19 +1230,21 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       daxa_f32vec3 grad;
       daxa_f32 sd = voxel_sdf_sample(sdf, s2, l2, grad);
       daxa_f32 gl2 = dot(grad, grad);
-      if (gl2 < 1e-6f)
+      bool has_gradient = gl2 >= 1e-6f;
+      if (!has_gradient && voxel_occ_bit(occ, s2, c) && voxel_exposed_faces(occ, s2, c) == 0u)
       {
-        // perfectly symmetric interior point: exit direction undefined (vanishingly rare
-        // with node fields - needs mirror symmetry in every axis). Counted for the code-0
-        // center-to-center rescue, which is exactly the right tool for "no direction".
+        // Only a fully enclosed cell has no local surface exit. Thin fragments
+        // can have a flat node field while still exposing real collision faces.
         red.interior_hits += 1u;
         continue;
       }
-      daxa_f32vec3 gn = grad / sqrt(gl2);
+      // A flat EMPTY cavity is not penetration. Still run cell SAT below: the sample
+      // cube can touch its walls even though its center is outside the solid.
+      daxa_f32vec3 gn = has_gradient ? grad / sqrt(gl2) : daxa_f32vec3(0.0f);
       // pass membership: the exit direction must have a significant component along this
       // pass's (axis, sign); diagonal exits join both their axes' manifolds (the stable
       // two-row edge wedge the old dominance band existed for)
-      if (sd < -0.35f * vs2)
+      if (has_gradient && sd < -0.35f * vs2)
       {
         // DEEP band: only the field knows the global depth and the real nearest exit
         // (cell-local/pairwise measurements are structurally blind past one cell - the
@@ -1249,12 +1274,17 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
       daxa_f32vec3 gA = r2->rotate_vector_inverse(r1->rotate_vector(gA_l1));
       daxa_f32 gA2 = dot(gA, gA);
       if (gA2 > 1e-6f) { gA = gA / sqrt(gA2); } else { gA = daxa_f32vec3(0.0f); }
+      daxa_i32vec3 ca = daxa_i32vec3(daxa_i32(e & 0xFFu), daxa_i32((e >> 8u) & 0xFFu), daxa_i32((e >> 16u) & 0xFFu));
+      daxa_u32 exposed_a = gA2 > 1e-6f ? 0u : voxel_exposed_faces(occ, s1, ca);
       daxa_i32vec3 clo = daxa_i32vec3(daxa_i32(floor((l2.x - sup.x - s2->grid_origin.x) / vs2)),
                                       daxa_i32(floor((l2.y - sup.y - s2->grid_origin.y) / vs2)),
                                       daxa_i32(floor((l2.z - sup.z - s2->grid_origin.z) / vs2)));
       daxa_i32vec3 chi = daxa_i32vec3(daxa_i32(floor((l2.x + sup.x - s2->grid_origin.x) / vs2)),
                                       daxa_i32(floor((l2.y + sup.y - s2->grid_origin.y) / vs2)),
                                       daxa_i32(floor((l2.z + sup.z - s2->grid_origin.z) / vs2)));
+      // Out-of-grid cells are always empty; do not iterate over them.
+      clo = max(clo, daxa_i32vec3(0));
+      chi = min(chi, daxa_i32vec3(s2->dims) - daxa_i32vec3(1));
       for (daxa_i32 cz = clo.z; cz <= chi.z; ++cz)
       {
         for (daxa_i32 cy = clo.y; cy <= chi.y; ++cy)
@@ -1264,6 +1294,7 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
             daxa_i32vec3 cb = daxa_i32vec3(cx, cy, cz);
             if (!voxel_occ_bit(occ, s2, cb)) { continue; }
             daxa_f32vec3 cc = s2->grid_origin + (daxa_f32vec3(daxa_f32(cx), daxa_f32(cy), daxa_f32(cz)) + daxa_f32vec3(0.5f, 0.5f, 0.5f)) * vs2;
+            daxa_u32 exposed_b = has_gradient ? 0u : voxel_exposed_faces(occ, s2, cb);
             daxa_f32vec3 d = l2 - cc;
             daxa_f32 best_ov = 1e9f;
             daxa_f32 best_raw = 1e9f;
@@ -1278,8 +1309,17 @@ daxa_u32 voxel_sample_body(RigidBody* r1, VoxelShape* s1, RigidBody* r2, VoxelSh
               daxa_f32vec3 mtv = dl >= 0.0f ? sat_axis[k] : -sat_axis[k];
               // union filtering by sign only: a real exit points out of B's solid and
               // against A's own outward (the touching A-face must be true A surface)
-              if (dot(mtv, gn) <= 0.0f) { continue; }
-              if (dot(mtv, gA) >= 0.0f) { continue; }
+              if (has_gradient ? dot(mtv, gn) <= 0.0f : !voxel_face_faces_direction(exposed_b, mtv)) { continue; }
+              if (gA2 > 1e-6f)
+              {
+                if (dot(mtv, gA) >= 0.0f) { continue; }
+              }
+              else
+              {
+                // -MTV is A's outward direction, expressed in A's local frame.
+                daxa_f32vec3 outward_a = -daxa_f32vec3(dot(mtv, a0), dot(mtv, a1), dot(mtv, a2));
+                if (!voxel_face_faces_direction(exposed_a, outward_a)) { continue; }
+              }
               if (ov < best_ov) { best_ov = ov; best_mtv = mtv; }
             }
             if (separated) { continue; }

@@ -371,9 +371,28 @@ int RendererManager::render()
                                     // frames, or full-sleep stasis inflates frame=/deflates
                                     // the printed fps (user-reported "ya no topa 60fps"
                                     // that the present rate disproved)
+  bool const fracture_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr;
+  daxa_u32 timed_fracture_serial = 0u;
+  unsigned fracture_frame_tail = 0u;
+  daxa_u32 previous_frame_steps = 0u;
+  double previous_sim_phase_ms = 0.0;
+  auto fracture_frame_clock = std::chrono::steady_clock::now();
   while (!window.should_close())
   {
+    auto const frame_clock = std::chrono::steady_clock::now();
+    double const previous_frame_ms = std::chrono::duration<double, std::milli>(frame_clock - fracture_frame_clock).count();
+    fracture_frame_clock = frame_clock;
+    if (fracture_timing && fracture_frame_tail > 0u)
+    {
+      // Includes acquire/submission waits in the previous loop, without adding a GPU wait.
+      std::cout << "[FRACTURE-FRAME] frame=" << render_frames_total
+                << " serial=" << timed_fracture_serial << " wall_ms=" << previous_frame_ms
+                << " steps=" << previous_frame_steps << " sim_phase_ms=" << previous_sim_phase_ms << std::endl;
+      --fracture_frame_tail;
+    }
     ++render_frames_total;
+    previous_frame_steps = 0u;
+    previous_sim_phase_ms = 0.0;
     if (run_limit_s > 0.0 &&
         std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count() > run_limit_s)
     {
@@ -466,6 +485,7 @@ int RendererManager::render()
     // are legal; only the last step of the burst gets published (TLAS build below). Below
     // 60/MAX_CATCHUP_STEPS fps the sim slows down instead of spiraling.
     constexpr daxa_u32 MAX_CATCHUP_STEPS = 4u;
+    auto const sim_phase_start = std::chrono::steady_clock::now();
     daxa_u32 sim_steps_this_frame = 0u;
     if (det_steps > 0)
     {
@@ -607,6 +627,11 @@ int RendererManager::render()
             std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
           _sim_ms_n++;                                                 // [PERF]
           ++sim_steps_this_frame;
+          // A costly contact step must not trigger four equally costly catch-up
+          // steps before presenting again. Keep fixed dt and the existing backlog
+          // cap, but yield to rendering once this frame's simulation budget is spent.
+          if (std::chrono::duration<double>(std::chrono::steady_clock::now() - sim_phase_start).count() >= SIM_DT_S)
+            break;
         }
       }
       else
@@ -614,6 +639,8 @@ int RendererManager::render()
         sim_accum_s = 0.0; // don't burst-step on resume
       }
     }
+    previous_frame_steps = sim_steps_this_frame;
+    previous_sim_phase_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sim_phase_start).count();
     bool const sim_stepped = sim_steps_this_frame > 0u;
     // accumulation is only VALID over a static world: a sim step may move geometry, and
     // blending history across poses is the ghost-speckle the user reported (pieces
@@ -637,6 +664,11 @@ int RendererManager::render()
       {
         if (auto const *feb = rigid_body_manager->get_fracture_events())
         {
+          if (fracture_timing && feb->serial != timed_fracture_serial)
+          {
+            timed_fracture_serial = feb->serial;
+            fracture_frame_tail = 4u; // publication frame and three following frames
+          }
           scene_manager->process_fracture_events(*feb);
         }
         // KILL PLANE: reclaim shapes of fragments that flew out of the world. Gated on the
@@ -660,13 +692,13 @@ int RendererManager::render()
         static std::ofstream _pk(_pk_path, std::ios::trunc);
         static bool _pk_hdr = false;
         auto const &pk = rigid_body_manager->get_sim_config_reference();
-        if (!_pk_hdr) { _pk << "frame,pk_pen_mm,pk_lambda,pk_k,pk_vn,b1,b2,cc,stick,global_pen_mm,maxv_mm,omega_mrad,manifolds,sleeping\n"; _pk_hdr = true; }
+        if (!_pk_hdr) { _pk << "frame,pk_pen_mm,pk_lambda,pk_k,pk_vn,b1,b2,cc,stick,global_pen_mm,maxv_mm,omega_mrad,manifolds,sleeping,interior_hits\n"; _pk_hdr = true; }
         _pk << (daxa_u64)pk.frame_count
             << "," << pk.dbg_pk_pen << "," << pk.dbg_pk_lambda << "," << pk.dbg_pk_k << "," << pk.dbg_pk_vn
             << "," << (pk.dbg_pk_body >> 16) << "," << (pk.dbg_pk_body & 0xFFFFu)
             << "," << (pk.dbg_pk_stick >> 1) << "," << (pk.dbg_pk_stick & 1u)
             << "," << pk.dbg_pen << "," << pk.dbg_maxv << "," << pk.dbg_pk_omega
-            << "," << pk.g_c_info.collision_count << "," << pk.sleeping_count << "\n";
+            << "," << pk.g_c_info.collision_count << "," << pk.sleeping_count << "," << pk.dbg_vox_interior << "\n";
         _pk.flush();
       }
       // C1 headless metrics: one CSV row per stepped frame + threshold asserts (env-gated).

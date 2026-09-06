@@ -79,3 +79,55 @@ was skipped (~0.001 ms; total partition/check still ~0.5-1.8 ms). The body set g
 from 3 to 24, exercising vector reallocation; there were no conservation/pool or
 Vulkan errors. See `tgs-fragments.log` for all events. This intentionally very weak
 material fixture is a regression case, not a recommended material setting.
+
+## Follow-up: distinguish publication from the following simulation steps
+
+`BB_RESPAWN_TIMING` now records the publication frame and three following loop
+intervals (`FRACTURE-FRAME`), including their step counts and simulation-phase wall
+time. These are CPU loop intervals, not display/presentation timestamps. No new
+GPU completion wait is added. The existing SC completion wait also makes a pair
+of optional narrow-phase GPU timestamp queries readable (`FRACTURE-NP`, samples
+at least 5 ms). With catch-up, this query reports the last step before readback.
+The query pool is reset on COMPUTE_0 inside the narrow-phase callback; the existing
+per-step completion synchronization prevents reuse while a prior step is running.
+
+The F9 4K investigation reproduced a 357.6 ms frame with 354.6 ms spent executing
+four simulation steps. Fracture publication itself was approximately 2 ms.
+A subsequent timestamped run measured up to 76.9 ms in narrow phase alone. Thus
+removing publication waits alone cannot solve the reported hitch.
+
+Changes:
+
+- Remove the TLAS update inside `respawn_after_fracture`. All three callers run
+  inside the renderer's scene-edit block (fracture, cull, soak spawn), which already
+  publishes the final TLAS before ray tracing. BLAS construction, both body-buffer
+  uploads and the final TLAS synchronization remain. This removes duplicate work,
+  not the dependency protecting the renderer from unpublished geometry.
+- Stop real-time catch-up once the simulation phase has consumed one fixed-step
+  duration of wall time. Keep fixed dt, solver iterations, the four-step hard cap
+  and the existing backlog cap. A single expensive step can still exceed budget;
+  it no longer schedules three more expensive steps before returning to rendering.
+  Deterministic fixed-step tests are unchanged by this scheduling rule.
+- Before sampling eight SDF nodes, reject sample cubes whose rotated conservative
+  AABB cannot reach the other shape's grid (including the existing 2 cm band).
+  Clamp neighboring-cell traversal to the grid; outside cells are always empty.
+  Both full 899-row fracture-fixture CSVs are identical before/after this spatial
+  optimization. No claim of an exact global SDF or different solver convergence.
+
+The final interactive run grew F9 to 43 bodies. Recorded four-frame event windows
+peaked at 48.5 ms, with one step in the expensive frames. However, narrow phase
+still reached 79.9 ms elsewhere in the run. These manual impacts produce different
+trajectories and fragment counts, so the maxima are diagnostic observations, not
+a controlled speedup ratio or an upper latency bound. Residual F9 motion remains;
+this is a partial contact fix and a catch-up/publication improvement, not a claim
+that destruction is fully stable or fits a 16.7 ms frame budget.
+
+Evidence: `/root/beat-box/work/destruction-resume`, especially `f9-v2.log`,
+`f9-profile.log`, `f9-final.log`, `final-*.csv` and `validation-*.log`.
+
+Final Release build and all four CTest targets pass. Both solvers complete 900
+fixed steps of the fracture fixture with pool checks and Vulkan synchronization
+validation enabled. There are no validation errors, synchronization hazards,
+conservation warnings or pool invariant failures. The validated CSVs match the
+normal final fixed-step CSVs. The instrumentation does not add a shader ABI field
+or a new environment flag; it extends `BB_RESPAWN_TIMING` and `BB_POCKET_TRACE`.
