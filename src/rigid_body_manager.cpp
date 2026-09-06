@@ -2563,37 +2563,39 @@ void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shap
 }
 
 void RigidBodyManager::record_fragment_census(daxa::CommandRecorder &rec, daxa_u32vec3 dims,
-    daxa_u64 labels_addr, bool compact)
+    daxa_u64 labels_addr, bool compact, daxa_u32 body_id)
 {
     FragmentCensusPushConstants census_pc = {
         .labels_addr = labels_addr,
         .scratch_addr = device.device_address(fracture_census_scratch).value(),
         .output_addr = device.device_address(fracture_census_output).value(),
         .dims = dims,
+        .context_addr = body_id == MAX_U32 ? 0u : device.device_address(fracture_contexts).value()+sizeof(FractureParentContext)*body_id,
     };
     for (auto const &pipeline : {pipeline_census_init, pipeline_census_accumulate, pipeline_census_compact})
     {
       if (!compact && pipeline == pipeline_census_compact) continue;
       rec.set_pipeline(*pipeline);
       rec.push_constant(census_pc);
-      rec.dispatch({.x = (dims.x*dims.y*dims.z + 63u)/64u, .y = 1, .z = 1});
+      if (body_id == MAX_U32)
+        rec.dispatch({.x = (dims.x*dims.y*dims.z + 63u)/64u, .y = 1, .z = 1});
+      else
+        rec.dispatch_indirect({.indirect_buffer=fracture_contexts,
+          .offset=sizeof(FractureParentContext)*body_id+offsetof(FractureParentContext,cell_dispatch)});
       rec.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
                                  .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
     }
 }
 
-void RigidBodyManager::record_fracture_partition(daxa::CommandRecorder &rec, VoxelShape const &shape,
-    daxa_u32 body_id, daxa_u32 event_slot, daxa_u32 body_count, daxa_u64 batch_addr,
+void RigidBodyManager::record_fracture_partition(daxa::CommandRecorder &rec,
+    daxa_u32 body_id, daxa_u32 event_slot, daxa_u32 body_count, daxa_u64 batch_addr, daxa_u32 recorded_passes,
     bool compact, daxa::TimelineQueryPool *queries)
 {
-  daxa_u32 const cells=shape.dims.x*shape.dims.y*shape.dims.z;
   VoxelFracturePushConstants pc = {
       .context_addr = device.device_address(fracture_contexts).value() + sizeof(FractureParentContext)*body_id,
       .occupancy_addr = device.device_address(voxel_occupancy).value(),
       .labels_addr = device.device_address(voxel_sdf_scratch[0]).value(),
       .site_labels_addr = device.device_address(voxel_sdf_scratch[1]).value(),
-      .cell_dims = shape.dims,
-      .occ_offset = shape.occ_offset,
       .use_voronoi = 1u,
   };
   rec.pipeline_barrier({.src_access = daxa::AccessConsts::READ_WRITE,
@@ -2604,7 +2606,11 @@ void RigidBodyManager::record_fracture_partition(daxa::CommandRecorder &rec, Vox
         .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE,
     });
   };
-  daxa_u32 const groups = (cells + 63u) / 64u;
+  daxa_u64 const dispatch_offset=sizeof(FractureParentContext)*body_id;
+  auto dispatch_cells=[&]() {
+    rec.dispatch_indirect({.indirect_buffer=fracture_contexts,
+      .offset=dispatch_offset+offsetof(FractureParentContext,cell_dispatch)});
+  };
   rec.set_pipeline(*pipeline_fracture_setup);
   rec.push_constant(FractureSetupPushConstants{
       .bodies_addr = device.device_address(accel_struct_mngr->get_rigid_body_buffer()).value(),
@@ -2613,25 +2619,26 @@ void RigidBodyManager::record_fracture_partition(daxa::CommandRecorder &rec, Vox
       .events_addr = device.device_address(fracture_events_buffer).value(),
       .body_id = body_id, .body_count = body_count, .event_slot = event_slot});
   rec.dispatch({.x=1u});
-  barrier();
+  // Setup produces shader inputs AND indirect dispatch arguments.
+  rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+                       .dst_access=daxa::AccessConsts::READ});
   rec.set_pipeline(*pipeline_VFR_VORONOI);
   rec.push_constant(pc);
-  rec.dispatch({.x = groups, .y = 1, .z = 1});
+  dispatch_cells();
   barrier();
   rec.set_pipeline(*pipeline_VFR_FLOOD_INIT);
   rec.push_constant(pc);
-  rec.dispatch({.x = groups, .y = 1, .z = 1});
+  dispatch_cells();
   barrier();
-  // min-propagation + pointer jumping: reach roughly doubles per iteration, so
-  // 2*ceil(log2(cells)) + slack converges for any component shape. FIXED count (no
-  // early-out readback) keeps the pass deterministic and single-submit.
-  daxa_u32 iters = 8u;
-  for (daxa_u32 c = cells; c > 1u; c >>= 1u) { iters += 2u; }
+  // Bound command recording with the existing AS metadata. Recording the
+  // scene-wide maximum adds measurable overhead for small cropped children.
+  // GPU setup remains the source of every indirect dispatch argument.
+  if (recorded_passes>BB_FRACTURE_FLOOD_PASSES) std::abort();
   rec.set_pipeline(*pipeline_VFR_FLOOD_STEP);
-  for (daxa_u32 it = 0u; it < iters; ++it)
+  for (daxa_u32 it = 0u; it < recorded_passes; ++it)
   {
     rec.push_constant(pc);
-    rec.dispatch({.x = groups, .y = 1, .z = 1});
+    dispatch_cells();
     barrier();
   }
   // Census shares the existing label submission and completion boundary.
@@ -2640,12 +2647,12 @@ void RigidBodyManager::record_fracture_partition(daxa::CommandRecorder &rec, Vox
     rec.reset_timestamps({.query_pool = *queries, .start_index = 0, .count = 2});
     rec.write_timestamp({.query_pool = *queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 0});
   }
-  record_fragment_census(rec, shape.dims, pc.labels_addr, compact);
+  record_fragment_census(rec, {}, pc.labels_addr, compact, body_id);
   rec.set_pipeline(*pipeline_fragment_plan);
   rec.push_constant(FragmentPlanPushConstants{
       device.device_address(fracture_census_scratch).value(),
       device.device_address(fracture_remap_buffer).value(),
-      device.device_address(fracture_plan_manifest).value(), cells});
+      device.device_address(fracture_plan_manifest).value(), 0u, pc.context_addr});
   rec.dispatch({.x=1,.y=1,.z=1});
   barrier();
   FractureAllocatorPushConstants allocation_pc{
@@ -2721,7 +2728,7 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, FractureEvent co
   if (verify_census)
     census_queries = device.create_timeline_query_pool({.query_count = 2, .name = "fragment_census"});
   auto rec = device.create_command_recorder({});
-  record_fracture_partition(rec,shape,event.body_id,event_slot,fracture_live_count,0u,
+  record_fracture_partition(rec,event.body_id,event_slot,fracture_live_count,0u,fracture_recorded_passes(shape),
       verify_census,verify_census ? &census_queries : nullptr);
   // Only verification or compact-manifest overflow downloads cell labels.
   daxa::BufferId staging = {};
@@ -3272,6 +3279,53 @@ void beatbox::RigidBodyManager::verify_fracture_allocator_gpu()
     for (auto const &[label,target]:reference.remap) check(plan_remap[label]==target);
   }
   std::cout << "[PLAN-VERIFY] empty, all-slivers, 131 roots and capacity rejection MATCH" << std::endl;
+  // Independent breadth-first reference for the single-dispatch small-grid
+  // connectivity path, including empty cells and disconnected same-site regions.
+  auto small_context_buffer=make(sizeof(FractureParentContext));
+  auto small_labels_buffer=make(sizeof(daxa_u32)*64u);
+  auto small_sites_buffer=make(sizeof(daxa_u32)*64u);
+  auto *small_context=device.buffer_host_address_as<FractureParentContext>(small_context_buffer).value();
+  auto *small_labels=device.buffer_host_address_as<daxa_u32>(small_labels_buffer).value();
+  auto *small_sites=device.buffer_host_address_as<daxa_u32>(small_sites_buffer).value();
+  daxa_u32 random=0x843175bu;
+  for (daxa_u32 fixture=0u;fixture<24u;++fixture) {
+    daxa_u32vec3 dims=fixture%3u==0u ? daxa_u32vec3{4u,4u,4u} :
+                     fixture%3u==1u ? daxa_u32vec3{1u,1u,64u} : daxa_u32vec3{3u,3u,7u};
+    daxa_u32 cells=dims.x*dims.y*dims.z;
+    small_context->shape.dims=dims;
+    std::array<daxa_u32,64> expected;expected.fill(MAX_U32);
+    std::array<bool,64> solid{};
+    for (daxa_u32 i=0u;i<cells;++i) {
+      random=random*1664525u+1013904223u;
+      solid[i]=fixture<3u || (fixture>=6u && (random>>29u)!=0u);
+      small_labels[i]=solid[i] ? i : MAX_U32;
+      small_sites[i]=fixture<9u ? 0u : (random>>16u)%3u;
+    }
+    for (daxa_u32 root=0u;root<cells;++root) {
+      if (!solid[root] || expected[root]!=MAX_U32) continue;
+      expected[root]=root;std::vector<daxa_u32> queue{root};
+      for (size_t q=0u;q<queue.size();++q) {
+        auto i=queue[q];auto x=i%dims.x,y=(i/dims.x)%dims.y,z=i/(dims.x*dims.y);
+        std::array<daxa_u32,6> neighbors{x>0u ? i-1u : MAX_U32,x+1u<dims.x ? i+1u : MAX_U32,
+          y>0u ? i-dims.x : MAX_U32,y+1u<dims.y ? i+dims.x : MAX_U32,
+          z>0u ? i-dims.x*dims.y : MAX_U32,z+1u<dims.z ? i+dims.x*dims.y : MAX_U32};
+        for (auto n:neighbors) if (n!=MAX_U32 && solid[n] && expected[n]==MAX_U32 && small_sites[n]==small_sites[i]) {
+          expected[n]=root;queue.push_back(n);
+        }
+      }
+    }
+    auto rec=device.create_command_recorder({});
+    rec.pipeline_barrier({.src_access=daxa::AccessConsts::WRITE,.dst_access=daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
+    rec.set_pipeline(*pipeline_VFR_FLOOD_STEP);
+    rec.push_constant(VoxelFracturePushConstants{.context_addr=address(small_context_buffer),
+      .labels_addr=address(small_labels_buffer),.site_labels_addr=address(small_sites_buffer),.use_voronoi=1u});
+    rec.dispatch({.x=1u});
+    rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,.dst_access=daxa::AccessConsts::HOST_READ});
+    auto commands=rec.complete_current_commands();device.submit_commands({.command_lists=std::array{commands}});
+    device.wait_on_submit({.queue=daxa::QUEUE_MAIN,.queue_submit_index=device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
+    for (daxa_u32 i=0u;i<cells;++i) check(small_labels[i]==expected[i]);
+  }
+  std::cout << "[SMALL-FLOOD-VERIFY] 24 grids, empty cells, chains and site boundaries MATCH" << std::endl;
   // A full body pool must reject a standalone spawn, but a combined edit
   // can retire a body and reuse that exact slot before any AS publication.
   auto edit_bodies_buffer=make(sizeof(RigidBody)*2u);
@@ -3358,7 +3412,7 @@ std::vector<FractureBatchChild> beatbox::RigidBodyManager::fracture_batch_gpu(st
       .batch_addr=batch_addr,.operation=2u});rec.dispatch({.x=1u});
   auto body_count=renderer_manager->get_rigid_body_count();
   for (auto const &input:inputs)
-    record_fracture_partition(rec,input.shape,input.body_id,input.event_slot,body_count,batch_addr,false);
+    record_fracture_partition(rec,input.body_id,input.event_slot,body_count,batch_addr,input.recorded_passes,false);
   rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,.dst_access=daxa::AccessConsts::HOST_READ});
   auto commands=rec.complete_current_commands();device.submit_commands({.command_lists=std::array{commands}});
   device.wait_on_submit({.queue=daxa::QUEUE_MAIN,.queue_submit_index=device.latest_queue_submit_index(daxa::QUEUE_MAIN)});

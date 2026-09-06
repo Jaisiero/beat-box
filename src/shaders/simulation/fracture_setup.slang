@@ -41,12 +41,16 @@ void entry_fracture_setup(uint3 tid : SV_DispatchThreadID)
 {
   FractureParentContext* context = &((FractureParentContext*)P.contexts_addr)[P.body_id];
   context->site_count = 0u;
+  context->shape.dims = uint3(0u);
+  context->cell_dispatch = uint3(0u,1u,1u);
   RigidBody* bodies = (RigidBody*)P.bodies_addr;
   uint row = MAX_U32;
   for (uint i = 0u; i < P.body_count; ++i) if (bodies[i].id == P.body_id) { row = i; break; }
   if (row == MAX_U32 || bodies[row].shape_index == 0u) return;
   context->parent = bodies[row];
   context->shape = ((VoxelShape*)P.shapes_addr)[bodies[row].shape_index - 1u];
+  uint cells = context->shape.dims.x*context->shape.dims.y*context->shape.dims.z;
+  context->cell_dispatch = uint3((cells+63u)/64u,1u,1u);
   RigidBody* body = &context->parent;
   VoxelShape* shape = &context->shape;
   FractureEvent event = ((FractureEventBuffer*)P.events_addr)->events[P.event_slot];

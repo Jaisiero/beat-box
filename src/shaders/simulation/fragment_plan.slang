@@ -1,4 +1,5 @@
 #include "fragment_plan.inl"
+#include "fracture_setup.inl"
 [[vk::push_constant]] FragmentPlanPushConstants P;
 
 // Correctly rounded positive integer ratio, without requiring shaderFloat64.
@@ -25,6 +26,12 @@ float3 centroid(FragmentComponent s)
                 centroid_coordinate(s.sum_z,s.count));
 }
 
+uint plan_cells() {
+  if (P.context_addr==0u) return P.cells;
+  uint3 dims=((FractureParentContext*)P.context_addr)->shape.dims;
+  return dims.x*dims.y*dims.z;
+}
+
 [shader("compute")]
 [numthreads(1,1,1)]
 void entry_fragment_plan(uint3 tid : SV_DispatchThreadID)
@@ -34,8 +41,9 @@ void entry_fragment_plan(uint3 tid : SV_DispatchThreadID)
   FragmentPlanManifest* out=(FragmentPlanManifest*)P.manifest_addr;
   out->status=0u;out->count=0u;out->source_count=0u;out->solid_count=0u;
   uint largest=0xffffffffu, largest_count=0u;
+  uint cells=plan_cells();
   // Dense roots are visited in label order, preserving all tie-breaking.
-  for (uint i=0u;i<P.cells;++i)
+  for (uint i=0u;i<cells;++i)
   {
     uint n=census[i].count;
     if (n==0u) continue;
@@ -48,7 +56,7 @@ void entry_fragment_plan(uint3 tid : SV_DispatchThreadID)
     }
   }
   if (out->count==0u && largest!=0xffffffffu) out->components[out->count++]=census[largest];
-  for (uint i=0u;i<P.cells;++i)
+  for (uint i=0u;i<cells;++i)
   {
     FragmentComponent source=census[i];
     if (source.count==0u) continue;

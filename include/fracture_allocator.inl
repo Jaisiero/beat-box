@@ -47,8 +47,7 @@ struct FractureBatchManifest
 };
 struct FracturePartitionInput
 {
-  VoxelShape shape;
-  daxa_u32 body_id, event_slot;
+  daxa_u32 body_id, event_slot, recorded_passes;
 };
 struct FractureAllocatorPushConstants
 {
