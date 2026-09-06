@@ -126,9 +126,7 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
     record_update_TLAS_tasks(TLAS_update_TG, TLAS_build_TG, update_pipeline);
     TLAS_update_TG.submit();
     TLAS_update_TG.complete();
-    // the TLAS build is the LAST compute submit of a sim publication: it signals the sim
-    // timeline (value set via advance_sim_timeline right before each execute)
-    TLAS_build_TG.submit({.additional_signal_timeline_semaphores = &task_manager->gpu->sim_signal_span});
+    TLAS_build_TG.submit();
     TLAS_build_TG.complete();
 
     record_update_AS_buffers_tasks(AS_update_buffers_TG);
@@ -756,9 +754,8 @@ void AccelerationStructureManager::update_TLAS()
     return;
   }
   TLAS_update_TG.execute();
-  device.wait_idle();
-  // timeline signal values must be strictly increasing: bump right before the signaling submit
-  task_manager->gpu->advance_sim_timeline();
+  // The shared instance TaskBuffer carries the producer queue dependency to
+  // the AS graph. Daxa waits that submission on the GPU, without a host wait.
   TLAS_build_TG.execute();
 }
 
@@ -1029,12 +1026,15 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
 
 void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances_TG, TaskGraph &build_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline)
 {
-  auto user_callback_UI = [update_AS_pipeline](daxa::TaskInterface ti, auto &)
+  auto user_callback_UI = [this, update_AS_pipeline](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*update_AS_pipeline);
     ti.recorder.push_constant(UpdateInstancesPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(UpdateInstancesTaskHead::AT.dispatch_buffer).id,
-                                   .offset = 0});
+    // Fracture may grow the body list after the last solver dispatch. Its
+    // indirect group count is stale until the next simulation step (e.g. 32 ->
+    // 34 bodies leaves instances 32/33 untouched). Publish every current body.
+    ti.recorder.dispatch({.x = (current_rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1u) / RIGID_BODY_SIM_COMPUTE_X,
+                          .y = 1, .z = 1});
   };
 
   using TTaskUI = TaskTemplate<UpdateInstancesTaskHead::Task, decltype(user_callback_UI)>;
@@ -1054,6 +1054,8 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
           daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, task_aabb_buffer),
+          // Debug BLAS geometry addresses the simulation's LBVH node buffer.
+          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, rigid_body_manager->task_lbvh_nodes),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_WRITE, task_blas),
       },
       .task = [this](daxa::TaskInterface const &ti)
@@ -1094,14 +1096,17 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
       rigid_body_manager->task_rigid_bodies,
       task_aabb_buffer,
   };
-  // TLAS instance update + build run on the async compute queue, after the sim (same-queue FIFO)
+  // Keep separate graphs: this Daxa revision crashes compiling the instance
+  // write -> AS read barrier in a combined graph. Shared external resources
+  // preserve the GPU dependency across graphs on the compute queue.
   instances_TG = task_manager->create_task_graph("Update TLAS Instances", std::span<daxa::TaskBuffer>(instance_buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
   instances_TG.add_task(task_UI);
 
-  std::array<daxa::TaskBuffer, 3> build_buffers = {
+  std::array<daxa::TaskBuffer, 4> build_buffers = {
       rigid_body_manager->task_rigid_bodies,
       task_aabb_buffer,
       task_blas_instance_data,
+      rigid_body_manager->task_lbvh_nodes,
   };
   std::array<daxa::TaskBlas, 1> blas = {
       task_blas,

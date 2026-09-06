@@ -407,9 +407,12 @@ struct RigidBody
     daxa_f32mat3x3 rotation_matrix = rotation.to_matrix();
 
 #if defined(__cplusplus)
-    return daxa_f32mat4x4(daxa_f32vec4(rotation_matrix.x.x, rotation_matrix.y.x, rotation_matrix.z.x, translation.x),
-                          daxa_f32vec4(rotation_matrix.x.y, rotation_matrix.y.y, rotation_matrix.z.y, translation.y),
-                          daxa_f32vec4(rotation_matrix.x.z, rotation_matrix.y.z, rotation_matrix.z.z, translation.z),
+    // to_matrix() constructs rotation ROWS. Daxa's C++ vectors store those
+    // rows in x/y/z; Vulkan instance data requires the same three row vectors.
+    // Gathering columns here transposed the rotation of CPU-seeded fragments.
+    return daxa_f32mat4x4(daxa_f32vec4(rotation_matrix.x.x, rotation_matrix.x.y, rotation_matrix.x.z, translation.x),
+                          daxa_f32vec4(rotation_matrix.y.x, rotation_matrix.y.y, rotation_matrix.y.z, translation.y),
+                          daxa_f32vec4(rotation_matrix.z.x, rotation_matrix.z.y, rotation_matrix.z.z, translation.z),
                           daxa_f32vec4(0.0f, 0.0f, 0.0f, 1.0f));
 #else // defined(__cplusplus)
     return daxa_f32mat4x4(daxa_f32vec4(rotation_matrix[0], translation.x),
