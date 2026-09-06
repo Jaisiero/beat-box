@@ -218,9 +218,9 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   RT_TG.add_task(gui_manager->gui_line_task_info);
   RT_TG.add_task(gui_manager->gui_task_info);
 
-  // the render submit waits the sim timeline: it consumes the latest sim+TLAS publication
-  // produced on the async compute queue (value set per frame in execute())
-  RT_TG.submit({.additional_wait_timeline_semaphores = &gpu->sim_wait_span});
+  // Daxa waits the last producer queue of shared external resources (including
+  // task_tlas). TaskSubmitInfo's additional semaphore fields are unused in 3.6.
+  RT_TG.submit();
   RT_TG.present();
   RT_TG.complete();
 
@@ -253,7 +253,6 @@ bool RendererManager::execute()
   {
     return false;
   }
-  gpu->sync_render_to_sim_timeline(); // wait the latest published sim+TLAS state
   RT_TG.execute();
   return true;
 }
@@ -316,13 +315,10 @@ int RendererManager::render()
   if (det_steps > 0 && !std::getenv("BB_SCENE") && !std::getenv("BB_SCENE_FILE"))
     { status_manager->request_scene(3); } // default only; honor explicit test scene
   auto const run_start = std::chrono::steady_clock::now();
-  // The acceleration-structure build runs async on COMPUTE_0, and the render graph waits the SIM
-  // timeline (sim_wait_span) -- which is ONLY advanced/signalled by a sim step, never by the scene-load
-  // AS build. So after a scene load/switch the render never waits for the build and traverses an
-  // in-flight BLAS -> cubes render with rounded ("dented") corners until the first sim step. Run ONE
-  // real sim step on scene load/switch: it publishes the AS through the render-synced timeline path
-  // (the only thing that reliably fixes it). Bodies advance one 1/60s step (~3mm of gravity --
-  // imperceptible; the pool is floating mid-air at rest anyway).
+  // Preserve the existing one-step publication after a scene load/switch. It
+  // initializes the render-facing simulation state even when starting paused.
+  // Synchronization now relies on Daxa's shared external-resource queue tracking,
+  // not on the ignored TaskSubmitInfo semaphore fields.
   // C1 HEADLESS METRICS (env-gated). The ground-truth quality metrics (dbg_pen/deep100/deep200/
   // maxv/min_y) are computed every sim step UNCONDITIONALLY in the narrow phase, so this needs no
   // extra flag. BB_METRICS_CSV=path writes one clean CSV row per stepped frame; BB_ASSERT_MAX_DEEP200
@@ -489,7 +485,7 @@ int RendererManager::render()
       {
         gpu->synchronize();
         rigid_body_manager->simulate();
-        gpu->synchronize();
+        gpu->wait_for_simulation();
         sim_steps_this_frame = 1u;
         ++det_count;
         rigid_body_manager->read_back_sim_config();
@@ -567,14 +563,14 @@ int RendererManager::render()
         }
         prev_left = left_held;
       }
-      // ONE forced step after a scene load/switch to publish the async AS through the render-synced
-      // timeline path (cures the at-rest "dented/rounded cubes"). At rest is_simulating() is false, so
-      // only this runs; sim_steps_this_frame=1 makes the AS-update block below rebuild + signal.
+      // ONE forced step after a scene load/switch to publish the async AS through the shared-resource
+      // dependency path (cures the at-rest "dented/rounded cubes"). At rest is_simulating() is false, so
+      // only this runs; sim_steps_this_frame=1 makes the AS-update block below rebuild the publication.
       if (force_sim_step)
       {
         gpu->synchronize();
         rigid_body_manager->simulate();
-        gpu->synchronize();
+        gpu->wait_for_simulation();
         sim_steps_this_frame = 1u;
         force_sim_step = false;
       }
@@ -608,7 +604,7 @@ int RendererManager::render()
           gpu->synchronize();                                          // [PERF] flush prior GPU work
           auto _s0 = std::chrono::high_resolution_clock::now();        // [PERF]
           rigid_body_manager->simulate();
-          gpu->synchronize();                                          // [PERF] wait sim GPU completion
+          gpu->wait_for_simulation();                                  // [PERF] wait compute completion
           _sim_ms_accum += std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
           _sim_ms_n++;                                                 // [PERF]
