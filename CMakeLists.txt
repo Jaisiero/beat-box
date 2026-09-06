@@ -139,3 +139,8 @@ add_executable(fragment_finalization_tests tests/fragment_finalization_tests.cpp
 target_include_directories(fragment_finalization_tests PRIVATE include)
 target_link_libraries(fragment_finalization_tests PRIVATE daxa::daxa glm::glm)
 add_test(NAME fragment_finalization_tests COMMAND fragment_finalization_tests)
+
+add_executable(fragment_census_tests tests/fragment_census_tests.cpp)
+target_include_directories(fragment_census_tests PRIVATE include)
+target_link_libraries(fragment_census_tests PRIVATE daxa::daxa glm::glm)
+add_test(NAME fragment_census_tests COMMAND fragment_census_tests)

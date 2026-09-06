@@ -1,3 +1,4 @@
+#include "fragment_census_reference.hpp"
 #include "rigid_body_manager.hpp"
 #include "renderer_manager.hpp"
 
@@ -38,6 +39,9 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_VSB_INERTIA = task_manager->create_compute(VoxelInertiaReduceInfo{}.info);
     pipeline_VSB_PRIMS = task_manager->create_compute(VoxelPrimsBuildInfo{}.info);
     pipeline_fragment_finalize = task_manager->create_compute(FragmentFinalizeInfo{}.info);
+    pipeline_census_init = task_manager->create_compute(FragmentCensusInitInfo{}.info);
+    pipeline_census_accumulate = task_manager->create_compute(FragmentCensusAccumulateInfo{}.info);
+    pipeline_census_compact = task_manager->create_compute(FragmentCensusCompactInfo{}.info);
     pipeline_VFR_CARVE = task_manager->create_compute(VoxelCarveInfo{}.info);
     pipeline_VFR_VORONOI = task_manager->create_compute(VoxelVoronoiAssignInfo{}.info);
     pipeline_VFR_FLOOD_INIT = task_manager->create_compute(VoxelFloodInitInfo{}.info);
@@ -294,6 +298,15 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       *device.buffer_host_address_as<FractureEventBuffer>(fracture_events_buffer).value() = FractureEventBuffer{};
       // FRACTURE Voronoi sites: host writes up to BB_MAX_FRACTURE_SITES grid-space positions
       // per event; the voronoi-assign kernel reads them
+      fracture_census_scratch = device.create_buffer({
+          .size = sizeof(FragmentComponent) * BB_MAX_VOXEL_SDF_F32S,
+          .name = "fracture_census_scratch",
+      });
+      fracture_census_output = device.create_buffer({
+          .size = sizeof(FragmentCensusOutput),
+          .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
+          .name = "fracture_census_output",
+      });
       fracture_sites_buffer = device.create_buffer({
           .size = sizeof(daxa_f32vec4) * BB_MAX_FRACTURE_SITES,
           .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
@@ -1997,6 +2010,8 @@ void RigidBodyManager::destroy()
   if (!voxel_derived.is_empty()) { device.destroy_buffer(voxel_derived); voxel_derived = {}; }
   if (!fracture_events_buffer.is_empty()) { device.destroy_buffer(fracture_events_buffer); fracture_events_buffer = {}; }
   if (!fracture_sites_buffer.is_empty()) { device.destroy_buffer(fracture_sites_buffer); fracture_sites_buffer = {}; }
+  if (!fracture_census_scratch.is_empty()) { device.destroy_buffer(fracture_census_scratch); fracture_census_scratch = {}; }
+  if (!fracture_census_output.is_empty()) { device.destroy_buffer(fracture_census_output); fracture_census_output = {}; }
 
   initialized = false;
 }
@@ -2461,11 +2476,10 @@ void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shap
 
 void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 carve_center_grid, daxa_f32 carve_radius_grid,
                                        std::vector<daxa_f32vec4> const &sites, daxa_f32 voronoi_radius_grid,
-                                       std::vector<daxa_u32> &out_occ_words, std::vector<daxa_u32> &out_labels)
+                                       std::vector<daxa_u32> &out_labels, std::vector<FragmentComponent> &out_components)
 {
   if (!initialized) { return; }
   daxa_u32 const cells = shape.dims.x * shape.dims.y * shape.dims.z;
-  daxa_u32 const words = (cells + 31u) / 32u;
   daxa_u32 const site_count = std::min<daxa_u32>((daxa_u32)sites.size(), BB_MAX_FRACTURE_SITES);
   bool const use_voronoi = site_count > 0u;
   if (use_voronoi)
@@ -2486,6 +2500,13 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 car
       .site_count = site_count,
       .use_voronoi = use_voronoi ? 1u : 0u,
   };
+  bool const verify_census = std::getenv("BB_CENSUS_VERIFY") != nullptr;
+  // Three extra dispatches are not worthwhile for tiny cropped grids. The
+  // one-pass CPU census is exact; verification still exercises the GPU path.
+  bool const use_gpu_census = cells >= 1024u || verify_census;
+  daxa::TimelineQueryPool census_queries = {};
+  if (verify_census)
+    census_queries = device.create_timeline_query_pool({.query_count = 2, .name = "fragment_census"});
   auto rec = device.create_command_recorder({});
   auto const barrier = [&rec]() {
     rec.pipeline_barrier({
@@ -2525,29 +2546,112 @@ void RigidBodyManager::carve_and_label(VoxelShape const &shape, daxa_f32vec3 car
     rec.dispatch({.x = groups, .y = 1, .z = 1});
     barrier();
   }
-  // readbacks (fracture-rate one-offs): carved occupancy words + per-cell labels
-  auto const occ_bytes = (u64)words * sizeof(daxa_u32);
+  // Census shares the existing label submission and completion boundary.
+  auto record_census = [&](auto &commands, daxa_u32vec3 dims, daxa_u64 labels_addr) {
+    FragmentCensusPushConstants census_pc = {
+        .labels_addr = labels_addr,
+        .scratch_addr = device.device_address(fracture_census_scratch).value(),
+        .output_addr = device.device_address(fracture_census_output).value(),
+        .dims = dims,
+    };
+    for (auto const &pipeline : {pipeline_census_init, pipeline_census_accumulate, pipeline_census_compact})
+    {
+      commands.set_pipeline(*pipeline);
+      commands.push_constant(census_pc);
+      commands.dispatch({.x = (dims.x*dims.y*dims.z + 63u)/64u, .y = 1, .z = 1});
+      commands.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+                                 .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
+    }
+  };
+  if (verify_census)
+  {
+    rec.reset_timestamps({.query_pool = census_queries, .start_index = 0, .count = 2});
+    rec.write_timestamp({.query_pool = census_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 0});
+  }
+  if (use_gpu_census) record_census(rec, shape.dims, pc.labels_addr);
+  if (verify_census)
+    rec.write_timestamp({.query_pool = census_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 1});
+  // Labels remain necessary for CPU occupancy packing. The old occupancy
+  // readback was unused by the caller and is omitted.
   auto const lbl_bytes = (u64)cells * sizeof(daxa_u32);
   daxa::BufferId staging = device.create_buffer({
-      .size = occ_bytes + lbl_bytes,
+      .size = lbl_bytes,
       .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,
       .name = "fracture_readback_staging",
   });
   rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
                          .dst_access = daxa::AccessConsts::TRANSFER_READ});
-  rec.copy_buffer_to_buffer({.src_buffer = voxel_occupancy, .dst_buffer = staging,
-                              .src_offset = (u64)shape.occ_offset * sizeof(daxa_u32), .size = occ_bytes});
-  rec.copy_buffer_to_buffer({.src_buffer = voxel_sdf_scratch[0], .dst_buffer = staging,
-                              .dst_offset = occ_bytes, .size = lbl_bytes});
-  rec.pipeline_barrier({.src_access = daxa::AccessConsts::TRANSFER_WRITE,
-                           .dst_access = daxa::AccessConsts::HOST_READ});
+  rec.copy_buffer_to_buffer({.src_buffer = voxel_sdf_scratch[0], .dst_buffer = staging, .size = lbl_bytes});
+  rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
+                       .dst_access = daxa::AccessConsts::HOST_READ});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
   device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
       .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
   daxa_u32 const *host = device.buffer_host_address_as<daxa_u32>(staging).value();
-  out_occ_words.assign(host, host + words);
-  out_labels.assign(host + words, host + words + cells);
+  out_labels.assign(host, host + cells);
+  auto const *summary = device.buffer_host_address_as<FragmentCensusOutput>(fracture_census_output).value();
+  out_components = use_gpu_census ? decode_fragment_census(*summary, out_labels, shape.dims) :
+                                    fragment_census_reference(out_labels, shape.dims);
+  if (use_gpu_census && summary->count > BB_FRAGMENT_CENSUS_CAPACITY)
+    std::cout << "[CENSUS] overflow=" << summary->count << " using CPU fallback" << std::endl;
+  if (verify_census)
+  {
+    auto const cpu_start = std::chrono::steady_clock::now();
+    auto reference = fragment_census_reference(out_labels, shape.dims);
+    double const cpu_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now() - cpu_start).count();
+    auto const query = census_queries.get_query_results(0, 2);
+    if (query[1] && query[3])
+      std::cout << "[CENSUS-COST] cells=" << cells << " gpu_ms="
+                << double(query[2]-query[0])*device.properties().limits.timestamp_period/1e6
+                << " cpu_ms=" << cpu_ms << std::endl;
+    if (reference.size() != out_components.size() ||
+        (!reference.empty() && std::memcmp(reference.data(), out_components.data(), reference.size()*sizeof(FragmentComponent))))
+    {
+      std::cerr << "[CENSUS-VERIFY] FAILED" << std::endl;
+      std::abort();
+    }
+    std::cout << "[CENSUS-VERIFY] cells=" << cells << " components=" << reference.size() << " MATCH" << std::endl;
+    // One-time GPU edge cases, excluded from production and benchmark runs.
+    static bool edge_cases_verified = false;
+    if (!edge_cases_verified)
+    {
+      for (daxa_u32 test = 0; test < 4; ++test)
+      {
+        daxa_u32vec3 dims = test == 0 ? daxa_u32vec3(7,5,3) :
+                            test == 1 ? daxa_u32vec3(257,1,1) :
+                            test == 2 ? daxa_u32vec3(65536,1,1) : daxa_u32vec3(1,1,1);
+        std::vector<daxa_u32> labels(dims.x*dims.y*dims.z, 0u);
+        for (daxa_u32 c = 0; c < labels.size(); ++c)
+          labels[c] = test == 0 ? (c%3 == 0 ? MAX_U32 : c%2) :
+                      test == 1 ? c : test == 2 ? 0u : MAX_U32;
+        auto input = device.create_buffer({.size = labels.size()*sizeof(daxa_u32),
+            .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+            .name = "census_validation_labels"});
+        std::memcpy(device.buffer_host_address_as<daxa_u32>(input).value(), labels.data(), labels.size()*sizeof(daxa_u32));
+        auto test_rec = device.create_command_recorder({});
+        record_census(test_rec, dims, device.device_address(input).value());
+        test_rec.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
+                                    .dst_access = daxa::AccessConsts::HOST_READ});
+        auto test_cmds = test_rec.complete_current_commands();
+        device.submit_commands({.command_lists = std::array{test_cmds}});
+        device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
+            .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
+        auto expected = fragment_census_reference(labels, dims);
+        auto actual = decode_fragment_census(*summary, labels, dims);
+        if (summary->count != expected.size() || actual.size() != expected.size() ||
+            (!actual.empty() && std::memcmp(actual.data(), expected.data(), actual.size()*sizeof(FragmentComponent))))
+        {
+          std::cerr << "[CENSUS-VERIFY] edge case FAILED: " << test << std::endl;
+          std::abort();
+        }
+        std::cout << "[CENSUS-VERIFY] edge=" << test << " components=" << summary->count << " MATCH" << std::endl;
+        device.destroy_buffer(input);
+      }
+      edge_cases_verified = true;
+    }
+
+  }
   device.destroy_buffer(staging);
 }
 

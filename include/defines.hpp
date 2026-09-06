@@ -10,6 +10,7 @@
 
 #include "shared.inl"
 #include "fragment_finalization.inl"
+#include "fragment_census.inl"
 #include <daxa/daxa.hpp>
 using namespace daxa::types;
 #include <daxa/utils/pipeline_manager.hpp>
@@ -987,6 +988,33 @@ struct FragmentFinalizeInfo {
       },
       .push_constant_size = sizeof(FragmentFinalizePushConstants),
       .name = "Finalize Fragment Bodies",
+  };
+};
+
+struct FragmentCensusInitInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {.source = daxa::ShaderFile{"fragment_census.slang"},
+                      .compile_options = {.entry_point = "entry_fragment_census_init"}},
+      .push_constant_size = sizeof(FragmentCensusPushConstants),
+      .name = "Fragment census init",
+  };
+};
+
+struct FragmentCensusAccumulateInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {.source = daxa::ShaderFile{"fragment_census.slang"},
+                      .compile_options = {.entry_point = "entry_fragment_census_accumulate"}},
+      .push_constant_size = sizeof(FragmentCensusPushConstants),
+      .name = "Fragment census accumulate",
+  };
+};
+
+struct FragmentCensusCompactInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {.source = daxa::ShaderFile{"fragment_census.slang"},
+                      .compile_options = {.entry_point = "entry_fragment_census_compact"}},
+      .push_constant_size = sizeof(FragmentCensusPushConstants),
+      .name = "Fragment census compact",
   };
 };
 

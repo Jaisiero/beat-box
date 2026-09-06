@@ -171,11 +171,11 @@ struct RigidBodyManager{
   // fragments, all on the GPU (labels in the EDT scratch buffer). When `sites` is non-empty
   // the impact zone (within voronoi_radius of the carve center) is partitioned along those
   // Voronoi sites so it shatters into many fragments; empty `sites` = the legacy natural
-  // connected-components split. Readbacks (fracture-rate one-offs): the carved occupancy
-  // words and the per-cell fragment labels - the host orchestrator does the bookkeeping.
+  // connected-components split. Returns labels for host packing and sorted component
+  // statistics (GPU census for large grids, exact CPU census for small grids).
   void carve_and_label(VoxelShape const &shape, daxa_f32vec3 carve_center_grid, daxa_f32 carve_radius_grid,
                        std::vector<daxa_f32vec4> const &sites, daxa_f32 voronoi_radius_grid,
-                       std::vector<daxa_u32> &out_occ_words, std::vector<daxa_u32> &out_labels);
+                       std::vector<daxa_u32> &out_labels, std::vector<FragmentComponent> &out_components);
   // read the GPU mass-property records (count/com/unit inertia) for the first `count`
   // shapes - the authority for fragment RigidBody records after a pools rebuild
   void read_voxel_derived(daxa_u32 count, std::vector<VoxelShapeDerived> &out);
@@ -262,6 +262,8 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_INERTIA;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_PRIMS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_fragment_finalize;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_census_init, pipeline_census_accumulate, pipeline_census_compact;
+  daxa::BufferId fracture_census_scratch{}, fracture_census_output{};
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_CARVE;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_VORONOI;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_FLOOD_INIT;
