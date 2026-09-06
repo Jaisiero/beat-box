@@ -46,6 +46,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_BP = task_manager->create_compute(BroadPhaseInfo{}.info);
     pipeline_NPD = task_manager->create_compute(NarrowPhaseDispatcherInfo{}.info);
     pipeline_NP = task_manager->create_compute(NarrowPhaseInfo{}.info);
+    pipeline_NP_SDF = task_manager->create_compute(NarrowPhaseSdfInfo{}.info);
     pipeline_CHS = task_manager->create_compute(ChainSortInfo{}.info);
     pipeline_PS = task_manager->create_compute(PickSpringInfo{}.info);
     pipeline_advect = task_manager->create_compute(RigidBodySim{}.info);
@@ -723,7 +724,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       ti.recorder.write_timestamp({.query_pool = narrow_phase_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 0});
       narrow_phase_query_pending = true;
     }
-    ti.recorder.set_pipeline(*pipeline_NP);
+    ti.recorder.set_pipeline(*(scene_has_voxels ? pipeline_NP_SDF : pipeline_NP));
     ti.recorder.push_constant(NarrowPhasePushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(NarrowPhaseTaskHead::AT.dispatch_buffer).id, .offset = sizeof(daxa_u32vec3) * NARROW_PHASE_COLLISION_DISPATCH_COUNT_OFFSET});
     if (narrow_phase_timing)

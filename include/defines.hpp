@@ -1158,6 +1158,23 @@ struct NarrowPhaseInfo {
   };
 };
 
+// Internal specialization for scenes containing voxels. OBB-only scenes keep
+// the original narrow-phase pipeline, independently of SDF optimizations.
+struct NarrowPhaseSdfInfo {
+  daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
+      .source = daxa::ShaderFile{"passes/narrow_phase.slang"},
+      .compile_options = {
+          .entry_point = entry_narrow_phase_sim,
+          .defines = {{"BB_SDF_PAIR_PREFILTER", "1"}},
+      },
+  };
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = compute_shader,
+      .push_constant_size = sizeof(NarrowPhasePushConstants),
+      .name = "SDF narrow phase Simulation",
+  };
+};
+
 struct ChainSortInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
       .source = daxa::ShaderFile{"passes/reordering.slang"},

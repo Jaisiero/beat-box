@@ -2274,6 +2274,9 @@ public:
     material_TG.execute();
     light_TG.execute();
 
+    // Refresh on every load, including switches from voxel scenes to OBB-only scenes.
+    rigid_body_manager->set_scene_has_voxels(!voxel_shape_cpu.empty());
+
     // upload the voxel shape pools (static for the scene's lifetime; host-writable buffers
     // owned by the rigid body manager, read by the narrow phase)
     if (!voxel_shape_cpu.empty())

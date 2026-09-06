@@ -1583,10 +1583,12 @@ daxa_b32 voxel_axis_collision_detection(SimConfig* sim_config, RigidBody* rA, Ri
   manifold.key = daxa_i32(90u + code);
   manifold.error = 0;
 
+#if !defined(BB_SDF_PAIR_PREFILTER)
   if (!voxel_obb_prefilter(rA, rB))
   {
     return false;
   }
+#endif
 
   VoxelShape* shapes = (VoxelShape*)(sim_config->voxel_shapes_addr);
   daxa_u32* occ = (daxa_u32*)(sim_config->voxel_occupancy_addr);
@@ -1731,6 +1733,12 @@ func narrow_phase(BroadPhaseCollision broad_phase_collision, RigidBodyEntry* rig
   for (daxa_u32 pi = 0u; pi < 6u; ++pi) { axis_have[pi] = true; }
   if (voxel_pair)
   {
+#if defined(BB_SDF_PAIR_PREFILTER)
+    // Bounds are unchanged across the six face passes. Reject the pair once,
+    // before sampling, while retaining the same tests and contact emission order.
+    if (!voxel_obb_prefilter(r, r2)) { return; }
+#endif
+
     // volume + separation criterion (v2 — the v1 same-axis-pair depth rule was blind to the
     // user's TILTED wedge, whose per-contact cell-local depths read only ~10 mm): the probe's
     // overlap_hits counts samples truly INSIDE the other body's solid. A resting or threading

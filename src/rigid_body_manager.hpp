@@ -191,6 +191,9 @@ struct RigidBodyManager{
     if (!initialized || fracture_events_buffer.is_empty()) { return; }
     *device.buffer_host_address_as<FractureEventBuffer>(fracture_events_buffer).value() = FractureEventBuffer{};
   }
+  // Scene metadata selects the appropriate compiled narrow-phase specialization.
+  void set_scene_has_voxels(bool value) { scene_has_voxels = value; }
+
   // re-upload the (host-authoritative) VoxelShape records after the orchestrator fixed
   // grid_origins from the derived readback (the prims pass reads grid_origin)
   void upload_voxel_shapes(std::vector<VoxelShape> const &shapes);
@@ -271,7 +274,9 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_RBR;
   std::shared_ptr<daxa::ComputePipeline> pipeline_BP;
   std::shared_ptr<daxa::ComputePipeline> pipeline_NPD;
+  bool scene_has_voxels = false;
   std::shared_ptr<daxa::ComputePipeline> pipeline_NP;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_NP_SDF;
   std::shared_ptr<daxa::ComputePipeline> pipeline_CHS; // canonical chain sort (determinism)
   std::shared_ptr<daxa::ComputePipeline> pipeline_PS;  // mouse pick-and-drag spring
   std::shared_ptr<daxa::ComputePipeline> pipeline_CS_dispatcher;

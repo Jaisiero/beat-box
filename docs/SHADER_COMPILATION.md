@@ -116,3 +116,8 @@ it does not claim to fix the destruction solver.
 
 Evidence: `/root/beat-box/work/shader-modules`, with `cache-probe/results.json`,
 `f5-*.csv`, `f6-*.csv`, `f7-*.csv`, `fragments-*.csv` and their logs.
+
+The narrow-phase entry now has two pipeline specializations: the original and an
+SDF pair-prefilter variant. Scene metadata selects one; there is still one dispatch.
+The dependency report counts entry points, so its one narrow-phase entry represents
+two compilations when collision detection changes. See `SDF_PERFORMANCE.md`.
