@@ -136,3 +136,7 @@ voxel-pool GPU dispatch chain. Queries are read after the existing MAIN submit
 wait; this instrumentation introduces no additional wait. See
 [SDF_PERFORMANCE.md](SDF_PERFORMANCE.md) for controlled measurements and rejected
 experiments.
+
+`BB_RESPAWN_TIMING` additionally reports `[AVBD-STAGES]` GPU intervals for setup,
+preparation, primal/dual, post-stabilization and publication. These queries reuse
+the existing readback wait. See `SDF_PERFORMANCE.md` for interval definitions.

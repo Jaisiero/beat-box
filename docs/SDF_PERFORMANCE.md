@@ -1,87 +1,102 @@
-# SDF pair prefilter optimization
+# SDF and solver pipeline optimization
 
-## Implementation
+## Changes
 
-A voxel pair can emit six directional manifolds. Its unchanged OBB bounds test
-now runs once before those six passes, instead of inside each pass. Rejected
-pairs emit nothing; accepted pairs retain the same sample/SAT/manifold order,
-thresholds and warm-start behavior. The monitored-pair coverage bit is set before
-the rejection. No buffer, shader ABI, dispatch count or barrier changes.
+A voxel pair can emit six directional manifolds. The unchanged OBB bounds test
+runs once before those passes instead of once inside each pass. Rejected pairs
+emit nothing; accepted pairs retain the sample/SAT/manifold order and thresholds.
+The monitored-pair coverage bit is set before rejection. There is one narrow-phase
+pipeline; the provisional SDF specialization and scene-selection state are removed.
+`voxel_sdf.slang` is unchanged. The earlier build shortcut remains withdrawn.
 
-`NarrowPhaseSdfInfo` compiles this as an internal specialization using
-`BB_SDF_PAIR_PREFILTER`. It is not a user setting or environment override.
-`SceneManager::load_scene` updates the scene's voxel presence on every load;
-`RigidBodyManager` chooses the SDF pipeline for scenes with voxel shapes and the
-original pipeline for OBB-only scenes, including switches back from F9 to F7.
-Fracturing an existing voxel scene retains the SDF selection.
+AVBD records one C++ task per primal color sweep instead of one per color.
+With the current configuration this replaces 800 primal task entries with 25,
+and binds the primal pipeline once per sweep. It preserves all 800 indirect GPU
+dispatches, their order, push constants, iteration counts and per-color memory
+dependencies. Explicit compute barriers separate colors; Daxa task attachments
+provide sweep-boundary and indirect-buffer dependencies.
 
-Without the specialization define, the collision source has exactly the same
-non-comment tokens as merge baseline e45d8b6. The original OBB compilation path is
-preserved while SDF optimizations can evolve independently. There are two compiled
-variants of the same entry point, not extra dispatches per simulation step.
-An edit of collision detection can therefore rebuild two pipeline variants.
-`voxel_sdf.slang` remains unchanged; the earlier build shortcut is not retained.
+The convergence defect was uninitialized reference-edge fields in OBB incident
+vertices, subsequently consumed as contact-history IDs. Both fields are now
+initialized before clipping. See [CONVERGENCE_ORIGIN.md](CONVERGENCE_ORIGIN.md)
+for captures, the causal chain and the synchronization audit. No convergence
+thresholds were relaxed to obtain the measurements below.
 
 ## Measurement
 
-`BB_RESPAWN_TIMING` logs all narrow-phase query samples (formerly only >=5 ms)
-and the voxel-pool GPU build chain. Queries are read after existing submit waits;
-there are no additional waits. All instrumentation remains opt-in.
+`BB_RESPAWN_TIMING` reports every narrow-phase query, the voxel-pool build chain,
+and five GPU AVBD stage intervals. Queries are read after existing submit waits;
+no additional queue wait is introduced. Stage markers use a SimConfig attachment
+to remain ordered and exist only when profiling is enabled.
 
-With the application closed, on the Linux simulation host:
+- `setup_ms`: pick/reset, sorting, BVH, broad/narrow phase and contact-chain sort.
+- `prepare_ms`: advection, islands, sleep/coloring, warm start and depth preparation.
+- `main_ms`: primal/dual iterations.
+- `post_ms`: finalization, impact handling and positional post-stabilization.
+- `finalize_ms`: debug contacts and body publication.
+
+Narrow phase is included in setup, not additive to it. Instrumented GPU intervals
+exclude host recording, waits, rendering and startup compilation. The six SDF
+surface scans remain and are still a significant optimization opportunity.
+
+With the application closed on the Linux host:
 
 ```sh
 python3 tools/benchmark_sdf.py --runtime build/Release --output work/sdf-benchmark --repeats 3
 ```
 
-The tool clears inherited BB_* and validation-layer overrides, checks completion,
-query counts and CSV lengths, and records source/CSV hashes. F3's weak fracture
-fixture, F5 and F6 run for 300 fixed steps; F7 runs for 1800 and reports first full
-sleep, sleep count at 900, and whether full sleep persists. `--solver 3` selects
-TGS; `--steps` and `--pool-steps` change measurement lengths, not solver iterations.
-F7 has no SDF builds. A late full sleep does not erase a failed 900-step checkpoint.
+The tool clears inherited BB_* and validation overrides, checks full completion,
+query counts and CSV lengths, and records shader/CSV hashes. F3's weak fracture
+fixture, F5 and F6 run 300 fixed steps; F7 runs 1800. `--solver 3` selects TGS.
 
-RTX 4090, AVBD, three runs per scene. Values are medians of per-run mean GPU
-narrow-phase time. The original was measured in three alternating original/early-
-candidate runs; the final isolated variant was remeasured in three runs after the
-C++ build. Startup compilation, rendering and validation-layer overhead are excluded.
+RTX 4090, AVBD, three alternating runs of the fixed original bounds-test placement
+and fixed pair-prefilter version. Both controls include the contact-ID correction.
+Values are medians of per-run mean GPU narrow-phase time:
 
-| Scene | Original | Final SDF variant | Reduction |
+| Scene | Original placement | Pair prefilter | Reduction |
 | --- | ---: | ---: | ---: |
-| F3 fracture fixture | 0.31322 ms | 0.29509 ms | 5.79% |
-| F5 | 0.46470 ms | 0.44246 ms | 4.78% |
-| F6 | 0.49114 ms | 0.46999 ms | 4.31% |
+| F3 fracture fixture | 0.31342 ms | 0.29584 ms | 5.61% |
+| F5 | 0.46610 ms | 0.44265 ms | 5.03% |
+| F6 | 0.49045 ms | 0.47062 ms | 4.04% |
 
-The earlier alternating candidate independently measured 5.90%, 4.69% and 4.21%.
-Savings are approximately 18–22 microseconds per step in these scenes. They are
-not whole-frame speedups or a bound on arbitrary interactive F9 fracture stalls.
-The six surface scans remain; this is an incremental optimization.
+After pair rejection is optimized, the unbatched F6 profile is approximately
+0.558 ms setup (including 0.471 ms narrow phase), 0.101 ms preparation,
+0.236 ms main solve, 0.187 ms post-stabilization and 0.008 ms publication.
+The batched version changes GPU main/post times only to 0.237/0.187 ms:
+its principal target is CPU recording overhead, not the solver arithmetic.
 
-## Validation and limits
+For total step cost, three alternating unbatched/batched F6 runs used
+`BB_SCENE=6 BB_SOLVER=2 BB_AUTOSTART=1 BB_RUN_SECONDS=20`, with profiling and
+validation disabled. Each log contains 216 timed steps before sleep. The existing
+`[PERF] sim` interval includes recording, submission, GPU execution and readback;
+it excludes rendering. Weighting each interval by its step count gives unbatched
+means of 3.130, 3.168 and 3.853 ms, versus 2.643, 2.674 and 2.490 ms batched.
+The median drops **3.168 -> 2.643 ms (16.6%)**. Run-to-run host timing noise is
+visible; this is a scene-specific step-cost measurement, not a whole-frame or
+worst-case fracture-latency guarantee.
 
-All nine final SDF physics CSVs match their original controls byte-for-byte.
-AVBD and TGS both complete the 900-step fracture fixture with Vulkan synchronization
-validation and pool verification without reported errors; their full CSVs match
-the merged contact-fix baseline. Four CTest targets pass. Independent surface-list/count checks on both captures
-also pass. A 60-second interactive F9 test at 4K performed 11 fracture publications;
-its capture contained 34 bodies with valid surface lists and no reported pool errors.
-This smoke test is not a controlled F9 performance or convergence comparison.
+## Validation
 
-F7 settling remains variable and is not claimed fixed by this PR. Eight original
-controls in the current campaign reached full sleep by 1800 steps. The initial
-single-pipeline candidate completed two of three, leaving 15 sleepers in the other.
-The final isolated version reached full sleep at steps 576 and 617 in two runs;
-one run still had 26 sleepers at 1800, despite using the original OBB source path.
-This remains an unresolved stability limitation, not evidence of a specific driver
-bug, memory race or SDF arithmetic error. The PR remains a draft for review.
-No sleep tolerance or solver iteration budget has been changed to hide the result.
+All checkpoint traces and physics CSVs match across the fixed reference,
+pair-prefilter and batched versions: three runs of each, on F3/F5/F6/F7.
+Across all 15 F7 AVBD runs, every checkpoint and CSV row is identical. All 432
+dynamic boxes sleep at step 591 and remain asleep through 1800. This includes
+a profiling-disabled run with Vulkan synchronization validation. Two additional TGS F7 replays also have identical CSVs and reach
+full sleep at step 885. These measure this fixture, not universal solver rankings.
 
-Previous controls also found a failure of the original at the 900-step checkpoint
-(it settled at 1094), so the earlier categorical attribution to the unused SDF
-build shortcut was premature. That shortcut remains withdrawn.
+Both solvers complete 900 fracture-fixture steps with Vulkan synchronization
+validation and pool verification, without reported errors. Independent CPU
+occupancy-to-surface-list/count checks pass for both final captures.
+The validated 900-step fracture CSVs match unbatched controls for both solvers.
+All five CTest targets pass. The replay checker also rejects the original divergent
+early-contact captures.
+A 45-second interactive F9 smoke test at 4K performs 13 fracture publications;
+the final capture has 48 bodies and passes independent surface-list/count checks.
+No pool errors are reported. This manual test is not a controlled performance
+comparison. No claim is made that finite tests prove every possible SDF scene stable.
 
-Evidence: `/root/beat-box/work/sdf-pair-prefilter/` contains alternating runs,
-`isolated/results.json`, final validation logs/CSVs and build logs. Earlier evidence
-is in `work/sdf-performance/` and `work/f7-regression/`; historical directory names
-`final/` and `shipping/` do not imply approval. Initial `baseline-*` runs using an
-empty scene-file override were invalid and are excluded.
+Raw evidence: `/root/beat-box/work/convergence-origin/`, including
+`fixed-reference-{1,2,3}/`, `fixed-optimized-{1,2,3}/`, `batched/`,
+`validation-*`, `tgs-f7-*` and `realtime-*`. Earlier draft performance and
+convergence interpretations in `work/sdf-pair-prefilter/` are historical;
+the corrected controls above supersede their unresolved F7 conclusions.
