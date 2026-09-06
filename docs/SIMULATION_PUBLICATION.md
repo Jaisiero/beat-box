@@ -1,75 +1,74 @@
-# Publicación de simulación y TLAS
+# Simulation and TLAS publication
 
-## Cambios
+## Changes
 
-Se elimina el `device.wait_idle()` entre actualizar las instancias y construir el
-TLAS. Los dos graphs conservan el mismo `TaskBuffer` externo de instancias:
-la escritura compute deja registrada su cola productora y el graph de AS espera
-el último envío de esa cola mediante los semáforos internos de Daxa. El render
-consume del mismo modo el `TaskTlas` publicado. No se presupone que el orden FIFO
-por sí solo haga visibles las escrituras.
+The `device.wait_idle()` between instance updates and TLAS construction is
+removed. Both graphs retain the same external instance `TaskBuffer`: the
+compute write records its producer queue, and the AS graph waits for that
+queue's latest submission through Daxa's internal semaphores. Rendering consumes
+the published `TaskTlas` in the same way. FIFO ordering alone is not assumed to
+make writes visible.
 
-Se retiran el semáforo `sim_done_tsem`, sus contadores y spans: en la revisión
-vendorizada de Daxa 3.6, `TaskGraph::submit` ignora `TaskSubmitInfo`. Por tanto,
-los campos `additional_*_timeline_semaphores` del código anterior no aportaban
-sincronización. La dependencia efectiva ya era la de recursos externos.
+The `sim_done_tsem` semaphore, its counters, and spans are removed: in the
+vendored Daxa 3.6 revision, `TaskGraph::submit` ignores `TaskSubmitInfo`.
+Therefore, the previous `additional_*_timeline_semaphores` fields did not provide
+synchronization. The effective dependency already came from external resources.
 
-Las esperas inmediatamente posteriores a `simulate()` ahora esperan el último
-envío de `QUEUE_COMPUTE_0`, donde se ejecuta el solver. No esperan globalmente
-las otras colas. Se mantienen las esperas previas a la simulación y las fronteras
-de vida útil de recursos, cambios de escena, readback y fragmentación que todavía
-necesitan el protocolo actual. Esta modificación no elimina toda comunicación
-CPU/GPU ni cambia el algoritmo físico.
+Waits immediately after `simulate()` now wait for the latest submission on
+`QUEUE_COMPUTE_0`, where the solver runs, rather than globally waiting for the
+other queues. Pre-simulation waits and resource lifetime, scene change,
+readback, and fracture boundaries that still need the current protocol are
+preserved. This change does not eliminate all CPU/GPU communication or alter
+the physics algorithm.
 
-El BLAS de depuración lee geometría del buffer de nodos LBVH. Se añade ese buffer
-como `BUILD_READ` al task de construcción y al registro de recursos de su graph.
+The debug BLAS reads geometry from the LBVH node buffer. That buffer is added
+as `BUILD_READ` to the build task and registered with its graph.
 
-## Restricción del compilador de graphs
+## Graph compiler limitation
 
-Se probaron un graph combinado y un graph combinado con dos submits. Ambos
-fallaron durante `TaskGraph::complete`, antes de ejecutar la simulación. GDB
-localizó un `ArenaDynamicArray8k<TaskBarrier>` con allocator nulo al insertar la
-barrera del buffer `blas_instance_data`, entre escritura compute y lectura AS.
-No se modifica Daxa en esta rama: se conservan los dos graphs existentes,
-sin la espera de CPU intermedia. La causa interna exacta requiere un caso mínimo
-independiente; no se atribuye el fallo a Vulkan ni a una carrera de GPU.
+A combined graph and a combined graph with two submissions were tested. Both
+failed during `TaskGraph::complete`, before simulation execution. GDB located
+an `ArenaDynamicArray8k<TaskBarrier>` with a null allocator when inserting the
+barrier for `blas_instance_data`, between compute writes and AS reads.
+This branch does not modify Daxa: it retains the two existing graphs without
+the intermediate CPU wait. The exact internal cause requires a separate minimal
+reproducer; the failure is not attributed to Vulkan or a GPU race.
 
-## Validación
+## Validation
 
-- Build Release y cinco tests de CTest correctos.
-- Fixture de rotura: 900 pasos con AVBD y 900 con TGS.
-- F7: 1800 pasos con AVBD y 1800 con TGS.
-- Los cuatro CSV y todos los checkpoints DET coinciden exactamente con los
-  controles de PR25. Vulkan synchronization validation no reporta errores;
-  la fixture también activa la verificación de pools.
-- Interacción a 3840×2160 con validación Vulkan: roturas mediante drag/release
-  en F9, BVH y reset, pausa/acumulación, F5/F7/F9, cámara y resize. Sin errores
-  reportados. Capturas `ui-fracture.png` y `ui-bvh.png`.
-- F6 A/B contra el ejecutable anterior, tres repeticiones de 600 pasos por
-  solver y variante. Todos los CSV y checkpoints coinciden dentro de cada
-  solver. Sin validación Vulkan ni profiling para medir rendimiento.
+- Release build and all five CTest tests pass.
+- Fracture fixture: 900 steps with AVBD and 900 with TGS.
+- F7: 1800 steps with AVBD and 1800 with TGS.
+- All four CSVs and every DET checkpoint exactly match the PR25 controls.
+  Vulkan synchronization validation reports no errors; the fixture also enables
+  pool verification.
+- Interaction at 3840x2160 with Vulkan validation: drag/release fractures in F9,
+  BVH and reset, pause/accumulation, F5/F7/F9, camera movement, and resizing.
+  No reported errors. Captures: `ui-fracture.png` and `ui-bvh.png`.
+- F6 A/B against the previous executable, three repetitions of 600 steps per
+  solver and variant. All CSVs and checkpoints match within each solver.
+  Vulkan validation and profiling were disabled for performance measurements.
 
-| Solver | Antes, ms/frame | Después, ms/frame | Reducción |
+| Solver | Before, ms/frame | After, ms/frame | Reduction |
 | --- | ---: | ---: | ---: |
-| AVBD | 4,450 | 4,024 | 9,6 % |
-| TGS | 6,034 | 5,804 | 3,8 % |
+| AVBD | 4.450 | 4.024 | 9.6% |
+| TGS | 6.034 | 5.804 | 3.8% |
 
-Medianas de tiempo de pared entre checkpoints 1 y 600, dividido entre 599.
-Incluyen simulación, publicación, render y coste del harness a 860×640;
-**no son tiempos GPU exclusivos del solver ni cifras de render a 4K**.
-Hardware: RTX 4090, LXC 110. Es una medición local, no una garantía para otras
-escenas, resoluciones o arquitecturas.
+Median wall-clock time between checkpoints 1 and 600, divided by 599.
+Includes simulation, publication, rendering, and harness overhead at 860x640;
+**these are neither solver-only GPU times nor 4K rendering measurements**.
+Hardware: RTX 4090, LXC 110. This is a local measurement, not a guarantee for
+other scenes, resolutions, or architectures.
 
-Evidencia: `/root/beat-box/work/publication/`, incluidos `checks.log`,
-`timings.json`, logs/CSV de cada repetición y los backtraces de los intentos
-de combinar graphs.
+Evidence: `/root/beat-box/work/publication/`, including `checks.log`,
+`timings.json`, per-run logs/CSVs, and backtraces from the attempts to combine
+graphs.
 
+## Visibility after fractures
 
-## Visibilidad tras roturas
-
-Una comprobación posterior detectó dos defectos preexistentes en la publicación:
-rotación transpuesta en las instancias creadas por C++ y dispatch indirecto con
-el número de grupos anterior a la rotura. La reproducción 32 -> 34 cuerpos,
-corrección y test de regresión están en [FRAGMENT_VISIBILITY.md](FRAGMENT_VISIBILITY.md).
-Los replays de física y synchronization validation no cubrían esa condición de
-visibilidad; la instrumentación de instancias sí la detectó.
+A subsequent check detected two preexisting publication defects: transposed
+rotation in CPU-created instances and indirect dispatch using the group count
+from before the fracture. The 32 -> 34 body reproduction, fix, and regression
+test are documented in [FRAGMENT_VISIBILITY.md](FRAGMENT_VISIBILITY.md).
+Physics replays and synchronization validation did not cover this visibility
+condition; instance instrumentation did detect it.

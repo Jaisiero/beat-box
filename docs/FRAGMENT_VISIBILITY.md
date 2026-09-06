@@ -1,59 +1,58 @@
-# Fragmentos invisibles durante la publicación
+# Invisible fragments during publication
 
-## Causa comprobada
+## Verified cause
 
-Al crecer F9 de 32 a 34 cuerpos tras una rotura, el actualizador de instancias
-seguía usando el dispatch indirecto del último paso de simulación: un grupo de
-32 hilos. Las instancias 32 y 33 quedaban sin actualizar hasta el siguiente paso.
+When F9 grew from 32 to 34 bodies after a fracture, the instance updater still
+used the indirect dispatch from the last simulation step: one group of 32
+threads. Instances 32 and 33 remained unchanged until the next step.
 
-Esas instancias estaban inicializadas por C++. `get_transform_matrix()` reunía
-las columnas de `Quaternion::to_matrix()` cuando los valores guardados en los
-vectores x/y/z ya eran las filas requeridas por la representación de Vulkan.
-La rotación resultante quedaba transpuesta. La traslación era correcta.
-El shader de actualización producía la rotación correcta.
+Those instances had been initialized by C++. `get_transform_matrix()` gathered
+the columns of `Quaternion::to_matrix()`, although the values stored in its
+x/y/z vectors were already the rows required by Vulkan's representation.
+The resulting rotation was transposed. Translation was correct.
+The update shader produced the correct rotation.
 
-El TLAS podía estar completamente construido y seguir conteniendo la matriz
-incorrecta: la búsqueda de candidatos de ray tracing y la intersección manual
-con el cuerpo usaban transformaciones distintas. El siguiente paso ampliaba el
-dispatch y reparaba las instancias pendientes, explicando su reaparición.
+The TLAS could be fully built while still containing the wrong matrix:
+ray tracing candidate traversal and the manual body intersection used different
+transforms. The next step expanded the dispatch and repaired the pending
+instances, explaining why they reappeared.
 
-La desaparición también se reprodujo con el `device.wait_idle()` anterior
-restaurado. No se corrige añadiendo esa espera. Ambos defectos aparecen ya en el
-commit base de PR26, `272284a`; no nacen en la retirada de esa espera.
+The disappearance also reproduced with the previous `device.wait_idle()`
+restored. Adding that wait does not fix it. Both defects already exist in
+PR26's base commit, `272284a`; removing the wait did not introduce them.
 
-## Corrección
+## Fix
 
-- C++ conserva las filas de la matriz al escribir los datos de instancia.
-- La publicación despacha directamente a partir de `current_rigid_body_count`,
-  actualizado tras roturas, bajas y spawns. Ya no depende del número de grupos
-  calculado antes de modificar la escena.
-- No cambian la matemática del solver ni los algoritmos SDF.
+- C++ preserves the matrix rows when writing instance data.
+- Publication dispatches directly from `current_rigid_body_count`, updated after
+  fractures, removals, and spawns. It no longer depends on the group count
+  calculated before editing the scene.
+- Solver mathematics and SDF algorithms are unchanged.
 
-## Comprobaciones
+## Validation
 
-El test de CPU aplica los doce floats de la matriz como tres filas de Vulkan y
-compara el resultado con una rotación independiente `q * punto * conjugate(q)`.
-Incluye identidad, giro de 90 grados, rotación general, traslación y varios
-puntos. Detectó diez discrepancias antes del cambio y ninguna después.
+The CPU test applies the matrix's twelve floats as three Vulkan rows and
+compares the result against an independent `q * point * conjugate(q)` rotation.
+It covers identity, a 90-degree turn, a general rotation, translation, and
+multiple points. It detected ten discrepancies before the change and none after.
 
-La instrumentación temporal comparó los AABBs realmente generados en GPU de los
-BLAS conservados; no encontró cambios incorrectos en la cadena examinada.
-Después comparó el mapa de cuerpos, direcciones BLAS, máscaras y matrices de las
-instancias publicadas. Con el oráculo de matriz corregido, detectó exactamente
-las instancias 32 y 33 al pasar de 32 a 34 cuerpos. Sus rotaciones eran la
-traspuesta de las esperadas. Evidencia en
-`/root/beat-box/work/vanishing/coverage-verify.log`.
+Temporary instrumentation compared the actual GPU-generated AABBs of retained
+BLASes; it found no incorrect changes in the examined chain. It then compared
+the body map, BLAS addresses, masks, and matrices of published instances.
+With the corrected matrix oracle, it detected exactly instances 32 and 33 when
+crossing from 32 to 34 bodies. Their rotations were the transpose of the expected
+values. Evidence: `/root/beat-box/work/vanishing/coverage-verify.log`.
 
-La instrumentación añade readbacks y no forma parte del ejecutable final.
-Los logs y el patch de diagnóstico se conservan en el directorio de trabajo.
-La validación de física por sí sola no comprueba la visibilidad del render.
+The instrumentation adds readbacks and is not part of the final executable.
+Logs and the diagnostic patch are retained in the working directory.
+Physics validation alone does not verify rendering visibility.
 
-Tras la corrección, una cadena de F9 volvió a cruzar 32 -> 34 y alcanzó 56 cuerpos
-sin ninguna discrepancia de instancias ni geometría en la instrumentación
-(`fixed-verify.log`). Los cinco tests de CTest pasan, incluido el test que fallaba
-antes del cambio.
+After the fix, an F9 chain crossed 32 -> 34 again and reached 56 bodies without
+any instance or geometry discrepancies in the instrumentation
+(`fixed-verify.log`). All five CTest tests pass, including the test that failed
+before the change.
 
-El ejecutable final, sin instrumentación, completó la fixture de fractura (900
-pasos) y F7 (1800 pasos) con AVBD y TGS, bajo synchronization validation Vulkan:
-los cuatro CSV y todos los checkpoints DET coinciden con los controles de PR25,
-sin errores reportados. Logs `final-*.log`, `final-*.csv` y `final-checks.log`.
+The final executable, without instrumentation, completed the fracture fixture
+(900 steps) and F7 (1800 steps) with AVBD and TGS under Vulkan synchronization
+validation: all four CSVs and every DET checkpoint match the PR25 controls,
+with no reported errors. Logs: `final-*.log`, `final-*.csv`, and `final-checks.log`.
