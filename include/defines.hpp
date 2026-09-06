@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "shared.inl"
+#include "fragment_finalization.inl"
+#include "fragment_census.inl"
 #include <daxa/daxa.hpp>
 using namespace daxa::types;
 #include <daxa/utils/pipeline_manager.hpp>
@@ -423,9 +425,7 @@ FORCE_INLINE std::string to_string(StageIndex index)
 const auto RT_shader_file_string = "ray_tracing.slang";
 const auto RT_main_pipeline_name = "Main Ray Tracing Pipeline";
 
-const auto RB_sim_shader_file_string = "RB_sim.slang";
 const auto coloring_shader_file_string = "coloring.slang";
-const auto avbd_shader_file_string = "avbd.slang";
 
 // graph coloring (parallel contact-solver coloring)
 const auto entry_graph_color_dispatcher = "entry_graph_color_dispatcher";
@@ -448,14 +448,14 @@ const auto entry_graph_color_validate = "entry_graph_color_validate";
 const auto graph_color_validate_pipeline_name = "Graph Color Validate";
 const auto entry_graph_color_validate2 = "entry_graph_color_validate2";
 const auto graph_color_validate2_pipeline_name = "Graph Color Validate2 (satbody diag)";
-// per-color solver passes (entries live in RB_sim.slang)
+// per-color solver passes (entries live in passes/solver_pgs_tgs.slang)
 const auto entry_collision_pre_solver_color = "entry_collision_pre_solver_color";
 const auto graph_color_pre_solver_pipeline_name = "Graph Color Pre Solver";
 const auto entry_collision_solver_color = "entry_collision_solver_color";
 const auto graph_color_solver_pipeline_name = "Graph Color Solver";
 const auto entry_collision_solver_relax_color = "entry_collision_solver_relax_color";
 const auto graph_color_relax_pipeline_name = "Graph Color Solver Relax";
-// AVBD passes (entries in avbd.slang)
+// AVBD passes (entries in passes/avbd_*.slang)
 const auto entry_avbd_color_reset = "entry_avbd_color_reset";
 const auto avbd_color_reset_pipeline_name = "AVBD Color Reset";
 const auto entry_avbd_color_round = "entry_avbd_color_round";
@@ -486,7 +486,7 @@ const auto entry_avbd_depth_relax = "entry_avbd_depth_relax";
 const auto avbd_depth_relax_pipeline_name = "AVBD Depth Relax";
 const auto entry_avbd_max_depth = "entry_avbd_max_depth";
 const auto avbd_max_depth_pipeline_name = "AVBD Max Depth";
-// island sleeping (entries in RB_sim.slang)
+// island sleeping (entries in passes/sleep.slang)
 const auto entry_sleep_reduce = "entry_sleep_reduce";
 const auto sleep_reduce_pipeline_name = "Sleep Reduce";
 const auto entry_sleep_veto = "entry_sleep_veto";
@@ -809,7 +809,7 @@ struct MainRayTracingPipeline
 
 struct RigidBodyDispatcherInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/dispatch.slang"},
       .compile_options = {
           .entry_point = entry_rigid_body_dispatcher,
       },
@@ -824,7 +824,7 @@ struct RigidBodyDispatcherInfo {
 
 struct GenerateMortonCodesInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/sort.slang"},
       .compile_options = {
           .entry_point = entry_generate_morton_codes,
       },
@@ -839,7 +839,7 @@ struct GenerateMortonCodesInfo {
 
 struct RigidBodyRadixSortHistogramInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/sort.slang"},
       .compile_options = {
           .entry_point = entry_radix_sort_histogram,
           .defines = {
@@ -857,7 +857,7 @@ struct RigidBodyRadixSortHistogramInfo {
 
 struct RigidBodySingleRadixSortInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/sort.slang"},
       .compile_options = {
           .entry_point = entry_rigid_body_single_radix_sort,
           .defines = {
@@ -876,7 +876,7 @@ struct RigidBodySingleRadixSortInfo {
 
 struct SingleWorkgroupSortInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/sort.slang"},
       .compile_options = {
           .entry_point = entry_single_workgroup_sort,
           .required_subgroup_size = SUBGROUP_SIZE,
@@ -980,9 +980,47 @@ struct VoxelPrimsBuildInfo {
   };
 };
 
+struct FragmentFinalizeInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {
+          .source = daxa::ShaderFile{"fragment_finalization.slang"},
+          .compile_options = {.entry_point = "entry_fragment_finalize"},
+      },
+      .push_constant_size = sizeof(FragmentFinalizePushConstants),
+      .name = "Finalize Fragment Bodies",
+  };
+};
+
+struct FragmentCensusInitInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {.source = daxa::ShaderFile{"fragment_census.slang"},
+                      .compile_options = {.entry_point = "entry_fragment_census_init"}},
+      .push_constant_size = sizeof(FragmentCensusPushConstants),
+      .name = "Fragment census init",
+  };
+};
+
+struct FragmentCensusAccumulateInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {.source = daxa::ShaderFile{"fragment_census.slang"},
+                      .compile_options = {.entry_point = "entry_fragment_census_accumulate"}},
+      .push_constant_size = sizeof(FragmentCensusPushConstants),
+      .name = "Fragment census accumulate",
+  };
+};
+
+struct FragmentCensusCompactInfo {
+  daxa::ComputePipelineCompileInfo info = {
+      .shader_info = {.source = daxa::ShaderFile{"fragment_census.slang"},
+                      .compile_options = {.entry_point = "entry_fragment_census_compact"}},
+      .push_constant_size = sizeof(FragmentCensusPushConstants),
+      .name = "Fragment census compact",
+  };
+};
+
 struct VoxelCarveInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{voxel_sdf_shader_file_string},
+      .source = daxa::ShaderFile{"voxel_fracture.slang"},
       .compile_options = {
           .entry_point = entry_voxel_carve,
           .required_subgroup_size = SUBGROUP_SIZE,
@@ -997,7 +1035,7 @@ struct VoxelCarveInfo {
 
 struct VoxelVoronoiAssignInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{voxel_sdf_shader_file_string},
+      .source = daxa::ShaderFile{"voxel_fracture.slang"},
       .compile_options = {
           .entry_point = entry_voxel_voronoi_assign,
           .required_subgroup_size = SUBGROUP_SIZE,
@@ -1012,7 +1050,7 @@ struct VoxelVoronoiAssignInfo {
 
 struct VoxelFloodInitInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{voxel_sdf_shader_file_string},
+      .source = daxa::ShaderFile{"voxel_fracture.slang"},
       .compile_options = {
           .entry_point = entry_voxel_flood_init,
           .required_subgroup_size = SUBGROUP_SIZE,
@@ -1027,7 +1065,7 @@ struct VoxelFloodInitInfo {
 
 struct VoxelFloodStepInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{voxel_sdf_shader_file_string},
+      .source = daxa::ShaderFile{"voxel_fracture.slang"},
       .compile_options = {
           .entry_point = entry_voxel_flood_step,
           .required_subgroup_size = SUBGROUP_SIZE,
@@ -1042,7 +1080,7 @@ struct VoxelFloodStepInfo {
 
 struct RigidBodyGenerateHierarchyLinearBVHInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/bvh.slang"},
       .compile_options = {
           .entry_point = entry_generate_hierarchy_linear_bvh,
       },
@@ -1057,7 +1095,7 @@ struct RigidBodyGenerateHierarchyLinearBVHInfo {
 
 struct RigidBodyBuildBoundingBoxesLinearBVHInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/bvh.slang"},
       .compile_options = {
           .entry_point = entry_build_bounding_boxes_linear_bvh,
       },
@@ -1072,7 +1110,7 @@ struct RigidBodyBuildBoundingBoxesLinearBVHInfo {
 
 struct RigidBodyConvertBoundingBoxesLinearBVHInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/bvh.slang"},
       .compile_options = {
           .entry_point = entry_convert_bounding_boxes_linear_bvh,
       },
@@ -1087,7 +1125,7 @@ struct RigidBodyConvertBoundingBoxesLinearBVHInfo {
 
 struct RigidBodyReorderingInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/reordering.slang"},
       .compile_options = {
           .entry_point = entry_rigid_body_reordering,
       },
@@ -1102,7 +1140,7 @@ struct RigidBodyReorderingInfo {
 
 struct ResetBodyLinksInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/reordering.slang"},
       .compile_options = {
           .entry_point = entry_reset_body_links,
       },
@@ -1117,7 +1155,7 @@ struct ResetBodyLinksInfo {
 
 struct BroadPhaseInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/broad_phase.slang"},
       .compile_options = {
           .entry_point = entry_broad_phase_sim
       },
@@ -1132,7 +1170,7 @@ struct BroadPhaseInfo {
 
 struct NarrowPhaseDispatcherInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/dispatch.slang"},
       .compile_options = {
           .entry_point = entry_narrow_phase_dispatcher
       },
@@ -1147,7 +1185,7 @@ struct NarrowPhaseDispatcherInfo {
 
 struct NarrowPhaseInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/narrow_phase.slang"},
       .compile_options = {
           .entry_point = entry_narrow_phase_sim
       },
@@ -1162,7 +1200,7 @@ struct NarrowPhaseInfo {
 
 struct ChainSortInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/reordering.slang"},
       .compile_options = {
           .entry_point = entry_chain_sort_sim
       },
@@ -1177,7 +1215,7 @@ struct ChainSortInfo {
 
 struct PickSpringInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/pick.slang"},
       .compile_options = {
           .entry_point = entry_pick_spring_sim
       },
@@ -1192,7 +1230,7 @@ struct PickSpringInfo {
 
 struct CollisionSolverDispatcherInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/dispatch.slang"},
       .compile_options = {
           .entry_point = entry_collision_solver_dispatcher
       },
@@ -1208,7 +1246,7 @@ struct CollisionSolverDispatcherInfo {
 // ISLANDS
 struct IslandDispatcherInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/dispatch.slang"},
       .compile_options = {
           .entry_point = entry_island_dispatcher,
       },
@@ -1223,7 +1261,7 @@ struct IslandDispatcherInfo {
 
 struct IslandCounterInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_island_counter,
       },
@@ -1347,10 +1385,10 @@ struct GraphColorValidate2Info {
       .name = graph_color_validate2_pipeline_name,
   };
 };
-// per-color solver pipelines (entries in RB_sim.slang; share GraphColorSolvePushConstants)
+// per-color solver pipelines (entries in passes/sleep.slang; share GraphColorSolvePushConstants)
 struct GraphColorPreSolverInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/solver_pgs_tgs.slang"},
       .compile_options = { .entry_point = entry_collision_pre_solver_color, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1361,7 +1399,7 @@ struct GraphColorPreSolverInfo {
 };
 struct GraphColorSolverInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/solver_pgs_tgs.slang"},
       .compile_options = { .entry_point = entry_collision_solver_color, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1372,7 +1410,7 @@ struct GraphColorSolverInfo {
 };
 struct GraphColorRelaxInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/solver_pgs_tgs.slang"},
       .compile_options = { .entry_point = entry_collision_solver_relax_color, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1381,10 +1419,10 @@ struct GraphColorRelaxInfo {
       .name = graph_color_relax_pipeline_name,
   };
 };
-// AVBD pipelines (entries in avbd.slang; share AvbdPushConstants)
+// AVBD pipelines (entries in passes/avbd_*.slang; share AvbdPushConstants)
 struct AvbdColorResetInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_coloring.slang"},
       .compile_options = { .entry_point = entry_avbd_color_reset, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1395,7 +1433,7 @@ struct AvbdColorResetInfo {
 };
 struct AvbdColorRoundInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_coloring.slang"},
       .compile_options = { .entry_point = entry_avbd_color_round, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1406,7 +1444,7 @@ struct AvbdColorRoundInfo {
 };
 struct AvbdColorCommitInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_coloring.slang"},
       .compile_options = { .entry_point = entry_avbd_color_commit, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1417,7 +1455,7 @@ struct AvbdColorCommitInfo {
 };
 struct AvbdColorValidateInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_coloring.slang"},
       .compile_options = { .entry_point = entry_avbd_color_validate, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1428,7 +1466,7 @@ struct AvbdColorValidateInfo {
 };
 struct AvbdPrepareInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_step.slang"},
       .compile_options = { .entry_point = entry_avbd_prepare, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1439,7 +1477,7 @@ struct AvbdPrepareInfo {
 };
 struct AvbdFinalizeInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_step.slang"},
       .compile_options = { .entry_point = entry_avbd_finalize, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1450,7 +1488,7 @@ struct AvbdFinalizeInfo {
 };
 struct AvbdWarmstartInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_warmstart.slang"},
       .compile_options = { .entry_point = entry_avbd_warmstart, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1461,7 +1499,7 @@ struct AvbdWarmstartInfo {
 };
 struct AvbdPrimalInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_primal.slang"},
       .compile_options = { .entry_point = entry_avbd_primal, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1472,7 +1510,7 @@ struct AvbdPrimalInfo {
 };
 struct AvbdDualInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_dual.slang"},
       .compile_options = { .entry_point = entry_avbd_dual, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1483,7 +1521,7 @@ struct AvbdDualInfo {
 };
 struct AvbdImpactJInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_impact.slang"},
       .compile_options = { .entry_point = entry_avbd_impact_j, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1494,7 +1532,7 @@ struct AvbdImpactJInfo {
 };
 struct AvbdImpactApplyInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_impact.slang"},
       .compile_options = { .entry_point = entry_avbd_impact_apply, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1505,7 +1543,7 @@ struct AvbdImpactApplyInfo {
 };
 struct AvbdPocketTraceInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_trace.slang"},
       .compile_options = { .entry_point = entry_avbd_pocket_trace, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1516,7 +1554,7 @@ struct AvbdPocketTraceInfo {
 };
 struct AvbdDepthResetInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_depth.slang"},
       .compile_options = { .entry_point = entry_avbd_depth_reset, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1527,7 +1565,7 @@ struct AvbdDepthResetInfo {
 };
 struct AvbdDepthRelaxInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_depth.slang"},
       .compile_options = { .entry_point = entry_avbd_depth_relax, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1538,7 +1576,7 @@ struct AvbdDepthRelaxInfo {
 };
 struct AvbdMaxDepthInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{avbd_shader_file_string},
+      .source = daxa::ShaderFile{"passes/avbd_depth.slang"},
       .compile_options = { .entry_point = entry_avbd_max_depth, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1547,10 +1585,10 @@ struct AvbdMaxDepthInfo {
       .name = avbd_max_depth_pipeline_name,
   };
 };
-// island sleeping passes (entries in RB_sim.slang; share SleepPushConstants)
+// island sleeping passes (entries in passes/sleep.slang; share SleepPushConstants)
 struct SleepReduceInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/sleep.slang"},
       .compile_options = { .entry_point = entry_sleep_reduce, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1561,7 +1599,7 @@ struct SleepReduceInfo {
 };
 struct SleepVetoInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/sleep.slang"},
       .compile_options = { .entry_point = entry_sleep_veto, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1572,7 +1610,7 @@ struct SleepVetoInfo {
 };
 struct SleepApplyInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/sleep.slang"},
       .compile_options = { .entry_point = entry_sleep_apply, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1584,7 +1622,7 @@ struct SleepApplyInfo {
 // overflow bucket: single-thread serial solve of manifolds the per-color dispatches skip
 struct GraphColorPreSolverOverflowInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/solver_pgs_tgs.slang"},
       .compile_options = { .entry_point = entry_collision_pre_solver_overflow, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1595,7 +1633,7 @@ struct GraphColorPreSolverOverflowInfo {
 };
 struct GraphColorSolverOverflowInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/solver_pgs_tgs.slang"},
       .compile_options = { .entry_point = entry_collision_solver_overflow, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1606,7 +1644,7 @@ struct GraphColorSolverOverflowInfo {
 };
 struct GraphColorRelaxOverflowInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/solver_pgs_tgs.slang"},
       .compile_options = { .entry_point = entry_collision_solver_relax_overflow, },
   };
   daxa::ComputePipelineCompileInfo info = {
@@ -1618,7 +1656,7 @@ struct GraphColorRelaxOverflowInfo {
 
 struct IslandBuilderInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_island_builder,
       },
@@ -1633,7 +1671,7 @@ struct IslandBuilderInfo {
 
 struct IslandPrefixSumInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_island_prefix_sum,
       },
@@ -1648,7 +1686,7 @@ struct IslandPrefixSumInfo {
 
 struct BodyLink2IslandInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_body_link_to_island,
       },
@@ -1663,7 +1701,7 @@ struct BodyLink2IslandInfo {
 
 struct SortBodyLinksInIslandInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_sort_body_links_in_island,
       },
@@ -1678,7 +1716,7 @@ struct SortBodyLinksInIslandInfo {
 
 struct ManifoldIslandBuilderInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_manifold_island_builder,
       },
@@ -1693,7 +1731,7 @@ struct ManifoldIslandBuilderInfo {
 
 struct ContactIslandGatherInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_contact_island_gather,
       },
@@ -1708,7 +1746,7 @@ struct ContactIslandGatherInfo {
 
 struct ContactIslandDispatcherInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/dispatch.slang"},
       .compile_options = {
           .entry_point = entry_contact_island_dispatcher,
       },
@@ -1723,7 +1761,7 @@ struct ContactIslandDispatcherInfo {
 
 struct ManifoldIslandPrefixSumInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_manifold_island_prefix_sum,
       },
@@ -1738,7 +1776,7 @@ struct ManifoldIslandPrefixSumInfo {
 
 struct ManifoldLink2IslandInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_manifold_link_to_island,
       },
@@ -1753,7 +1791,7 @@ struct ManifoldLink2IslandInfo {
 
 struct SortManifoldLinksInIslandInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/islands.slang"},
       .compile_options = {
           .entry_point = entry_sort_manifold_links_in_island,
       },
@@ -1769,7 +1807,7 @@ struct SortManifoldLinksInIslandInfo {
 
 struct CollisionPreSolverInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/solver_pgs_tgs.slang"},
       .compile_options = {
           .entry_point = entry_collision_pre_solver
       },
@@ -1784,7 +1822,7 @@ struct CollisionPreSolverInfo {
 
 struct CollisionSolverInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/solver_pgs_tgs.slang"},
       .compile_options = {
           .entry_point = entry_collision_solver
       },
@@ -1799,7 +1837,7 @@ struct CollisionSolverInfo {
 
 struct IntegratePositionsInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/integration.slang"},
       .compile_options = {
           .entry_point = entry_integrate_positions
       },
@@ -1814,7 +1852,7 @@ struct IntegratePositionsInfo {
 
 struct CollisionSolverRelaxationInfo {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/solver_pgs_tgs.slang"},
       .compile_options = {
           .entry_point = entry_collision_relaxation_solver
       },
@@ -1830,7 +1868,7 @@ struct CollisionSolverRelaxationInfo {
 struct RigidBodySim
 {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/integration.slang"},
       .compile_options = {
           .entry_point = entry_rigid_body_sim
       },
@@ -1863,7 +1901,7 @@ struct UpdateAccelerationStructures
 struct CreateContactPoints
 {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/contact_debug.slang"},
       .compile_options = {
           .entry_point = entry_create_contact_points,
       },
@@ -1967,7 +2005,7 @@ struct UIAxesPipeline {
 
 struct UpdateRigidBodies {
   daxa::ShaderCompileInfo compute_shader = daxa::ShaderCompileInfo{
-      .source = daxa::ShaderFile{RB_sim_shader_file_string},
+      .source = daxa::ShaderFile{"passes/integration.slang"},
       .compile_options = {
           .entry_point = entry_update_rigid_bodies
       },

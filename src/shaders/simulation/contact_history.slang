@@ -1,212 +1,8 @@
+#pragma once
 #include "shared.inl"
 
-void copy_rigid_body_fields(RigidBody* dst, RigidBody* src)
-{
-  dst->id = src->id;
-  dst->flags = src->flags;
-  dst->island_index = src->island_index;
-  dst->active_index = src->active_index;
-  dst->manifold_node_index = src->manifold_node_index;
-  dst->sleep_timer = src->sleep_timer;
-  dst->material_index = src->material_index;
-#if defined(BB_DEBUG)
-  dst->face_collided = src->face_collided;
-#endif // BB_DEBUG
-  dst->primitive_count = src->primitive_count;
-  dst->primitive_offset = src->primitive_offset;
-  dst->shape_index = src->shape_index;
-  dst->position = src->position;
-  dst->rotation.v = src->rotation.v;
-  dst->rotation.w = src->rotation.w;
-  dst->minimum = src->minimum;
-  dst->maximum = src->maximum;
-  dst->mass = src->mass;
-  dst->inv_mass = src->inv_mass;
-  dst->velocity = src->velocity;
-  dst->omega = src->omega;
-  dst->prev_velocity = src->prev_velocity;
-  dst->prev_omega = src->prev_omega; // E2: keep step-entry omega across the row reorder (next to prev_velocity)
-  dst->inv_inertia[0][0] = src->inv_inertia[0][0];
-  dst->inv_inertia[0][1] = src->inv_inertia[0][1];
-  dst->inv_inertia[0][2] = src->inv_inertia[0][2];
-  dst->inv_inertia[1][0] = src->inv_inertia[1][0];
-  dst->inv_inertia[1][1] = src->inv_inertia[1][1];
-  dst->inv_inertia[1][2] = src->inv_inertia[1][2];
-  dst->inv_inertia[2][0] = src->inv_inertia[2][0];
-  dst->inv_inertia[2][1] = src->inv_inertia[2][1];
-  dst->inv_inertia[2][2] = src->inv_inertia[2][2];
-  dst->restitution = src->restitution;
-  dst->friction = src->friction;
-  dst->fracture_impulse = src->fracture_impulse;   // fracture threshold rides the reorder too
-  dst->fracture_material = src->fracture_material;  // ... and its material kind (fragment pattern)
-}
-
-// review v2 #5: Contact and Manifold are POD, so a whole-struct assignment copies EVERY field
-// (verified: the old field-by-field bodies enumerated all of Contact/Manifold incl. all 4
-// FeaturePair ids and contacts[]). Collapsing to *dst = src removes ~80 lines whose real hazard
-// was DRIFT — a field added to the struct but forgotten here silently drops from the warm-start /
-// pause-flush "previous" buffers (the documented explosion class). Whole-struct copy can never
-// drift. Bitwise-identical, proven via the determinism harness (towers stay bit-for-bit).
-void copy_contact_fields(Contact* dst, Contact* src) { *dst = *src; }
-
-void write_contact_fields_from_value(Contact* dst, Contact src) { *dst = src; }
-
-void copy_manifold_fields(Manifold* dst, Manifold* src) { *dst = *src; }
-
-void write_manifold_fields_from_value(Manifold* dst, Manifold src) { *dst = src; }
-
-extension RigidBody
-{
-  [mutating] void advect(Ptr<SimConfig> sim_config)
-  {
-    // TGS_SOFT integrates velocity per sub-step (h = dt/N); every other solver uses the full dt.
-    daxa_f32 h = (sim_config->solver_type == SimSolverType::TGS_SOFT)
-                 ? sim_config->dt / daxa_f32(sim_config->tgs_substeps) : sim_config->dt;
-    if(has_flag(RigidBodyFlag::GRAVITY)){
-      // gravity is an ACCELERATION (m/s^2): apply it DIRECTLY to velocity. The old code routed it
-      // through apply_impulse(), which does v += impulse*inv_mass -> gravity got scaled by inv_mass,
-      // so a mass-5 cube (inv_mass=0.2) fell at g/5. This hit every advect-based solver (PGS_SOFT,
-      // TGS_SOFT); AVBD was unaffected (it folds gravity into its inertial target directly, not here).
-      this.velocity += daxa_f32vec3(0, sim_config->gravity, 0) * h;
-    }
-    // terminal linear-speed clamp (anti-punch-through): cap impact energy so fast rain doesn't
-    // tunnel deep into the floor. Resting/settling bodies are far under the cap (untouched).
-    daxa_f32 v_len = length(this.velocity);
-    if (v_len > BB_MAX_LINEAR_SPEED)
-    {
-      this.velocity *= BB_MAX_LINEAR_SPEED / v_len;
-    }
-    advance(h, LINEAR_DAMPING, ANGULAR_DAMPING);
-  }
-
-  [mutating] void advance(daxa_f32 dt, daxa_f32 linear_damping, daxa_f32 angular_damping)
-  {
-    this.velocity *= exp(-dt * linear_damping);
-    this.omega *= exp(-dt * angular_damping);
-  }
-
-  [mutating] void integrate_positions(daxa_f32 dt) {
-    
-    this.position += this.velocity * dt;
-    this.rotation = apply_angular_velocity(this.rotation, this.omega, dt);
-  }
-
-      [mutating] Quaternion apply_angular_velocity(Quaternion rotation, daxa_f32vec3 omega, daxa_f32 dt)
-  {
-    daxa_f32 angle = length(omega) * dt;
-    if (angle > 0.0001f)
-    {
-      daxa_f32vec3 axis = normalize(omega);
-      daxa_f32 half_angle = angle / 2.0f;
-      daxa_f32 sin_half_angle = sin(half_angle);
-      daxa_f32 cos_half_angle = cos(half_angle);
-      Quaternion q = Quaternion(axis * sin_half_angle, cos_half_angle);
-      return (q * rotation).normalize();
-    }
-    else
-    {
-      // For small angles, use approximation
-      daxa_f32vec3 delta_rotation = omega * dt * 0.5f;
-      Quaternion q = Quaternion(delta_rotation, 1.0f);
-      return (q * rotation).normalize();
-    }
-  }
-
-  [mutating] void apply_impulse(daxa_f32vec3 impulse, daxa_f32vec3 point)
-  {
-    daxa_f32vec3 linear_velocity = impulse * this.inv_mass;
-    this.velocity += linear_velocity;
-
-    daxa_f32vec3 r = point - this.position;
-    daxa_f32vec3 torque = cross(r, impulse);
-    daxa_f32vec3 angular_velocity = mul(torque, this.inv_inertia);
-    this.omega += angular_velocity;
-  }
-
-  [mutating] daxa_f32vec3 get_velocity_at(daxa_f32vec3 point)
-  {
-    return this.velocity - cross(point - this.position, this.omega);
-  }
-
-  [mutating] daxa_f32mat3x3 get_transformed_inertia()
-  {
-    daxa_f32mat3x3 rotation_matrix = get_rotation_matrix();
-    return mul(rotation_matrix, mul(inv_inertia, transpose(rotation_matrix)));
-  }
-
-  [mutating] Aabb get_AABB()
-  {
-    return Aabb(minimum, maximum);
-  }
-
-  [mutating] Aabb get_AABB_from_OBB()
-  {
-    Aabb aabb = get_AABB();
-
-    daxa_f32vec3 _minimum = daxa_f32vec3(FLT_MAX, FLT_MAX, FLT_MAX);
-    daxa_f32vec3 _maximum = daxa_f32vec3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-
-    for(daxa_u32 i = 0u; i < AABB_CORNER_COUNT; ++i) {
-        daxa_f32vec3 corner = aabb.get_corner(i);
-        corner = object_to_world(corner);
-        _minimum = min(_minimum, corner);
-        _maximum = max(_maximum, corner);
-    }
-
-    return Aabb(_minimum, _maximum);
-  }
-};
-
-
-extension Transform {
-
-    daxa_f32mat3x3 get_rotation_matrix() {
-      return rotation;
-    }
-
-    daxa_f32mat3x3 get_inverse_rotation_matrix() {
-      return transpose(rotation);
-    }
-
-    daxa_f32vec3 get_position() {
-      return position;
-    }
-
-    daxa_f32vec3 rotate(daxa_f32vec3 v) {
-      return mul(v, rotation);
-    }
-
-    daxa_f32vec3 rotate_transpose(daxa_f32vec3 v) {
-      return mul(v, transpose(rotation));
-    }
-
-    daxa_f32vec3 transform(daxa_f32vec3 v) {
-      return mul(v, rotation) + position;
-    }
-
-    daxa_f32vec3 transform_transpose(daxa_f32vec3 v) {
-      return mul(v - position, transpose(rotation));
-    }
-
-    daxa_f32vec3 get_axis(daxa_u32 i) {
-      // Return the i-th row of the rotation matrix
-      return daxa_f32vec3(rotation[i][0], rotation[i][1], rotation[i][2]);
-    }
-
-    daxa_f32vec3 get_inverse_axis(daxa_u32 i) {
-        // For rotation matrices, the inverse is the transpose
-        // So the inverse axes are the columns of the transpose
-        daxa_f32mat3x3 inv_rotation = transpose(rotation);
-        return daxa_f32vec3(inv_rotation[i][0], inv_rotation[i][1], inv_rotation[i][2]);
-    }
-
-    daxa_f32 get_rotation_element(daxa_u32 i, daxa_u32 j) {
-      return rotation[i][j];
-    }
-};
-
 extension Manifold {
-  [mutating] void compute_basis() 
+  [mutating] void compute_basis()
   {
     if (abs(normal.x) > abs(normal.y)) {
       tangent_vectors[0] = daxa_f32vec3(normal.z, 0, -normal.x);
@@ -273,26 +69,10 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
       if (any_voxel) { return; }
       if (dot(normal, old_manifold->normal * old_n_sign) <= 0.7f) { return; } // plane really changed
     }
-    // voxel manifolds (key 99): the dominant normal is assembled from QUANTIZED voxel
-    // sample normals and can flap a few degrees frame-to-frame at rest, which re-excites
-    // the contacts and blocks sleeping. While the rebuilt normal stays within ~25 deg of
-    // last step's, reuse the old normal (and its tangent basis) verbatim.
-    if (key >= 90 && key <= 95)
-    {
-      daxa_f32 ndot = dot(normal, old_manifold->normal);
-      if (ndot > 0.9f)
-      {
-        normal = old_manifold->normal;
-        compute_basis();
-      }
-      else if (ndot < -0.5f)
-      {
-        // the cluster flipped sides since last step: carrying the persisted lambdas
-        // across the flip would apply them along the INVERTED normal (attraction).
-        // Treat the manifold as fresh instead.
-        return;
-      }
-    }
+    // Keep the newly measured voxel normal: its depths were computed/projected along
+    // that direction. Freezing a world normal until a 25-degree threshold makes rotating
+    // contacts solve the wrong plane, then switch abruptly. Reject incompatible history.
+    if (key >= 90 && key <= 95 && dot(normal, old_manifold->normal) <= 0.7f) return;
     daxa_f32vec3 otv0  = old_manifold->tangent_vectors[0];
     daxa_f32vec3 otv1  = old_manifold->tangent_vectors[1];
 
@@ -304,7 +84,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
         if ((used_old & (1u << j)) != 0u) { continue; }
         Contact* old_contact = &old_manifold->contacts[j];
         if(is_same_contact(old_contact, contacts[i].fp, contacts[i].position)) {
-            contacts[i].normal_impulse = old_contact->normal_impulse;
+            contacts[i].normal_impulse = old_contact->normal_impulse * (voxel_m ? max(0.0f, dot(normal, old_manifold->normal)) : 1.0f);
             daxa_f32vec2 ti = reproject_tangent_impulse(otv0, otv1,
                 daxa_f32vec2(old_contact->tangent_impulse[0], old_contact->tangent_impulse[1]),
                 tangent_vectors[0], tangent_vectors[1], old_n_sign);
@@ -323,14 +103,12 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
               contacts[i].anchor_a = old_contact->anchor_a;
               contacts[i].anchor_b = old_contact->anchor_b;
             }
-            // persistent-manifold POSITION hysteresis (all manifold kinds): regenerated
-            // positions micro-wobble every step (voxel corner retreat toggles, SAT clip
-            // vertices sliding), continuously moving the solver's arms even though the
-            // identity matched. Keep the OLD point until it has really drifted
-            // (Box2D/Bullet keep clipped points the same way). Depth still refreshes.
+            // Keep the legacy OBB position hysteresis. Voxel depths and normals refer
+            // to the freshly measured point, so do not freeze it in world space.
+            // Sticking anchors above remain body-local and persist independently.
             {
               daxa_f32vec3 dpos = contacts[i].position - old_contact->position;
-              if (dot(dpos, dpos) < 0.01f) // (0.1)^2
+              if (!voxel_m && dot(dpos, dpos) < 0.01f) // OBB legacy hysteresis only
               {
                 contacts[i].position = old_contact->position;
               }
@@ -380,7 +158,7 @@ static const daxa_f32 POSITION_TOLERANCE = 0.1f;
         {
           daxa_u32 i = daxa_u32(best_i);
           Contact* old_contact = &old_manifold->contacts[daxa_u32(best_j)];
-          contacts[i].normal_impulse = old_contact->normal_impulse;
+          contacts[i].normal_impulse = old_contact->normal_impulse * (voxel_m ? max(0.0f, dot(normal, old_manifold->normal)) : 1.0f);
           daxa_f32vec2 ti = reproject_tangent_impulse(otv0, otv1,
               daxa_f32vec2(old_contact->tangent_impulse[0], old_contact->tangent_impulse[1]),
               tangent_vectors[0], tangent_vectors[1], old_n_sign);

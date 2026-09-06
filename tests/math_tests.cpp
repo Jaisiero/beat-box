@@ -3,6 +3,7 @@
 // tracer's rotate_vector sandwich), so regressions here corrupt physics AND rendering at once.
 // Zero test dependencies: a tiny CHECK macro; the exe returns the failure count (CTest pass = 0).
 #include "math.hpp"
+#include "voxel_contact_math.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -25,6 +26,27 @@ static daxa_f32 dot_v(daxa_f32vec3 a, daxa_f32vec3 b) { return a.x * b.x + a.y *
 
 int main()
 {
+  // Thin-fragment regression: opposite exposed faces cancel in a gradient, but
+  // either side must still admit contact. Internal slab faces must stay rejected.
+  {
+    CHECK(voxel_face_faces_direction(63u, {1,0,0}));
+    CHECK(voxel_face_faces_direction(63u, {-1,0,0}));
+    CHECK(voxel_face_faces_direction(63u, {0,1,0}));
+    CHECK(voxel_face_faces_direction(63u, {0,-1,0}));
+    CHECK(voxel_face_faces_direction(63u, {0,0,1}));
+    CHECK(voxel_face_faces_direction(63u, {0,0,-1}));
+    CHECK(!voxel_face_faces_direction(63u, {0,0,0}));
+    CHECK(!voxel_face_faces_direction(0u, {1,1,1}));
+    // Interior cell of a one-cell-thick Z slab: only +/-Z is exposed.
+    CHECK(voxel_face_faces_direction(48u, {0,0,1}));
+    CHECK(voxel_face_faces_direction(48u, {0,0,-1}));
+    CHECK(voxel_face_faces_direction(48u, {0.6f,0,0.8f}));
+    CHECK(!voxel_face_faces_direction(48u, {1,0,0}));
+    CHECK(!voxel_face_faces_direction(48u, {0,-1,0}));
+    // At a single exposed wall, inward MTVs remain invalid.
+    CHECK(voxel_face_faces_direction(1u, {1,0,0}));
+    CHECK(!voxel_face_faces_direction(1u, {-1,0,0}));
+  }
   // Friction warm start must preserve the force on each physical body under
   // a tangent-basis rotation and under swapping A/B (normal sign reversal).
   {

@@ -24,19 +24,13 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
     return false;
   }
 
-  for(auto f = 0u; f < DOUBLE_BUFFERING; f++) {
-    ray_tracing_config_buffer[f] = gpu->device.create_buffer({
-        .size = sizeof(RayTracingConfig),
-        .name = "ray_tracing_config" + std::to_string(f),
-    });
+  // A stable task resource retains cross-frame dependencies. Uploads are staged
+  // per execution; the device buffer is reused only through ordered graph access.
+  ray_tracing_config_buffer = gpu->device.create_buffer({
+      .size = sizeof(RayTracingConfig),
+      .name = "ray_tracing_config",
+  });
 
-    ray_tracing_config_host_buffer[f] = gpu->device.create_buffer({
-        .size = sizeof(RayTracingConfig),
-        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
-        .name = "ray_tracing_config_host" + std::to_string(f),
-    });
-  }
-  
   RT_pipeline = pipeline;
 
   // render scale (BB_RENDER_SCALE=0.25..1.0): trace at a reduced resolution and upscale.
@@ -75,8 +69,8 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   
   daxa::InlineTaskInfo task_update_RT_config({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, 
-          task_ray_tracing_config_host),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE,
+          task_camera_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, 
            task_ray_tracing_config),
       },
@@ -90,22 +84,19 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
         auto flags = accumulating ? RayTracingFlag::RT_ACCUMULATE : RayTracingFlag::RT_NONE;
         if (validate_rt) flags |= RayTracingFlag::RT_VALIDATE;
         flags |= show_islands ? RayTracingFlag::RT_SHOW_ISLANDS : show_normals ? RayTracingFlag::RT_SHOW_NORMALS : show_collisions ? RayTracingFlag::RT_SHOW_COLLISIONS : RayTracingFlag::RT_NONE;
-        ti.device.buffer_host_address_as<RayTracingConfig>(ti.get(task_ray_tracing_config_host).id).value()[0] = RayTracingConfig{
+        // Per-execution staging allocations stay live until their GPU submit
+        // completes. Task accesses order uploads after earlier shader readers.
+        allocate_fill_copy(ti, camera_manager->camera_view, ti.get(task_camera_buffer));
+        allocate_fill_copy(ti, RayTracingConfig{
             .flags = flags,
             .max_bounces = MAX_BOUNCES,
             .current_frame_index = status_manager->get_frame_count(),
             .frame_count = accumulating ? status_manager->get_accumulation_count() : 0,
             .light_count = scene_manager->get_light_count(),
             .instance_count = rigid_body_manager->get_sim_config_reference().rigid_body_count,
-        };
-
-        ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = ti.get(task_ray_tracing_config_host).id,
-            .dst_buffer = ti.get(task_ray_tracing_config).id,
-            .size = sizeof(RayTracingConfig),
-        });
+        }, ti.get(task_ray_tracing_config));
       },
-      .name = "copy rigid bodies and primitives",
+      .name = "upload camera and ray tracing config",
   });
 
   auto user_callback = [this, SBT](daxa::TaskInterface ti, auto &)
@@ -168,7 +159,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
 
   
 
-  std::array<daxa::TaskBuffer, 14> buffers = {
+  std::array<daxa::TaskBuffer, 13> buffers = {
     task_camera_buffer, 
     rigid_body_manager->task_rigid_body_entries,
     rigid_body_manager->task_rigid_bodies,
@@ -179,7 +170,6 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
     gui_manager->task_axes_vertex_buffer,
     scene_manager->task_material_buffer, 
     task_ray_tracing_config, 
-    task_ray_tracing_config_host, 
     scene_manager->task_lights_buffer, 
     rigid_body_manager->task_islands, 
     rigid_body_manager->task_contact_islands};
@@ -228,9 +218,9 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   RT_TG.add_task(gui_manager->gui_line_task_info);
   RT_TG.add_task(gui_manager->gui_task_info);
 
-  // the render submit waits the sim timeline: it consumes the latest sim+TLAS publication
-  // produced on the async compute queue (value set per frame in execute())
-  RT_TG.submit({.additional_wait_timeline_semaphores = &gpu->sim_wait_span});
+  // Daxa waits the last producer queue of shared external resources (including
+  // task_tlas). TaskSubmitInfo's additional semaphore fields are unused in 3.6.
+  RT_TG.submit();
   RT_TG.present();
   RT_TG.complete();
 
@@ -249,10 +239,7 @@ void RendererManager::destroy()
     return;
   }
 
-  for(auto f = 0u; f < DOUBLE_BUFFERING; f++) {
-    gpu->device.destroy_buffer(ray_tracing_config_buffer[f]);
-    gpu->device.destroy_buffer(ray_tracing_config_host_buffer[f]);
-  }
+  gpu->device.destroy_buffer(ray_tracing_config_buffer);
 
   gpu->device.destroy_image(accumulation_buffer);
   gpu->device.destroy_image(rt_target_image);
@@ -266,7 +253,6 @@ bool RendererManager::execute()
   {
     return false;
   }
-  gpu->sync_render_to_sim_timeline(); // wait the latest published sim+TLAS state
   RT_TG.execute();
   return true;
 }
@@ -289,8 +275,7 @@ bool RendererManager::update_resources(daxa::ImageId swapchain_image, CameraMana
   // The swapchain image rotates every frame and its sync is acquire/present semaphores.
   task_swapchain_image.set_image(swapchain_image);
   if (task_camera_buffer.id() != cam_mngr.camera_buffer) { task_camera_buffer.set_buffer(cam_mngr.camera_buffer); }
-  if (task_ray_tracing_config.id() != ray_tracing_config_buffer[get_frame_index()]) { task_ray_tracing_config.set_buffer(ray_tracing_config_buffer[get_frame_index()]); }
-  if (task_ray_tracing_config_host.id() != ray_tracing_config_host_buffer[get_frame_index()]) { task_ray_tracing_config_host.set_buffer(ray_tracing_config_host_buffer[get_frame_index()]); }
+  if (task_ray_tracing_config.id() != ray_tracing_config_buffer) { task_ray_tracing_config.set_buffer(ray_tracing_config_buffer); }
   if (task_accumulation_buffer.id() != accumulation_buffer) { task_accumulation_buffer.set_image(accumulation_buffer); }
   if (task_rt_target.id() != rt_target_image) { task_rt_target.set_image(rt_target_image); }
   if (task_stbn_texture.id() != image_manager->get_spatiotemporal_blue_noise_image()) { task_stbn_texture.set_image(image_manager->get_spatiotemporal_blue_noise_image()); }
@@ -330,13 +315,10 @@ int RendererManager::render()
   if (det_steps > 0 && !std::getenv("BB_SCENE") && !std::getenv("BB_SCENE_FILE"))
     { status_manager->request_scene(3); } // default only; honor explicit test scene
   auto const run_start = std::chrono::steady_clock::now();
-  // The acceleration-structure build runs async on COMPUTE_0, and the render graph waits the SIM
-  // timeline (sim_wait_span) -- which is ONLY advanced/signalled by a sim step, never by the scene-load
-  // AS build. So after a scene load/switch the render never waits for the build and traverses an
-  // in-flight BLAS -> cubes render with rounded ("dented") corners until the first sim step. Run ONE
-  // real sim step on scene load/switch: it publishes the AS through the render-synced timeline path
-  // (the only thing that reliably fixes it). Bodies advance one 1/60s step (~3mm of gravity --
-  // imperceptible; the pool is floating mid-air at rest anyway).
+  // Preserve the existing one-step publication after a scene load/switch. It
+  // initializes the render-facing simulation state even when starting paused.
+  // Synchronization now relies on Daxa's shared external-resource queue tracking,
+  // not on the ignored TaskSubmitInfo semaphore fields.
   // C1 HEADLESS METRICS (env-gated). The ground-truth quality metrics (dbg_pen/deep100/deep200/
   // maxv/min_y) are computed every sim step UNCONDITIONALLY in the narrow phase, so this needs no
   // extra flag. BB_METRICS_CSV=path writes one clean CSV row per stepped frame; BB_ASSERT_MAX_DEEP200
@@ -371,9 +353,28 @@ int RendererManager::render()
                                     // frames, or full-sleep stasis inflates frame=/deflates
                                     // the printed fps (user-reported "ya no topa 60fps"
                                     // that the present rate disproved)
+  bool const fracture_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr;
+  daxa_u32 timed_fracture_serial = 0u;
+  unsigned fracture_frame_tail = 0u;
+  daxa_u32 previous_frame_steps = 0u;
+  double previous_sim_phase_ms = 0.0;
+  auto fracture_frame_clock = std::chrono::steady_clock::now();
   while (!window.should_close())
   {
+    auto const frame_clock = std::chrono::steady_clock::now();
+    double const previous_frame_ms = std::chrono::duration<double, std::milli>(frame_clock - fracture_frame_clock).count();
+    fracture_frame_clock = frame_clock;
+    if (fracture_timing && fracture_frame_tail > 0u)
+    {
+      // Includes acquire/submission waits in the previous loop, without adding a GPU wait.
+      std::cout << "[FRACTURE-FRAME] frame=" << render_frames_total
+                << " serial=" << timed_fracture_serial << " wall_ms=" << previous_frame_ms
+                << " steps=" << previous_frame_steps << " sim_phase_ms=" << previous_sim_phase_ms << std::endl;
+      --fracture_frame_tail;
+    }
     ++render_frames_total;
+    previous_frame_steps = 0u;
+    previous_sim_phase_ms = 0.0;
     if (run_limit_s > 0.0 &&
         std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count() > run_limit_s)
     {
@@ -466,6 +467,7 @@ int RendererManager::render()
     // are legal; only the last step of the burst gets published (TLAS build below). Below
     // 60/MAX_CATCHUP_STEPS fps the sim slows down instead of spiraling.
     constexpr daxa_u32 MAX_CATCHUP_STEPS = 4u;
+    auto const sim_phase_start = std::chrono::steady_clock::now();
     daxa_u32 sim_steps_this_frame = 0u;
     if (det_steps > 0)
     {
@@ -483,7 +485,7 @@ int RendererManager::render()
       {
         gpu->synchronize();
         rigid_body_manager->simulate();
-        gpu->synchronize();
+        gpu->wait_for_simulation();
         sim_steps_this_frame = 1u;
         ++det_count;
         rigid_body_manager->read_back_sim_config();
@@ -561,14 +563,14 @@ int RendererManager::render()
         }
         prev_left = left_held;
       }
-      // ONE forced step after a scene load/switch to publish the async AS through the render-synced
-      // timeline path (cures the at-rest "dented/rounded cubes"). At rest is_simulating() is false, so
-      // only this runs; sim_steps_this_frame=1 makes the AS-update block below rebuild + signal.
+      // ONE forced step after a scene load/switch to publish the async AS through the shared-resource
+      // dependency path (cures the at-rest "dented/rounded cubes"). At rest is_simulating() is false, so
+      // only this runs; sim_steps_this_frame=1 makes the AS-update block below rebuild the publication.
       if (force_sim_step)
       {
         gpu->synchronize();
         rigid_body_manager->simulate();
-        gpu->synchronize();
+        gpu->wait_for_simulation();
         sim_steps_this_frame = 1u;
         force_sim_step = false;
       }
@@ -602,11 +604,16 @@ int RendererManager::render()
           gpu->synchronize();                                          // [PERF] flush prior GPU work
           auto _s0 = std::chrono::high_resolution_clock::now();        // [PERF]
           rigid_body_manager->simulate();
-          gpu->synchronize();                                          // [PERF] wait sim GPU completion
+          gpu->wait_for_simulation();                                  // [PERF] wait compute completion
           _sim_ms_accum += std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
           _sim_ms_n++;                                                 // [PERF]
           ++sim_steps_this_frame;
+          // A costly contact step must not trigger four equally costly catch-up
+          // steps before presenting again. Keep fixed dt and the existing backlog
+          // cap, but yield to rendering once this frame's simulation budget is spent.
+          if (std::chrono::duration<double>(std::chrono::steady_clock::now() - sim_phase_start).count() >= SIM_DT_S)
+            break;
         }
       }
       else
@@ -614,6 +621,8 @@ int RendererManager::render()
         sim_accum_s = 0.0; // don't burst-step on resume
       }
     }
+    previous_frame_steps = sim_steps_this_frame;
+    previous_sim_phase_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sim_phase_start).count();
     bool const sim_stepped = sim_steps_this_frame > 0u;
     // accumulation is only VALID over a static world: a sim step may move geometry, and
     // blending history across poses is the ghost-speckle the user reported (pieces
@@ -637,6 +646,11 @@ int RendererManager::render()
       {
         if (auto const *feb = rigid_body_manager->get_fracture_events())
         {
+          if (fracture_timing && feb->serial != timed_fracture_serial)
+          {
+            timed_fracture_serial = feb->serial;
+            fracture_frame_tail = 4u; // publication frame and three following frames
+          }
           scene_manager->process_fracture_events(*feb);
         }
         // KILL PLANE: reclaim shapes of fragments that flew out of the world. Gated on the
@@ -660,13 +674,13 @@ int RendererManager::render()
         static std::ofstream _pk(_pk_path, std::ios::trunc);
         static bool _pk_hdr = false;
         auto const &pk = rigid_body_manager->get_sim_config_reference();
-        if (!_pk_hdr) { _pk << "frame,pk_pen_mm,pk_lambda,pk_k,pk_vn,b1,b2,cc,stick,global_pen_mm,maxv_mm,omega_mrad,manifolds,sleeping\n"; _pk_hdr = true; }
+        if (!_pk_hdr) { _pk << "frame,pk_pen_mm,pk_lambda,pk_k,pk_vn,b1,b2,cc,stick,global_pen_mm,maxv_mm,omega_mrad,manifolds,sleeping,interior_hits\n"; _pk_hdr = true; }
         _pk << (daxa_u64)pk.frame_count
             << "," << pk.dbg_pk_pen << "," << pk.dbg_pk_lambda << "," << pk.dbg_pk_k << "," << pk.dbg_pk_vn
             << "," << (pk.dbg_pk_body >> 16) << "," << (pk.dbg_pk_body & 0xFFFFu)
             << "," << (pk.dbg_pk_stick >> 1) << "," << (pk.dbg_pk_stick & 1u)
             << "," << pk.dbg_pen << "," << pk.dbg_maxv << "," << pk.dbg_pk_omega
-            << "," << pk.g_c_info.collision_count << "," << pk.sleeping_count << "\n";
+            << "," << pk.g_c_info.collision_count << "," << pk.sleeping_count << "," << pk.dbg_vox_interior << "\n";
         _pk.flush();
       }
       // C1 headless metrics: one CSV row per stepped frame + threshold asserts (env-gated).

@@ -126,9 +126,7 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
     record_update_TLAS_tasks(TLAS_update_TG, TLAS_build_TG, update_pipeline);
     TLAS_update_TG.submit();
     TLAS_update_TG.complete();
-    // the TLAS build is the LAST compute submit of a sim publication: it signals the sim
-    // timeline (value set via advance_sim_timeline right before each execute)
-    TLAS_build_TG.submit({.additional_signal_timeline_semaphores = &task_manager->gpu->sim_signal_span});
+    TLAS_build_TG.submit();
     TLAS_build_TG.complete();
 
     record_update_AS_buffers_tasks(AS_update_buffers_TG);
@@ -252,7 +250,7 @@ void AccelerationStructureManager::build_AS()
 }
 
 bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
-                                                       std::function<void(daxa::BufferId)> const &post_primitive_upload)
+                                                       std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload)
 {
   if(!initialized) {
     std::cerr << "ERROR: AccelerationStructureManager is not initialized inside build_accel_structs!" << std::endl;
@@ -297,9 +295,6 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
   // Copy primitives to the buffer
   std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
-  // GPU-first hook: voxel bodies' AABB ranges are built ON the GPU straight into this
-  // scratch (overwriting the oracle-only CPU ranges) before the BLAS build reads it
-  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer); }
 
   // BUILDING BLAS
   auto clear_build_AS = [&]()
@@ -494,6 +489,9 @@ bool AccelerationStructureManager::build_accel_structs(std::vector<RigidBody> &r
 
   // INCREMENTAL-AS: capture this full build as the baseline the next fracture diffs against.
   seed_incremental_state(rigid_bodies, primitives);
+  // All host writes must precede GPU finalization. The hook can update bodies,
+  // instance transforms, and voxel AABBs before AS_build_TG consumes them.
+  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer, rigid_body_scratch_buffer, blas_instances_buffer); }
 
   return true;
 }
@@ -543,7 +541,7 @@ void AccelerationStructureManager::seed_incremental_state(std::vector<RigidBody>
 // identical content). Falls back to a full build until one has seeded the baseline.
 bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies,
                                                                     std::vector<Aabb> const &primitives,
-                                                                    std::function<void(daxa::BufferId)> const &post_primitive_upload)
+                                                                    std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload, std::span<daxa_u32 const> changed_bodies)
 {
   if (!initialized)
   {
@@ -582,12 +580,12 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
   }
 
   // 2. DENSE PRIM LAYOUT + FULL RE-UPLOAD (exactly the full build's model): copy every prim to the
-  //    scratch, run the GPU voxel-prims hook, and assign each body a sequential primitive_offset.
+  //    scratch and assign each body a sequential primitive_offset. The GPU hook runs after
+  //    all body and instance uploads below.
   //    AS_build_TG's copy task then blits [0, primitive_scratch_offset) into primitive_buffer at
   //    previous_primitive_count(0). Cheap; keeps unchanged bodies' content consistent at their
   //    (possibly shifted) offsets so their baked BLAS still intersects correctly.
   std::memcpy(device.buffer_host_address_as<Aabb>(primitive_scratch_buffer).value(), primitives.data(), primitive_count * sizeof(Aabb));
-  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer); }
 
   previous_primitive_count = 0;
   previous_rigid_body_count = 0;
@@ -612,12 +610,15 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
   blas_geometries.resize(rigid_body_count);
   proc_blas_scratch_offset = 0;
 
+  // Host voxel AABBs are placeholders, so their hash cannot detect changed occupancy.
+  std::vector<bool> geometry_changed(rigid_body_count, false);
+  for (daxa_u32 id : changed_bodies) if (id < rigid_body_count) geometry_changed[id] = true;
   u32 dirty_count = 0;
   for (u32 i = 0; i < rigid_body_count; ++i)
   {
     auto &rigid_body = rigid_bodies[i];
     u64 const hash = hash_prim_span(primitives, rigid_body.primitive_offset, rigid_body.primitive_count);
-    bool const dirty = body_blas_[i].is_empty() || hash != body_built_hash_[i];
+    bool const dirty = geometry_changed[i] || body_blas_[i].is_empty() || hash != body_built_hash_[i];
 
     if (dirty)
     {
@@ -735,6 +736,8 @@ bool AccelerationStructureManager::update_accel_structs_incremental(std::vector<
     }
   }
 
+  if (post_primitive_upload) { post_primitive_upload(primitive_scratch_buffer, rigid_body_scratch_buffer, blas_instances_buffer); }
+
   if (std::getenv("BB_RESPAWN_TIMING")) { std::cout << "[INCR-AS] dirty=" << dirty_count << "/" << rigid_body_count
                                                     << " blas_pool_live=" << blas_region_pool_.live_bytes
                                                     << " hw=" << blas_region_pool_.high_water << std::endl; }
@@ -753,9 +756,8 @@ void AccelerationStructureManager::update_TLAS()
     return;
   }
   TLAS_update_TG.execute();
-  device.wait_idle();
-  // timeline signal values must be strictly increasing: bump right before the signaling submit
-  task_manager->gpu->advance_sim_timeline();
+  // The shared instance TaskBuffer carries the producer queue dependency to
+  // the AS graph. Daxa waits that submission on the GPU, without a host wait.
   TLAS_build_TG.execute();
 }
 
@@ -793,9 +795,12 @@ bool AccelerationStructureManager::update()
   daxa_u32 total_instances = current_rigid_body_count;
 
   // Generate LBVH BLAS
-  if(renderer_manager->is_bvh_enabled())
+  if(renderer_manager->is_bvh_enabled() && current_rigid_body_count > 0u)
   {
-    u32 lbvh_primitive_count = (2 * current_primitive_count - 1);
+    // The broad-phase tree has one leaf per BODY, not per render primitive.
+    // Voxel bodies contain many primitives; using their count reads unbuilt
+    // nodes and can exceed the MAX_LBVH_NODE_COUNT buffer when L is enabled.
+    u32 const lbvh_primitive_count = 2u * current_rigid_body_count - 1u;
 
     blas_geometries.at(0).push_back({
         .data = device.device_address(rigid_body_manager->get_lbvh_node_buffer()).value(),
@@ -1023,12 +1028,15 @@ void AccelerationStructureManager::record_accel_struct_tasks(TaskGraph &AS_TG)
 
 void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances_TG, TaskGraph &build_TG, std::shared_ptr<daxa::ComputePipeline> update_AS_pipeline)
 {
-  auto user_callback_UI = [update_AS_pipeline](daxa::TaskInterface ti, auto &)
+  auto user_callback_UI = [this, update_AS_pipeline](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*update_AS_pipeline);
     ti.recorder.push_constant(UpdateInstancesPushConstants{.task_head = ti.attachment_shader_blob});
-    ti.recorder.dispatch_indirect({.indirect_buffer = ti.get(UpdateInstancesTaskHead::AT.dispatch_buffer).id,
-                                   .offset = 0});
+    // Fracture may grow the body list after the last solver dispatch. Its
+    // indirect group count is stale until the next simulation step (e.g. 32 ->
+    // 34 bodies leaves instances 32/33 untouched). Publish every current body.
+    ti.recorder.dispatch({.x = (current_rigid_body_count + RIGID_BODY_SIM_COMPUTE_X - 1u) / RIGID_BODY_SIM_COMPUTE_X,
+                          .y = 1, .z = 1});
   };
 
   using TTaskUI = TaskTemplate<UpdateInstancesTaskHead::Task, decltype(user_callback_UI)>;
@@ -1048,6 +1056,8 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
           daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, task_aabb_buffer),
+          // Debug BLAS geometry addresses the simulation's LBVH node buffer.
+          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, rigid_body_manager->task_lbvh_nodes),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_WRITE, task_blas),
       },
       .task = [this](daxa::TaskInterface const &ti)
@@ -1088,14 +1098,17 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
       rigid_body_manager->task_rigid_bodies,
       task_aabb_buffer,
   };
-  // TLAS instance update + build run on the async compute queue, after the sim (same-queue FIFO)
+  // Keep separate graphs: this Daxa revision crashes compiling the instance
+  // write -> AS read barrier in a combined graph. Shared external resources
+  // preserve the GPU dependency across graphs on the compute queue.
   instances_TG = task_manager->create_task_graph("Update TLAS Instances", std::span<daxa::TaskBuffer>(instance_buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
   instances_TG.add_task(task_UI);
 
-  std::array<daxa::TaskBuffer, 3> build_buffers = {
+  std::array<daxa::TaskBuffer, 4> build_buffers = {
       rigid_body_manager->task_rigid_bodies,
       task_aabb_buffer,
       task_blas_instance_data,
+      rigid_body_manager->task_lbvh_nodes,
   };
   std::array<daxa::TaskBlas, 1> blas = {
       task_blas,

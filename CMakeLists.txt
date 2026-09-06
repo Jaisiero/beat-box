@@ -124,3 +124,23 @@ add_executable(path_tracing_tests tests/path_tracing_tests.cpp)
 target_include_directories(path_tracing_tests PRIVATE include)
 target_link_libraries(path_tracing_tests PRIVATE daxa::daxa glm::glm)
 add_test(NAME path_tracing_tests COMMAND path_tracing_tests)
+
+# Structural regression guard: algorithms must not regain unrelated shader consumers.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if (Python3_Interpreter_FOUND)
+    add_test(NAME solver_replay_tests
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/solver_replay_tests.py)
+    add_test(NAME shader_dependencies_tests
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/shader_dependencies_tests.py)
+endif()
+
+# Analytical mass/kinematics checks for the CPU oracle used by BB_FRAGMENT_VERIFY.
+add_executable(fragment_finalization_tests tests/fragment_finalization_tests.cpp)
+target_include_directories(fragment_finalization_tests PRIVATE include)
+target_link_libraries(fragment_finalization_tests PRIVATE daxa::daxa glm::glm)
+add_test(NAME fragment_finalization_tests COMMAND fragment_finalization_tests)
+
+add_executable(fragment_census_tests tests/fragment_census_tests.cpp)
+target_include_directories(fragment_census_tests PRIVATE include)
+target_link_libraries(fragment_census_tests PRIVATE daxa::daxa glm::glm)
+add_test(NAME fragment_census_tests COMMAND fragment_census_tests)

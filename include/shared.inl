@@ -365,7 +365,7 @@ struct RigidBody
   // Quaternion::to_matrix() (math.hpp) and the rotate_vector() sandwich below. A non-unit value makes
   // them silently diverge (each scales differently by |q|^2) -> at-rest render mismatch. The invariant
   // is established at scene upload (AccelerationStructureManager::build_accel_structs) and maintained
-  // by integrate_positions() (extensions.slang), which renormalizes after every step.
+  // by integrate_positions() (rigid_body_integration.slang), which renormalizes after every step.
   Quaternion rotation;
   daxa_f32vec3 minimum;
   daxa_f32vec3 maximum;
@@ -407,9 +407,12 @@ struct RigidBody
     daxa_f32mat3x3 rotation_matrix = rotation.to_matrix();
 
 #if defined(__cplusplus)
-    return daxa_f32mat4x4(daxa_f32vec4(rotation_matrix.x.x, rotation_matrix.y.x, rotation_matrix.z.x, translation.x),
-                          daxa_f32vec4(rotation_matrix.x.y, rotation_matrix.y.y, rotation_matrix.z.y, translation.y),
-                          daxa_f32vec4(rotation_matrix.x.z, rotation_matrix.y.z, rotation_matrix.z.z, translation.z),
+    // to_matrix() constructs rotation ROWS. Daxa's C++ vectors store those
+    // rows in x/y/z; Vulkan instance data requires the same three row vectors.
+    // Gathering columns here transposed the rotation of CPU-seeded fragments.
+    return daxa_f32mat4x4(daxa_f32vec4(rotation_matrix.x.x, rotation_matrix.x.y, rotation_matrix.x.z, translation.x),
+                          daxa_f32vec4(rotation_matrix.y.x, rotation_matrix.y.y, rotation_matrix.y.z, translation.y),
+                          daxa_f32vec4(rotation_matrix.z.x, rotation_matrix.z.y, rotation_matrix.z.z, translation.z),
                           daxa_f32vec4(0.0f, 0.0f, 0.0f, 1.0f));
 #else // defined(__cplusplus)
     return daxa_f32mat4x4(daxa_f32vec4(rotation_matrix[0], translation.x),
@@ -979,8 +982,8 @@ static const daxa_u32 BB_SLEEP_TIMER_MASK = 0x7FFFFFFFu;
 //   5. TERMINAL SPEED CLAMP (BB_MAX_LINEAR_SPEED). Anti-punch-through; without it 28 m/s rain
 //      tunnels ~470mm + trips the impulse-explosion latch (EX[s=4]). NOTE: this caps the FALL look
 //      (floaty); raising it needs sub-frame substepping (falsified: cushion/cost) -- a known wall.
-//   6. INELASTIC IMPACT PASS (e=0, avbd.slang IMP_J/IMP_APPLY). Removes impact rebound post-FIN.
-//   7. SETTLE SPONGE (avbd.slang finalize, v<0.3 && 3+ manifolds -> *0.9). Drains residual pile
+//   6. INELASTIC IMPACT PASS (e=0, passes/avbd_impact.slang). Removes impact rebound post-FIN.
+//   7. SETTLE SPONGE (passes/avbd_step.slang finalize, v<0.3 && 3+ manifolds -> *0.9). Drains residual pile
 //      micro-velocity. WIDENING IT BACKFIRES (re-excitation: lighter settle -> pen~0 flicker).
 //
 // KNOWN IRREDUCIBLE: the resting-pile "tremble" without sleeping is SAT-axis-flap + matcher churn +
