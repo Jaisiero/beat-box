@@ -20,9 +20,10 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--steps", type=int, default=300)
     parser.add_argument("--solver", type=int, choices=(2, 3), default=2)
+    parser.add_argument("--pool-steps", type=int, default=1800, help="F7 stability run length; reports the 900-step checkpoint separately")
     args = parser.parse_args()
-    if args.steps < 2 or args.repeats < 1:
-        parser.error("steps >= 2 and repeats >= 1 required")
+    if args.steps < 2 or args.repeats < 1 or args.pool_steps < 900:
+        parser.error("steps >= 2, pool-steps >= 900 and repeats >= 1 required")
     runtime, output = args.runtime.resolve(), args.output.resolve()
     executable = runtime / "beat-box"
     fixture = Path(__file__).resolve().parents[1] / "tests/scenes/fracture_frame_drop.txt"
@@ -37,41 +38,49 @@ def main():
     env.setdefault("DISPLAY", ":0")
     env.update(BB_SOLVER=str(args.solver), BB_DET_STEPS=str(args.steps), BB_RESPAWN_TIMING="1")
     shader = runtime / "src/shaders/simulation/collision_detection.slang"
-    report = dict(solver=args.solver, steps=args.steps, repeats=args.repeats,
+    report = dict(solver=args.solver, steps=args.steps, pool_steps=args.pool_steps, repeats=args.repeats,
                   shader_sha256=hashlib.sha256(shader.read_bytes()).hexdigest(),
                   sdf_build_shader_sha256=hashlib.sha256((runtime / "src/shaders/simulation/voxel_sdf.slang").read_bytes()).hexdigest(),
                   runs=[], scenes={})
     for trial in range(1, args.repeats + 1):
-        for scene in (3, 5, 6):
+        for scene in (3, 5, 6, 7):
             prefix = output / f"scene-{scene}-run-{trial}"
             metrics = prefix.with_suffix(".csv")
             log = prefix.with_suffix(".log")
-            run_env = dict(env, BB_SCENE=str(scene), BB_METRICS_CSV=str(metrics))
+            steps = args.pool_steps if scene == 7 else args.steps
+            run_env = dict(env, BB_SCENE=str(scene), BB_DET_STEPS=str(steps), BB_METRICS_CSV=str(metrics))
             if scene == 3:
                 run_env["BB_SCENE_FILE"] = str(fixture)
             with log.open("w") as stream:
                 subprocess.run([str(executable)], cwd=runtime, env=run_env, stdout=stream,
                                stderr=subprocess.STDOUT, timeout=180, check=True)
             text = log.read_text(errors="replace")
-            if f"DET step={args.steps} " not in text:
+            if f"DET step={steps} " not in text:
                 raise RuntimeError(f"Incomplete physics run: {log}")
             times = [float(v) for v in re.findall(r"\[FRACTURE-NP\] gpu_ms=([0-9.eE+-]+)", text)]
-            if len(times) != args.steps or not all(math.isfinite(v) and v >= 0 for v in times):
+            if len(times) != steps or not all(math.isfinite(v) and v >= 0 for v in times):
                 raise RuntimeError(f"Missing/invalid GPU timestamps: {log}")
             with metrics.open() as stream:
                 rows = list(csv.DictReader(stream))
-            if len(rows) != args.steps - 1:
+            if len(rows) != steps - 1:
                 raise RuntimeError(f"Unexpected physics row count: {metrics}")
             builds = [dict(gpu_ms=float(ms), shapes=int(count)) for ms, count in
                       re.findall(r"\[SDF-BUILD\] gpu_ms=([0-9.eE+-]+) shapes=(\d+)", text)]
-            if not builds or not all(math.isfinite(b["gpu_ms"]) and b["gpu_ms"] >= 0 for b in builds):
+            if (scene != 7 and not builds) or not all(math.isfinite(b["gpu_ms"]) and b["gpu_ms"] >= 0 for b in builds):
                 raise RuntimeError(f"Missing/invalid voxel build timestamps: {log}")
             item = dict(builds=builds, scene=scene, trial=trial, samples=len(times), mean_ms=statistics.mean(times),
                         p95_ms=sorted(times)[math.ceil(.95 * len(times))-1], max_ms=max(times),
                         metrics_sha256=hashlib.sha256(metrics.read_bytes()).hexdigest())
+            if scene == 7:
+                # CSV omits the first step: row zero corresponds to DET step 2.
+                asleep = [i + 2 for i, r in enumerate(rows) if int(r["sleeping"]) == 432]
+                item["pool"] = dict(first_full_sleep_step=asleep[0] if asleep else None,
+                                    sleeping_at_900=int(rows[898]["sleeping"]),
+                                    final_sleeping=int(rows[-1]["sleeping"]),
+                                    stayed_asleep=bool(asleep) and all(int(r["sleeping"]) == 432 for r in rows[asleep[0]-2:]))
             report["runs"].append(item)
             print(json.dumps(item), flush=True)
-    for scene in (3, 5, 6):
+    for scene in (3, 5, 6, 7):
         runs = [r for r in report["runs"] if r["scene"] == scene]
         report["scenes"][scene] = dict(median_mean_ms=statistics.median(r["mean_ms"] for r in runs),
                                      repeat_metrics_identical=len({r["metrics_sha256"] for r in runs}) == 1)

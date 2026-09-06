@@ -1,98 +1,90 @@
-# SDF pipeline performance
+# SDF profiling and F7 regression investigation
 
 Base: merge cf4a96e, including corrected fragment surface counts.
 
-## Measurement
+## Final change
 
-`BB_RESPAWN_TIMING` now logs every narrow-phase GPU query, including samples below
-5 ms. It also measures the GPU voxel-pool build chain (SDF, surface list and mass
-properties) with timestamps read after its existing submit wait. No additional
-queue wait is introduced. Queries and logging remain opt-in.
+Only measurement/tooling changes remain. Both `collision_detection.slang` and
+`voxel_sdf.slang` are byte-identical to the merge baseline. The attempted
+zero-distance shortcut has been withdrawn; there is no retained solver or SDF
+algorithm change and no claimed production speedup in this PR.
 
-Run the repeatable narrow-phase benchmark with the application closed:
+`BB_RESPAWN_TIMING` logs every narrow-phase GPU query, including samples below
+5 ms. It also measures the voxel-pool GPU build chain (SDF, surface list and mass
+properties). Results are read after the existing submit wait; no extra queue wait
+is introduced. Instrumentation remains opt-in.
 
 ```sh
 python3 tools/benchmark_sdf.py --runtime build/Release --output work/sdf-benchmark --repeats 3
 ```
 
-It checks process completion, sample counts and physics CSV rows, and records
-shader/CSV hashes. It clears inherited BB_* and validation-layer overrides.
-`--solver 3` selects TGS. GPU intervals exclude startup compilation and rendering.
+Close the application first. The tool checks completion, timestamp counts and CSV
+rows; records shader/CSV hashes; clears inherited BB_* and validation overrides;
+and measures F3's fracture fixture, F5 and F6 for 300 steps. It additionally runs F7
+for 1800 steps and records first full sleep, the original 900-step checkpoint and
+whether full sleep persists. `--steps`, `--pool-steps` and `--solver 3` customize
+measurement. A later full-sleep result does not erase a failed 900-step checkpoint.
+F7 has no voxel builds. Timings exclude startup compilation and rendering.
 
-## Rejected narrow-phase experiments
+## Withdrawn experiments
 
-Moving the identical OBB prefilter outside the six voxel face passes saved about
-5-6% of narrow-phase GPU time on the RTX 4090 (AVBD, 300 steps, three repeats):
+Moving the OBB prefilter outside six voxel face passes reduced narrow-phase GPU
+time by about 5-6% on RTX 4090: F3 0.31373 to 0.29516 ms, F5 0.46715 to 0.44199 ms,
+F6 0.49393 to 0.46962 ms (median of three run means). Nine SDF CSVs matched, but
+F7 did not consistently meet the existing 900-step criterion. Keeping the six
+helper early-outs and only caching the boolean also failed that gate. Both were
+withdrawn. Direct node loads and a shared SAT table were slower; SAT unrolling
+failed to improve every scene. None is retained.
 
-| Scene | Original | Rejected candidate |
-| --- | ---: | ---: |
-| Weak-frame fracture fixture | 0.31373 ms | 0.29516 ms |
-| F5 | 0.46715 ms | 0.44199 ms |
-| F6 | 0.49393 ms | 0.46962 ms |
+Skipping an axis-transform node whose squared distance was already zero was
+mathematically exact for the nonnegative distance field. Three alternating runs
+measured fracture rebuilds at 0.05032 versus 0.04743 ms; initial F9 builds at
+0.29421 versus 0.29085 ms. These microsecond savings did not fix the full fracture
+stall. All 18 F3/F5/F6 CSVs matched, and CPU/GPU SDF errors on F5/F6/F9 were zero.
+AVBD/TGS completed 900 fracture steps with synchronization validation, pool checks
+and independent surface-capture analysis passing. Four CTest targets passed.
+Despite those results, this candidate was conservatively withdrawn during the F7 investigation.
 
-All nine SDF physics CSVs matched, but repeated F7 controls exposed intermittent
-failure to put the full pool to sleep. The original slept all 432 dynamic bodies
-in four controls; the early-return candidate failed in two of five runs. Keeping
-the six helper early-outs and merely caching the prefilter boolean also failed
-in one of three runs. Neither candidate is retained. The reason a change in the
-voxel branch affects this OBB scene is not established.
+## F7 findings and corrective action
 
-Direct interior node loads and a shared per-pair SAT table were slower; SAT loop
-unrolling did not improve every scene. These experiments are also discarded.
-The shipping narrow-phase source remains identical to the merge baseline.
+The first interactive observation was made during settling and was insufficient
+to diagnose persistent instability. In controlled 35-second interactive runs,
+**both original and candidate reached 432 sleeping bodies**. Neither remained in
+permanent motion. A suspicion that AVBD's maximum-velocity statistic retained an
+old peak was rejected: `entry_avbd_prepare` already resets it every step.
 
-Evidence on the simulation host: `work/sdf-performance/`. `base-*` are valid
-baselines; the initial `baseline-*` attempt used an empty scene-file override and
-must be excluded. `final/` contains the subsequently rejected prefilter variant,
-not a validated shipping result.
+Three alternating 1800-step runs then measured:
 
-## Draft SDF build optimization — stability gate unresolved
+| Shader variant | First full sleep, by run | Sleeping at step 900 |
+| --- | --- | --- |
+| Original | 575, 711, 530 | 432, 432, 432 |
+| Zero-distance candidate | 879, 965, 1255 | 432, 26, 28 |
 
-The axis distance transform skips a node whose input squared distance is already
-zero. All candidate distances are nonnegative, so its exact minimum and existing
-output are zero. Each thread owns its entire column, and the input column is
-loaded before writes. Dispatches, barriers and the contact shader are unchanged.
-RTX 4090, three alternating original/optimized repetitions. GPU intervals cover
-all pool-build kernels and their barriers, excluding CPU publication and readback.
-For the weak-frame fixture, each run's mean excludes its initial scene build and
-includes its seven fracture rebuilds; the table uses the median of these means.
-For F5/F6/F9 it is the median of the initial scene builds.
+All six ended fully asleep. This small sample initially suggested slower settling
+under the candidate, but the expanded original-shader controls below invalidate
+the claim that failure at 900 steps uniquely identifies a candidate regression.
+There is no evidence here of NaNs, memory corruption or endless instability.
+F7 contains only OBBs and does not dispatch the modified SDF build shader, so the
+causal mechanism is **not established**. Earlier checkpoints show matching main
+solve hashes and a divergence after post-stabilization; this localizes that
+comparison but does not prove a driver/compiler defect or a specific race.
 
-| Build workload | Original | Optimized | Reduction |
-| --- | ---: | ---: | ---: |
-| Weak-frame fracture rebuilds | 0.05032 ms | 0.04743 ms | 5.74% |
-| F5 initial pools | 0.08250 ms | 0.08112 ms | 1.67% |
-| F6 initial pools | 0.04845 ms | 0.04797 ms | 0.99% |
-| F9 initial pools | 0.29421 ms | 0.29085 ms | 1.14% |
+Three further original-shader runs (the updated benchmark, `reverted/`) reached
+full sleep at steps **790, 752 and 1094**. At step 900 they had 432, 432 and 21
+sleeping bodies. All three stayed fully asleep after settling, and all nine SDF
+CSVs matched the merged baseline. Thus the original also fails the old 900-step
+gate. Attribution to the unused SDF shader is **not demonstrated**, and withdrawal
+must not be described as a proven fix for F7 settling variability.
 
-These are microsecond savings, not a fix for the entire fracture stall. The F9
-measurement is an intact scene build, not an interactive fracture latency test.
-The zero shortcut leaves the algorithm's worst-case quadratic column scan intact.
+The conservative implementation action is to restore the original shader. The
+diagnostic correction is to distinguish a failed settling-time checkpoint from
+persistent instability and avoid attributing it to a change without adequate
+controls. Sleep thresholds and solver iterations are unchanged. The benchmark now exposes both settling
+time and the 900-step gate so eventual success cannot hide this difference.
+The original interactive configuration is restored after verification.
 
-All 18 300-step F3/F5/F6 physics CSVs (original and optimized) match the original
-baseline byte-for-byte. CPU SDF verification on F5, F6 and F9 reports maximum
-absolute error zero in all repetitions. Surface-list verification also passes.
-Raw alternating build evidence: `work/sdf-performance/build-*.log`,
-`build-*.csv`, `build-results.json`, `build-ab.sh`, `zero-validation.sh`.
-
-
-## Validation and unresolved gate
-
-Both AVBD and TGS complete 900 fixed fracture steps with Vulkan synchronization
-validation and pool checks, without reported validation errors. Their full CSVs
-match the merged contact-fix baseline. Independent capture analysis reports no
-surface-list/count errors for either solver. All four CTest targets pass.
-The updated benchmark tool also completes an actual three-scene run, including
-build timestamp collection (`shipping/`; the directory name does not mean approval).
-
-However, this candidate is **not ready to merge**. With the original contact shader
-and the zero-distance build shortcut, three F7/AVBD repeats ended with 23, 432 and
-29 sleeping bodies. Five subsequent controls with both original shaders slept all
-432 bodies. F7 contains only OBBs and does not dispatch the SDF build shader; the
-causal mechanism is unresolved. No claim that this is harmless variability or a
-proven SDF arithmetic regression is justified. The earlier prefilter experiments
-are likewise withheld rather than declared safe based only on their SDF CSVs.
-
-The draft preserves the small candidate and instrumentation for review, not as a
-validated replacement for the merged simulation. Investigate the F7 discrepancy
-before accepting any optimization. This PR does not resolve the full fracture stall.
+Evidence on host: `work/sdf-performance/` (initial experiments) and
+`work/f7-regression/` (real-*, settle-*, reverted/). The earlier directory names
+`final/` and `shipping/` contain subsequently withdrawn candidates, not approvals.
+Initial `baseline-*` runs with an empty scene-file override are invalid; use
+`base-*` instead. The benchmark omits that variable for built-in scenes.
