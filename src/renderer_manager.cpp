@@ -640,8 +640,8 @@ int RendererManager::render()
     if(sim_stepped || status_manager->is_updating()) {
       rigid_body_manager->read_back_sim_config();
       // FRACTURE: consume any impact-pass events (dedicated GPU->host bridge buffer).
-      // The orchestrator carves/labels on the GPU and respawns fragments via the
-      // reset-path upload machinery; no-op (one compare) when nothing fractured.
+      // GPU partitioning and publication return compact AS build metadata;
+      // no-op (one generation comparison) when nothing fractured.
       if (sim_stepped)
       {
         if (auto const *feb = rigid_body_manager->get_fracture_events())

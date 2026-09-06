@@ -296,7 +296,7 @@ bool gc_overflowed(daxa_u32 c)
     daxa::f32 h = sim_config->dt / daxa_f32(sim_config->tgs_substeps);
     daxa::f32 inv_h = h > 0.0f ? 1.0f / h : 0.0f;
     daxa::f32 tgs_hertz = min(TGS_CONTACT_HERTZ, inv_h * 0.3333333333333333f);
-    TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz, sim_config);
+    TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz, sim_config, m);
     return;
   }
   if (GCS.tgs_phase == 2) // Box2D v3's per-sub-step warm start stage
@@ -411,7 +411,7 @@ bool gc_overflowed(daxa_u32 c)
         daxa::f32 h = sim_config->dt / daxa_f32(sim_config->tgs_substeps);
         daxa::f32 inv_h_sub = h > 0.0f ? 1.0f / h : 0.0f;
         daxa::f32 tgs_hertz = min(TGS_CONTACT_HERTZ, inv_h_sub * 0.3333333333333333f);
-        TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz, sim_config);
+        TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz, sim_config, m);
       }
       else if (GCS.tgs_phase == 2)
         TGS_SOFT.warm_start(manifold, r1, r2, accum_impulse, friction);

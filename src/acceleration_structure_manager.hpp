@@ -50,15 +50,16 @@ struct AccelerationStructureManager
   void build_AS();
   // Post-upload hook, after all host writes and before AS construction.
   // Arguments: primitive scratch, body scratch, and instance data. GPU fragment
-  // finalization may update these inputs; the hook must finish before returning.
+  // publication may update these inputs. The hook submits on MAIN; the following
+  // AS graph consumes them on MAIN without further host writes.
   bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
-                           std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload = {});
+                           std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload = {}, bool gpu_scene = false);
   // Incremental sibling of build_accel_structs (see the member note by blas_region_pool_): same
-  // dense prim layout + full re-upload, but (re)builds only the BLAS whose prim content changed,
+  // dense primitive layout (GPU-generated at runtime), but rebuilds only changed BLAS,
   // keeping every unchanged body's baked BLAS. Falls back to the full build until seeded by one.
   bool update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
                                         std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload = {},
-                                        std::span<daxa_u32 const> changed_bodies = {});
+                                        std::span<daxa_u32 const> changed_bodies = {}, bool gpu_scene = false);
   void update_TLAS();
   // Zero the incremental upload counters so the next build_accel_structs() re-fills from offset 0
   // (used by scene reset/reload). Without this the counts accumulate and the 2nd reload exceeds the
@@ -160,7 +161,7 @@ private:
   bool incremental_ready_ = false;                      // seeded by the last full build
   // FNV-1a over a body's prim span [off, off+count) -- any geometry change flips it. count is
   // folded in so a re-sized span is always caught even on a (negligible) 64-bit float collision.
-  static u64 hash_prim_span(std::vector<Aabb> const &prims, u32 off, u32 count)
+  static u64 hash_prim_span(std::span<Aabb const> prims, u32 off, u32 count)
   {
     u64 h = 1469598103934665603ull;
     auto mix = [&](u32 v) { h = (h ^ v) * 1099511628211ull; };
@@ -172,6 +173,16 @@ private:
       for (f32 x : f) { u32 b; std::memcpy(&b, &x, 4); mix(b); }
     }
     return h;
+  }
+  static u64 hash_body_geometry(RigidBody const &body, std::vector<Aabb> const &primitives)
+  {
+    // Voxel occupancy is GPU-owned and immutable for a live shape. Reused slots
+    // are explicitly dirty in the GPU build manifest, including spawn/cull edits.
+    if (body.shape_index!=0u)
+      return (u64(body.shape_index)<<32u) ^ u64(body.primitive_count) ^ 0x9e3779b97f4a7c15ull;
+    if (!primitives.empty()) return hash_prim_span(primitives,body.primitive_offset,body.primitive_count);
+    Aabb box(body.minimum,body.maximum);
+    return hash_prim_span(std::span<Aabb const>(&box,1),0u,1u);
   }
   // The last full build (build_accel_structs) seeds the incremental state from proc_blas so the
   // first fracture can diff against it; a fresh full build / reset clears it.

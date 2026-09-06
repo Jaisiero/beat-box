@@ -166,7 +166,7 @@ bool avbd_impact_pair_gates(SimConfig* sim_config, Manifold* m, out daxa_u32 b1,
   }
 
   // Share material/event handling with TGS; AVBD retains its pre-impact classifier.
-  emit_fracture_pair(sim_config, r1, r2, frac_imp, frac_p, n);
+  emit_fracture_pair(sim_config, r1, r2, m_idx, frac_imp, frac_p, n);
 }
 
 [shader("compute")]

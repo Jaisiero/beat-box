@@ -1,4 +1,4 @@
-#include "shared.inl"
+#include "fracture_setup.inl"
 
 // ----- FRACTURE kernels (carve + connected components), VoxelFracturePushConstants -----
 // One-off dispatches from the host orchestrator at fracture events. Labels live in the
@@ -23,13 +23,14 @@ daxa_b32 vfr_cell_solid(daxa_u32* occ, daxa_i32 x, daxa_i32 y, daxa_i32 z)
 [shader("compute")]
 [numthreads(64, 1, 1)] void entry_voxel_carve(daxa_u32vec3 tid : SV_DispatchThreadID)
 {
+  FractureParentContext* context = (FractureParentContext*)VFR.context_addr;
   daxa_u32 bit_count = VFR.cell_dims.x * VFR.cell_dims.y * VFR.cell_dims.z;
   daxa_u32 bit = tid.x;
   if (bit >= bit_count) { return; }
   daxa_u32 x = bit % VFR.cell_dims.x;
   daxa_u32 y = (bit / VFR.cell_dims.x) % VFR.cell_dims.y;
   daxa_u32 z = bit / (VFR.cell_dims.x * VFR.cell_dims.y);
-  daxa_f32vec3 c = daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f) - VFR.carve_center;
+  daxa_f32vec3 c = daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f) - context->center;
   if (dot(c, c) > VFR.carve_radius * VFR.carve_radius) { return; }
   daxa_u32* occ = (daxa_u32*)(VFR.occupancy_addr);
   daxa_u32 _old;
@@ -45,6 +46,7 @@ daxa_b32 vfr_cell_solid(daxa_u32* occ, daxa_i32 x, daxa_i32 y, daxa_i32 z)
 [shader("compute")]
 [numthreads(64, 1, 1)] void entry_voxel_voronoi_assign(daxa_u32vec3 tid : SV_DispatchThreadID)
 {
+  FractureParentContext* context = (FractureParentContext*)VFR.context_addr;
   daxa_u32 bit_count = VFR.cell_dims.x * VFR.cell_dims.y * VFR.cell_dims.z;
   daxa_u32 bit = tid.x;
   if (bit >= bit_count) { return; }
@@ -56,16 +58,16 @@ daxa_b32 vfr_cell_solid(daxa_u32* occ, daxa_i32 x, daxa_i32 y, daxa_i32 z)
   daxa_u32 y = (bit / VFR.cell_dims.x) % VFR.cell_dims.y;
   daxa_u32 z = bit / (VFR.cell_dims.x * VFR.cell_dims.y);
   daxa_f32vec3 p = daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f);
-  daxa_f32vec3 d0 = p - VFR.carve_center;
-  if (dot(d0, d0) > VFR.voronoi_radius * VFR.voronoi_radius)
+  daxa_f32vec3 d0 = p - context->center;
+  if (dot(d0, d0) > context->radius * context->radius)
   {
-    site_labels[bit] = VFR.site_count; // the shared remainder (intact chunk beyond the blast)
+    site_labels[bit] = context->site_count; // the shared remainder (intact chunk beyond the blast)
     return;
   }
-  daxa_f32vec4* sites = (daxa_f32vec4*)(VFR.site_pos_addr);
+  daxa_f32vec4* sites = &context->sites[0];
   daxa_u32 best = 0u;
   daxa_f32 bestd = 1.0e30f;
-  for (daxa_u32 i = 0u; i < VFR.site_count; ++i)
+  for (daxa_u32 i = 0u; i < context->site_count; ++i)
   {
     daxa_f32vec3 s = sites[i].xyz;
     daxa_f32vec3 dd = p - s;
@@ -79,6 +81,7 @@ daxa_b32 vfr_cell_solid(daxa_u32* occ, daxa_i32 x, daxa_i32 y, daxa_i32 z)
 [shader("compute")]
 [numthreads(64, 1, 1)] void entry_voxel_flood_init(daxa_u32vec3 tid : SV_DispatchThreadID)
 {
+  FractureParentContext* context = (FractureParentContext*)VFR.context_addr;
   daxa_u32 bit_count = VFR.cell_dims.x * VFR.cell_dims.y * VFR.cell_dims.z;
   daxa_u32 bit = tid.x;
   if (bit >= bit_count) { return; }
@@ -96,6 +99,7 @@ daxa_b32 vfr_cell_solid(daxa_u32* occ, daxa_i32 x, daxa_i32 y, daxa_i32 z)
 [shader("compute")]
 [numthreads(64, 1, 1)] void entry_voxel_flood_step(daxa_u32vec3 tid : SV_DispatchThreadID)
 {
+  FractureParentContext* context = (FractureParentContext*)VFR.context_addr;
   daxa_u32 bit_count = VFR.cell_dims.x * VFR.cell_dims.y * VFR.cell_dims.z;
   daxa_u32 bit = tid.x;
   if (bit >= bit_count) { return; }
