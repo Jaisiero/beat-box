@@ -12,4 +12,5 @@ struct FragmentPlanPushConstants
 {
   daxa_u64 census_addr, remap_addr, manifest_addr;
   daxa_u32 cells;
+  daxa_u64 context_addr; // zero for standalone verification inputs
 };

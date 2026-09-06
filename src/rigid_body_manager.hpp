@@ -277,9 +277,9 @@ private:
   daxa::BufferId fracture_census_scratch{}, fracture_census_output{}, fracture_remap_buffer{};
   std::shared_ptr<daxa::ComputePipeline> pipeline_fragment_plan, pipeline_fracture_allocate, pipeline_fragment_batch_pack;
   std::shared_ptr<daxa::ComputePipeline> pipeline_impact_reset, pipeline_impact_select, pipeline_impact_publish;
-  void record_fragment_census(daxa::CommandRecorder &rec, daxa_u32vec3 dims, daxa_u64 labels_addr, bool compact);
-  void record_fracture_partition(daxa::CommandRecorder &rec, VoxelShape const &shape,
-      daxa_u32 body_id, daxa_u32 event_slot, daxa_u32 body_count, daxa_u64 batch_addr,
+  void record_fragment_census(daxa::CommandRecorder &rec, daxa_u32vec3 dims, daxa_u64 labels_addr, bool compact, daxa_u32 body_id = MAX_U32);
+  void record_fracture_partition(daxa::CommandRecorder &rec,
+      daxa_u32 body_id, daxa_u32 event_slot, daxa_u32 body_count, daxa_u64 batch_addr, daxa_u32 recorded_passes,
       bool compact, daxa::TimelineQueryPool *queries = nullptr);
   std::shared_ptr<daxa::ComputePipeline> pipeline_body_list;
   std::shared_ptr<daxa::ComputePipeline> pipeline_fracture_setup, pipeline_fracture_gather, pipeline_fracture_scene_edit, pipeline_fracture_layout;

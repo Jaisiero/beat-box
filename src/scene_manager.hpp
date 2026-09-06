@@ -1823,7 +1823,7 @@ public:
         if (id >= rigid_bodies.size()) continue;
         auto const &body = rigid_bodies[id];
         if (body.shape_index == 0u || (body.flags & RigidBodyFlag::DYNAMIC) == RigidBodyFlag::NONE) continue;
-        inputs.push_back({voxel_shape_cpu[body.shape_index - 1u], id, s});
+        inputs.push_back({id, s, fracture_recorded_passes(voxel_shape_cpu[body.shape_index - 1u])});
       }
       children = rigid_body_manager->fracture_batch_gpu(inputs);
     }

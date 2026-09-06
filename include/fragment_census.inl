@@ -17,6 +17,7 @@ struct FragmentCensusPushConstants
 {
   daxa_u64 labels_addr, scratch_addr, output_addr;
   daxa_u32vec3 dims;
+  daxa_u64 context_addr; // zero for standalone verification inputs
 };
 #if defined(__cplusplus)
 static_assert(sizeof(FragmentComponent) == 44);
