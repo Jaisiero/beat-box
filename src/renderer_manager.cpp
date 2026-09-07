@@ -399,6 +399,7 @@ int RendererManager::render()
     auto const timing_start = std::chrono::steady_clock::now();
     // Update the GUI
     gui_manager->update();
+    auto const timing_gui_end = std::chrono::steady_clock::now();
 
     // A GUI toggle (TAB) rebuilds the ImGui overlay (+ the contact-point debug pass), hitching this
     // frame and the next; suppress the sim's REAL catch-up for those frames so the (AVBD-jittering)
@@ -450,8 +451,10 @@ int RendererManager::render()
     // visibly stuttered at ~20 Hz while the display presented a smooth 60 (user: "la
     // simulación se ralentiza en algunos momentos"; pace=[rf71 st71] with 31 print
     // frames was the tell). Latent flaw exposed by the render getting 2x faster.
+    auto const timing_events_start = std::chrono::steady_clock::now();
     if (!window.update())
       continue;
+    auto const timing_events_end = std::chrono::steady_clock::now();
     if (window.swapchain_out_of_date)
     {
       gpu->swapchain_resize();
@@ -474,7 +477,9 @@ int RendererManager::render()
       });
       status_manager->reset_accumulation_count();
     }
+    auto const timing_acquire_start = std::chrono::steady_clock::now();
     auto swapchain_image = gpu->swapchain_acquire_next_image();
+    auto const timing_acquire_end = std::chrono::steady_clock::now();
     if (swapchain_image.is_empty())
       continue;
 
@@ -834,6 +839,11 @@ int RendererManager::render()
       std::cout << "[FRAME-PHASES] frame=" << render_frames_total
                 << " steps=" << sim_steps_this_frame
                 << " front_ms=" << ms(timing_start,sim_phase_start)
+                << " gui_ms=" << ms(timing_start,timing_gui_end)
+                << " scene_updates_ms=" << ms(timing_gui_end,timing_events_start)
+                << " events_ms=" << ms(timing_events_start,timing_events_end)
+                << " front_cpu_ms=" << ms(timing_start,timing_acquire_start)
+                << " acquire_ms=" << ms(timing_acquire_start,timing_acquire_end)
                 << " sim_ms=" << ms(sim_phase_start,timing_sim_end)
                 << " sim_order_ms=" << sim_order_ms
                 << " sim_submit_ms=" << sim_submit_ms

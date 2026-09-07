@@ -21,6 +21,7 @@ struct WindowManager{
     GLFWwindow * glfw_window_ptr;
     u32 width, height;
     bool minimized = false;
+    bool iconified = false;
     bool swapchain_out_of_date = false;
     InputManager& input_manager;
 
@@ -52,6 +53,14 @@ struct WindowManager{
 
         // Set the user pointer to this window
         glfwSetWindowUserPointer(glfw_window_ptr, this);
+
+        // Cache minimize/restore notifications. Querying GLFW_ICONIFIED each frame
+        // performs a synchronous X11 property round trip on the streaming server.
+        iconified = glfwGetWindowAttrib(glfw_window_ptr, GLFW_ICONIFIED) != 0;
+        glfwSetWindowIconifyCallback(glfw_window_ptr, [](GLFWwindow *window, int value) {
+            auto *win = static_cast<WindowManager *>(glfwGetWindowUserPointer(window));
+            win->iconified = value != 0;
+        });
 
         // When the window is resized, update the width and height and mark the swapchain as out of date
         glfwSetWindowSizeCallback(glfw_window_ptr, [](GLFWwindow *window, int size_x, int size_y) {
@@ -147,7 +156,7 @@ struct WindowManager{
             return false;
         }
 
-        if(minimized || glfwGetWindowAttrib(glfw_window_ptr, GLFW_ICONIFIED))
+        if(minimized || iconified)
         {
             // Keep close/restore events responsive without polling at full CPU
             // speed while no swapchain image can be rendered.
