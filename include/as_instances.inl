@@ -12,5 +12,3 @@ struct UpdateInstancesPushConstants
 {
   DAXA_TH_BLOB(UpdateInstancesTaskHead, task_head)
 };
-
-
