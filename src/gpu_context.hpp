@@ -86,6 +86,17 @@ struct GPUcontext{
     return swapchain.get_surface_extent();
   }
 
+  // Preserve render -> simulation execution and memory ordering on the GPU.
+  // Daxa maps queue timeline waits to ALL_COMMANDS. A wait-only submission
+  // orders subsequent COMPUTE_0 work without blocking CPU command recording.
+  auto order_simulation_after_rendering() -> void {
+    device.submit_commands({
+        .queue = daxa::QUEUE_COMPUTE_0,
+        .wait_queue_submit_indices = std::array{std::pair{daxa::QUEUE_MAIN,
+            device.latest_queue_submit_index(daxa::QUEUE_MAIN)}},
+    });
+  }
+
   // Only the compute submission containing the step must complete before its
   // host-visible results are consumed. Shutdown/host resource edits still use
   // synchronize(); this is not a replacement for those lifetime boundaries.
