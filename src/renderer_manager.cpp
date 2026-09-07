@@ -491,14 +491,18 @@ int RendererManager::render()
     auto const sim_phase_start = std::chrono::steady_clock::now();
     daxa_u32 sim_steps_this_frame = 0u;
     bool completed_simulation_snapshot = false;
+    auto completed_main_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN);
+    auto completed_compute_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0);
     double sim_order_ms=0, sim_submit_ms=0, sim_wait_ms=0;
     auto run_sim_step = [&]() {
       auto const t0=std::chrono::steady_clock::now();
+      completed_main_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN);
       gpu->order_simulation_after_rendering();
       auto const t1=std::chrono::steady_clock::now();
       rigid_body_manager->simulate();
       auto const t2=std::chrono::steady_clock::now();
       gpu->wait_for_simulation();
+      completed_compute_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0);
       auto const t3=std::chrono::steady_clock::now();
       auto ms=[](auto a,auto b) { return std::chrono::duration<double,std::milli>(b-a).count(); };
       sim_order_ms+=ms(t0,t1); sim_submit_ms+=ms(t1,t2); sim_wait_ms+=ms(t2,t3);
@@ -812,9 +816,15 @@ int RendererManager::render()
                     << " frame=" << _ms << " ms (" << (1000.0 / _ms) << " fps)"
                     << "  sim=" << _sim_ms << " ms" << std::endl; } }
       timing_edits_end = std::chrono::steady_clock::now();
-      // Complete deferred scene publications before host TLAS bookkeeping and
-      // tracing. Collect every publication's timestamps without another wait.
-      gpu->synchronize();
+      // The completed step also waited for preceding MAIN work. If neither
+      // queue received new work during scene edits, both required completion
+      // boundaries already hold. Avoid a device-wide idle (including present)
+      // on this ordinary path; retain it for deferred publications and updates.
+      bool const publication_pending = !completed_simulation_snapshot ||
+          status_manager->is_updating() ||
+          gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN) != completed_main_submit ||
+          gpu->device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0) != completed_compute_submit;
+      if (publication_pending) gpu->synchronize();
       timing_sync_end = std::chrono::steady_clock::now();
       accel_struct_mngr->collect_publication_timings();
       rigid_body_manager->release_completed_scene_uploads();
