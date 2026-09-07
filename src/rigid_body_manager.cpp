@@ -22,7 +22,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
   }
   if (device.is_valid())
   {
-    narrow_phase_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr;
+    narrow_phase_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr || std::getenv("BB_FRAME_TIMING") != nullptr;
     if (narrow_phase_timing)
     {
       narrow_phase_queries = device.create_timeline_query_pool({.query_count = 2, .name = "fracture_narrow_phase"});
@@ -2226,13 +2226,14 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
   else { idx.resize(shapes.size()); for (daxa_u32 i = 0u; i < (daxa_u32)shapes.size(); ++i) { idx[i] = i; } }
   if (idx.empty()) { return; }
 
+  bool const profile_build = std::getenv("BB_RESPAWN_TIMING") != nullptr;
   daxa::TimelineQueryPool build_queries = {};
-  if (narrow_phase_timing)
+  if (profile_build)
     build_queries = device.create_timeline_query_pool({.query_count = 2, .name = "voxel_pool_build"});
   auto rec = device.create_command_recorder({});
   rec.pipeline_barrier({.src_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE,
                        .dst_access = daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
-  if (narrow_phase_timing)
+  if (profile_build)
   {
     rec.reset_timestamps({.query_pool = build_queries, .start_index = 0, .count = 2});
     rec.write_timestamp({.query_pool = build_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 0});
@@ -2300,13 +2301,13 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
                         .dst_access = daxa::AccessConsts::READ});
   rec.pipeline_barrier({.src_access = daxa::AccessConsts::WRITE,
                         .dst_access = daxa::AccessConsts::HOST_READ});
-  if (narrow_phase_timing)
+  if (profile_build)
     rec.write_timestamp({.query_pool = build_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = 1});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
   // The following publication/build submissions use MAIN too. Only a host
   // timestamp read needs completion here; data dependencies stay on the GPU.
-  if (narrow_phase_timing)
+  if (profile_build)
   {
     device.wait_on_submit({.queue = daxa::QUEUE_MAIN,
         .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_MAIN)});

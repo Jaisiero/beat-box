@@ -353,6 +353,7 @@ int RendererManager::render()
                                     // frames, or full-sleep stasis inflates frame=/deflates
                                     // the printed fps (user-reported "ya no topa 60fps"
                                     // that the present rate disproved)
+  bool const frame_timing = std::getenv("BB_FRAME_TIMING") != nullptr;
   bool const fracture_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr;
   daxa_u32 timed_fracture_serial = 0u;
   unsigned fracture_frame_tail = 0u;
@@ -381,6 +382,7 @@ int RendererManager::render()
       std::cout << "[PERF] BB_RUN_SECONDS=" << run_limit_s << " elapsed -> exiting." << std::endl;
       break;
     }
+    auto const timing_start = std::chrono::steady_clock::now();
     // Update the GUI
     gui_manager->update();
 
@@ -626,6 +628,9 @@ int RendererManager::render()
         sim_accum_s = 0.0; // don't burst-step on resume
       }
     }
+    auto const timing_sim_end = std::chrono::steady_clock::now();
+    auto timing_edits_end = timing_sim_end;
+    auto timing_sync_end = timing_sim_end;
     previous_frame_steps = sim_steps_this_frame;
     previous_sim_phase_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sim_phase_start).count();
     bool const sim_stepped = sim_steps_this_frame > 0u;
@@ -774,9 +779,11 @@ int RendererManager::render()
                     << " | pace=[rf" << _rf << " st" << _steps_n << " acc" << (daxa_u64)(sim_accum_s * 1000.0) << "ms]"
                     << " frame=" << _ms << " ms (" << (1000.0 / _ms) << " fps)"
                     << "  sim=" << _sim_ms << " ms" << std::endl; } }
+      timing_edits_end = std::chrono::steady_clock::now();
       // Complete deferred scene publications before host TLAS bookkeeping and
       // tracing. Collect every publication's timestamps without another wait.
       gpu->synchronize();
+      timing_sync_end = std::chrono::steady_clock::now();
       accel_struct_mngr->collect_publication_timings();
       rigid_body_manager->release_completed_scene_uploads();
       if(status_manager->is_updating()) {
@@ -792,7 +799,21 @@ int RendererManager::render()
     camera_manager->update(gpu->swapchain_get_extent());
     update_resources(swapchain_image, *camera_manager);
     execute();
+    auto const timing_render_end = std::chrono::steady_clock::now();
     gpu->garbage_collector();
+    if (frame_timing && sim_stepped) {
+      auto const end = std::chrono::steady_clock::now();
+      auto ms = [](auto a,auto b) { return std::chrono::duration<double,std::milli>(b-a).count(); };
+      std::cout << "[FRAME-PHASES] frame=" << render_frames_total
+                << " steps=" << sim_steps_this_frame
+                << " front_ms=" << ms(timing_start,sim_phase_start)
+                << " sim_ms=" << ms(sim_phase_start,timing_sim_end)
+                << " edits_ms=" << ms(timing_sim_end,timing_edits_end)
+                << " sync_ms=" << ms(timing_edits_end,timing_sync_end)
+                << " render_ms=" << ms(timing_sync_end,timing_render_end)
+                << " gc_ms=" << ms(timing_render_end,end)
+                << " total_ms=" << ms(timing_start,end) << std::endl;
+    }
     status_manager->next_frame();
   }
   gpu->synchronize();
