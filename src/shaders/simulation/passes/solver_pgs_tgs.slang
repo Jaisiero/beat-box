@@ -1,6 +1,7 @@
 #include "body_activity.slang"
 #include "rigid_body_math.slang"
 #include "solvers.slang"
+#include "color_solve_dispatch.slang"
 
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
@@ -260,7 +261,7 @@ bool gc_overflowed(daxa_u32 c)
 }
 
 [shader("compute")]
-[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_pre_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+[numthreads(COLOR_SOLVE_COMPUTE_X, 1, 1)] void entry_collision_pre_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
   daxa_u32 m = compute_i.x;
@@ -311,7 +312,7 @@ bool gc_overflowed(daxa_u32 c)
 }
 
 [shader("compute")]
-[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+[numthreads(COLOR_SOLVE_COMPUTE_X, 1, 1)] void entry_collision_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
   daxa_u32 m = compute_i.x;
@@ -341,7 +342,7 @@ bool gc_overflowed(daxa_u32 c)
 }
 
 [shader("compute")]
-[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_relax_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+[numthreads(COLOR_SOLVE_COMPUTE_X, 1, 1)] void entry_collision_solver_relax_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
   daxa_u32 m = compute_i.x;

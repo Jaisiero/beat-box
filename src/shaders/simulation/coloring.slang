@@ -14,6 +14,7 @@
 // and guard each buffer access by its own bound.
 
 #include "shared.inl"
+#include "color_solve_dispatch.slang"
 
 [[vk::push_constant]] GraphColorPushConstants GC;
 [[vk::push_constant]] RigidBodyDispatcherPushConstants GCD; // coloring dispatcher reuses the dispatcher head (writes dispatch_buffer)
@@ -49,7 +50,7 @@ static const daxa_u32 GC_PROPOSED_BASE = 0x80000000u;
   SimConfig* sim_config = (SimConfig*)(GCD.task_head.sim_config);
   DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCD.task_head.dispatch_buffer);
   let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
-  let cnt = (coll + RIGID_BODY_SIM_COMPUTE_X - 1u) / RIGID_BODY_SIM_COMPUTE_X;
+  let cnt = (coll + COLOR_SOLVE_COMPUTE_X - 1u) / COLOR_SOLVE_COMPUTE_X;
   let used = min(sim_config->graph_color_count, BB_MAX_COLORS);
   dispatch_buffer->graph_color_solve_dispatch[c] = (c < used) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
 }
@@ -67,7 +68,7 @@ static const daxa_u32 GC_PROPOSED_BASE = 0x80000000u;
   SimConfig* sim_config = (SimConfig*)(GCD.task_head.sim_config);
   DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCD.task_head.dispatch_buffer);
   let bodies = min(sim_config->rigid_body_count, BB_MAX_RIGID_BODY_COUNT);
-  let cnt = (bodies + RIGID_BODY_SIM_COMPUTE_X - 1u) / RIGID_BODY_SIM_COMPUTE_X;
+  let cnt = (bodies + COLOR_SOLVE_COMPUTE_X - 1u) / COLOR_SOLVE_COMPUTE_X;
   let used = min(sim_config->avbd_color_count, BB_MAX_COLORS);
   dispatch_buffer->avbd_color_dispatch[c] = (c < used) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
 }
@@ -84,7 +85,7 @@ static const daxa_u32 GC_PROPOSED_BASE = 0x80000000u;
   SimConfig* sim_config = (SimConfig*)(GCD.task_head.sim_config);
   DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCD.task_head.dispatch_buffer);
   let bodies = min(sim_config->rigid_body_count, BB_MAX_RIGID_BODY_COUNT);
-  let cnt = (bodies + RIGID_BODY_SIM_COMPUTE_X - 1u) / RIGID_BODY_SIM_COMPUTE_X;
+  let cnt = (bodies + COLOR_SOLVE_COMPUTE_X - 1u) / COLOR_SOLVE_COMPUTE_X;
   let used_colors = min(sim_config->avbd_color_count, BB_MAX_COLORS);
   let max_layer = min(sim_config->avbd_max_support_depth, BB_AVBD_SHOCK_LAYERS - 1u);
   let active = (c < used_colors) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
