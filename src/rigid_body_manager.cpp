@@ -42,6 +42,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
     pipeline_fragment_finalize = task_manager->create_compute(FragmentFinalizeInfo{}.info);
     pipeline_body_list = task_manager->create_compute(BodyListInfo{}.info);
     pipeline_fracture_scene_edit = task_manager->create_compute(FractureSceneEditInfo{}.info);
+    pipeline_voxel_primitive_batch = task_manager->create_compute(VoxelPrimitiveBatchInfo{}.info);
     pipeline_fracture_layout = task_manager->create_compute(FractureLayoutInfo{}.info);
     pipeline_fracture_setup = task_manager->create_compute(FractureSetupInfo{}.info);
     pipeline_fracture_gather = task_manager->create_compute(FractureGatherInfo{}.info);
@@ -2024,25 +2025,24 @@ void RigidBodyManager::record_read_back_sim_config_tasks(TaskGraph &out_readback
 
 void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &out_update_SC_TG)
 {
+  task_sim_config_upload.set_buffer(sim_config_host_buffer[0]); // compile-time placeholder
   daxa::InlineTaskInfo task_update_SC({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_sim_config_host),
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_sim_config_upload),
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_sim_config),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
         ti.recorder.copy_buffer_to_buffer({
-            .src_buffer = ti.get(task_sim_config_host).id,
-            .dst_buffer = ti.get(task_sim_config).id,
-            .size = sizeof(SimConfig),
-        });
+            .src_buffer=ti.get(task_sim_config_upload).id,
+            .dst_buffer=ti.get(task_sim_config).id,.size=sizeof(SimConfig)});
       },
       .name = "update sim config",
   });
 
   std::array<daxa::TaskBuffer, 2> buffers = {
       task_sim_config,
-      task_sim_config_host,
+      task_sim_config_upload,
   };
 
   std::array<daxa::InlineTaskInfo, 1> tasks = {
@@ -2088,6 +2088,8 @@ void RigidBodyManager::destroy()
   if (!fracture_census_scratch.is_empty()) { device.destroy_buffer(fracture_census_scratch); fracture_census_scratch = {}; }
   if (!fracture_census_output.is_empty()) { device.destroy_buffer(fracture_census_output); fracture_census_output = {}; }
 
+  sim_config_uploads.clear();
+  sim_config_upload_cursor = 0;
   initialized = false;
 }
 
@@ -2183,6 +2185,15 @@ bool RigidBodyManager::update_sim()
         .fracture_events_addr = device.device_address(fracture_events_buffer).value(),
     };
 
+    // Never overwrite staging consumed by an earlier publication. Slots are
+    // reused only after the renderer's existing device completion boundary.
+    if (sim_config_upload_cursor == sim_config_uploads.size())
+      sim_config_uploads.push_back(create_owned({.size=sizeof(SimConfig),
+          .memory_flags=daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,.name="Immutable simulation upload"}));
+    auto const upload = sim_config_uploads[sim_config_upload_cursor++];
+    *device.buffer_host_address_as<SimConfig>(upload).value() =
+        *device.buffer_host_address_as<SimConfig>(sim_config_host_buffer[f]).value();
+    task_sim_config_upload.set_buffer(upload);
     update_buffers(f);
     update_SC_TG.execute();
   }
@@ -2471,32 +2482,45 @@ void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shap
     rec.set_pipeline(*pipeline_fracture_layout);rec.push_constant(publication);rec.dispatch({.x=1u});
     rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,.dst_access=daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
   }
-  for (auto const &[shape_index, prim_offset] : bodies)
+  // Retain the per-body implementation for initial loading and the GPU oracle.
+  auto record_reference = [&](auto &commands, daxa::BufferId target) {
+    for (auto const &[shape_index, prim_offset] : bodies)
+    {
+      auto const &shape = shapes[shape_index];
+      daxa_u32 const cells = shape.dims.x * shape.dims.y * shape.dims.z;
+      VoxelSdfBuildPushConstants pc = {
+          .occupancy_addr = occ_addr,
+          .sdf_addr = 0u,
+          .scratch_solid_addr = 0u,
+          .scratch_empty_addr = 0u,
+          .shapes_addr = shapes_addr,
+          .surface_addr = 0u,
+          .derived_addr = 0u,
+          .prims_addr = device.device_address(target).value(),
+          .cell_dims = shape.dims,
+          .occ_offset = shape.occ_offset,
+          .sdf_offset = 0u,
+          .surf_offset = 0u,
+          .shape_index = shape_index,
+          .prims_offset = prim_offset,
+          .axis = 0u,
+          .voxel_size = shape.voxel_size,
+      };
+      commands.set_pipeline(*pipeline_VSB_PRIMS);
+      commands.push_constant(pc);
+      commands.dispatch({.x = (cells + 63u) / 64u, .y = 1, .z = 1});
+    }
+  };
+  if (!publication_bodies.is_empty())
   {
-    auto const &s = shapes[shape_index];
-    daxa_u32 const cells = s.dims.x * s.dims.y * s.dims.z;
-    VoxelSdfBuildPushConstants pc = {
-        .occupancy_addr = occ_addr,
-        .sdf_addr = 0u,
-        .scratch_solid_addr = 0u,
-        .scratch_empty_addr = 0u,
-        .shapes_addr = shapes_addr,
-        .surface_addr = 0u,
-        .derived_addr = 0u,
-        .prims_addr = prims_addr,
-        .cell_dims = s.dims,
-        .occ_offset = s.occ_offset,
-        .sdf_offset = 0u,
-        .surf_offset = 0u,
-        .shape_index = shape_index,
-        .prims_offset = prim_offset,
-        .axis = 0u,
-        .voxel_size = s.voxel_size,
-    };
-    rec.set_pipeline(*pipeline_VSB_PRIMS);
-    rec.push_constant(pc);
-    rec.dispatch({.x = (cells + 63u) / 64u, .y = 1, .z = 1});
+    rec.set_pipeline(*pipeline_voxel_primitive_batch);
+    rec.push_constant(VoxelPrimitiveBatchPushConstants{
+        .bodies_addr=device.device_address(publication_bodies).value(),
+        .shapes_addr=shapes_addr,.occupancy_addr=occ_addr,.primitives_addr=prims_addr,
+        .body_count=renderer_manager->get_rigid_body_count()});
+    rec.dispatch({.x=renderer_manager->get_rigid_body_count()});
   }
+  else { record_reference(rec,prims_buffer); }
   // make the writes visible to the AS build that follows this call
   rec.pipeline_barrier({
       .src_access = daxa::AccessConsts::COMPUTE_SHADER_WRITE,
@@ -2508,6 +2532,33 @@ void RigidBodyManager::build_voxel_prims_gpu(std::vector<VoxelShape> const &shap
                         .dst_access = daxa::AccessConsts::HOST_READ});
   auto cmds = rec.complete_current_commands();
   device.submit_commands({.command_lists = std::array{cmds}});
+  if (!publication_bodies.is_empty() && std::getenv("BB_FRAGMENT_VERIFY"))
+  {
+    device.wait_on_submit({.queue=daxa::QUEUE_MAIN,.queue_submit_index=device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
+    auto const *published=device.buffer_host_address_as<RigidBody>(publication_bodies).value();
+    daxa_u32 count=0u;
+    for (daxa_u32 id=0u;id<renderer_manager->get_rigid_body_count();++id)
+      count=std::max(count,published[id].primitive_offset+published[id].primitive_count);
+    if (count>0u)
+    {
+      auto const bytes=static_cast<daxa::usize>(count)*sizeof(Aabb);
+      auto expected=device.create_buffer({.size=bytes,.memory_flags=daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,.name="primitive batch reference"});
+      auto actual=device.create_buffer({.size=bytes,.memory_flags=daxa::MemoryFlagBits::HOST_ACCESS_RANDOM,.name="primitive batch actual"});
+      auto check=device.create_command_recorder({});
+      check.pipeline_barrier({.src_access=daxa::AccessConsts::WRITE,.dst_access=daxa::AccessConsts::TRANSFER_READ});
+      check.copy_buffer_to_buffer({.src_buffer=prims_buffer,.dst_buffer=expected,.size=bytes});
+      check.copy_buffer_to_buffer({.src_buffer=prims_buffer,.dst_buffer=actual,.size=bytes});
+      check.pipeline_barrier({.src_access=daxa::AccessConsts::TRANSFER_WRITE,.dst_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE});
+      record_reference(check,expected);
+      check.pipeline_barrier({.src_access=daxa::AccessConsts::WRITE,.dst_access=daxa::AccessConsts::HOST_READ});
+      auto commands=check.complete_current_commands();device.submit_commands({.command_lists=std::array{commands}});
+      device.wait_on_submit({.queue=daxa::QUEUE_MAIN,.queue_submit_index=device.latest_queue_submit_index(daxa::QUEUE_MAIN)});
+      bool same=std::memcmp(device.buffer_host_address(expected).value(),device.buffer_host_address(actual).value(),bytes)==0;
+      device.destroy_buffer(expected);device.destroy_buffer(actual);
+      if (!same) { std::cerr << "[PRIMITIVE-BATCH-VERIFY] FAILED" << std::endl;std::abort(); }
+      std::cout << "[PRIMITIVE-BATCH-VERIFY] count=" << count << " exact MATCH" << std::endl;
+    }
+  }
   // AS_build_TG follows on MAIN. Host inspection is an opt-in oracle only.
   if (std::getenv("BB_FRAGMENT_VERIFY") || std::getenv("BB_CENSUS_VERIFY"))
     device.wait_on_submit({.queue=daxa::QUEUE_MAIN,

@@ -774,8 +774,11 @@ int RendererManager::render()
                     << " | pace=[rf" << _rf << " st" << _steps_n << " acc" << (daxa_u64)(sim_accum_s * 1000.0) << "ms]"
                     << " frame=" << _ms << " ms (" << (1000.0 / _ms) << " fps)"
                     << "  sim=" << _sim_ms << " ms" << std::endl; } }
-      // TODO: change for wait compute queue
+      // Complete deferred scene publications before host TLAS bookkeeping and
+      // tracing. Collect every publication's timestamps without another wait.
       gpu->synchronize();
+      accel_struct_mngr->collect_publication_timings();
+      rigid_body_manager->release_completed_scene_uploads();
       if(status_manager->is_updating()) {
         if(!status_manager->reset_update_sim_buffer()) {
           accel_struct_mngr->update_AS_buffers();

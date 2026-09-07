@@ -10,9 +10,11 @@ The fixed-capacity per-parity TLAS objects allocated in `create()` are rebuilt i
 
 ## Synchronization and ownership
 
-The publication `device.wait_idle()` is intentionally retained. Later CPU scene edits can overwrite host staging memory and retire/reuse BLAS regions; safely removing that boundary requires a separate lifetime change. The renderer's pre-TLAS completion boundary and the initial scene build's completion boundary also remain, protecting in-place TLAS rebuilding from earlier consumers.
+Runtime publication now defers its host completion wait to the renderer's existing final scene-edit boundary. Initial loading keeps synchronous completion before its immediate TLAS update. Both body parities are still written by the AS graph, so subsequent COMPUTE_0 body-list tasks inherit the MAIN dependency. The final instance/TLAS graphs and all GPU barriers remain.
 
-Both body parities remain populated by the original graph. Its buffer attachments order current-body upload before the next-body copy and changed BLAS construction. No new raw buffer copy bypasses task-graph tracking. Both callers still update the final TLAS before tracing, including paused scene loading and the full-AS diagnostic fallback.
+Each SimConfig upload uses a separate immutable staging slot. Slots are recycled only after the renderer's device completion boundary; they are owned by the rigid-body manager and released at teardown. A second publication cannot overwrite an earlier upload still being read by COMPUTE_0. Later cull/spawn manifest waits complete preceding MAIN AS work before CPU handle retirement or staging reuse. See `FRACTURE_PUBLICATION_STALLS.md` for the follow-up and timing methodology.
+
+Both callers still update the final TLAS before tracing, including paused scene loading and the full-AS diagnostic fallback.
 
 ## Instrumentation
 
@@ -25,9 +27,9 @@ Both body parities remain populated by the original graph. Its buffer attachment
 - `blas_count`: number of build records in that publication.
 - `[AS-TLAS] gpu_ms`: GPU time around the final TLAS build, read on the next update when available. The last sample at shutdown may not be emitted.
 
-Publication timestamps are read after the existing wait. Final TLAS queries are read without adding a completion wait. Timing is opt-in and does not change solver dispatches. The legacy `[RESPAWN-MS] blas_gpu` field still describes the host-observed `build_AS()` span; use the new field for actual BLAS GPU time.
+Publication timestamp slots are retained until the existing completion boundary, allowing multiple publications in one frame without overwriting pending queries. `deferred=1` identifies an asynchronous runtime publication; its `host_wait_ms=0` does not mean the later frame has no wait. Final TLAS queries are read without adding a completion wait. Timing is opt-in and does not change solver dispatches. The legacy `[RESPAWN-MS] blas_gpu` field still describes the host-observed `build_AS()` span; use the new field for actual BLAS GPU time.
 
-## Paired benchmark
+## Historical PR #35 paired benchmark
 
 RTX 4090, Release build, F10, 480 steps, 860x640. Three alternating baseline/candidate pairs per solver. Baseline is merged PR #34 (`f76cc4a`, same source as `b8476a7`) with equivalent timing instrumentation. The first standalone instrumentation run overlapped a later CPU build and is not used in the accepted comparison. Accepted paired runs had no concurrent build or simulation. Both variants enabled `BB_AS_TIMING` and `BB_RESPAWN_TIMING`; the latter includes its existing SDF timing wait.
 
@@ -55,7 +57,7 @@ DISPLAY=:0 python3 tools/benchmark_as_publication.py \
 
 The runner writes raw logs and summary JSON, checks complete replays and exact baseline equality, and excludes initial loading from AS publication statistics. Process wall time includes initialization and must not be interpreted as frame time.
 
-## Validation evidence
+## Historical PR #35 validation evidence
 
 Evidence is retained at `/root/beat-box/work/as-publication/` on LXC 110. The production synchronization-validation replays cover F10 (480), F11 recycling (1500), and the F3 fractured frame (900), for both solvers, matching their existing baselines. All eight CTest tests pass. GPU oracles for F10/F11 match production (3,960 more steps). Both solvers also match the F10 reference through an in-process reset (1,920 steps) and the full-AS rebuild fallback (960 steps). Including the 5,760 paired benchmark steps, this is 18,360 checked replay steps.
 
