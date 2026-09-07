@@ -127,43 +127,62 @@ static const daxa_f32 VSB_INF = 1.0e30f;
   }
 }
 
-// SURFACE-VOXEL LIST on the GPU (the other fracture-path pool): solid cells with at least
-// one empty 6-neighbor, packed x | y<<8 | z<<16 | first_empty_dir<<24. SINGLE THREAD per
-// shape, scanning cells in canonical bit order (x-fastest) - BYTE-IDENTICAL to the CPU
-// oracle's list, so the narrow phase's iteration order (and thus every order-sensitive
-// FP accumulation) is unchanged. Serial is deliberate: determinism first; cells <= 32k
-// scan in microseconds at load, optimize with a scan-compaction only if fracture-scale
-// grids ever make this hot. Also patches shapes[shape_index].surf_count.
+// Stable surface compaction in 64-cell tiles. The two bitmasks give each
+// occupied surface cell its canonical rank without a serial whole-grid scan.
+// All lanes reach every group barrier, including the last partial tile.
+groupshared daxa_u32 vsb_surface_masks[2];
+groupshared daxa_u32 vsb_surface_count;
 [shader("compute")]
 [numthreads(64, 1, 1)] void entry_voxel_surface_build(daxa_u32vec3 tid : SV_DispatchThreadID)
 {
-  if (tid.x != 0u) { return; }
+  daxa_u32 lane = tid.x;
   daxa_u32* occ = (daxa_u32*)(VSB.occupancy_addr);
   daxa_u32* surf = (daxa_u32*)(VSB.surface_addr);
-  VoxelShape* shapes = (VoxelShape*)(VSB.shapes_addr);
-  daxa_u32 n = 0u;
-  for (daxa_u32 z = 0u; z < VSB.cell_dims.z; ++z)
+  daxa_u32 cells = VSB.cell_dims.x * VSB.cell_dims.y * VSB.cell_dims.z;
+  if (lane == 0u) vsb_surface_count = 0u;
+  for (daxa_u32 tile = 0u; tile < cells; tile += 64u)
   {
-    for (daxa_u32 y = 0u; y < VSB.cell_dims.y; ++y)
+    if (lane < 2u) vsb_surface_masks[lane] = 0u;
+    GroupMemoryBarrierWithGroupSync();
+    daxa_u32 bit = tile + lane;
+    daxa_u32 packed = 0u;
+    bool surface = false;
+    if (bit < cells)
     {
-      for (daxa_u32 x = 0u; x < VSB.cell_dims.x; ++x)
+      daxa_u32 x = bit % VSB.cell_dims.x;
+      daxa_u32 y = (bit / VSB.cell_dims.x) % VSB.cell_dims.y;
+      daxa_u32 z = bit / (VSB.cell_dims.x * VSB.cell_dims.y);
+      if (vsb_cell_solid(occ, daxa_i32(x), daxa_i32(y), daxa_i32(z)))
       {
-        if (!vsb_cell_solid(occ, daxa_i32(x), daxa_i32(y), daxa_i32(z))) { continue; }
-        // first empty 6-neighbor, same probe order as the CPU oracle (-x,+x,-y,+y,-z,+z)
         daxa_i32 nb[6][3] = {{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
         for (daxa_u32 d = 0u; d < 6u; ++d)
-        {
-          if (!vsb_cell_solid(occ, daxa_i32(x) + nb[d][0], daxa_i32(y) + nb[d][1], daxa_i32(z) + nb[d][2]))
+          if (!vsb_cell_solid(occ, daxa_i32(x)+nb[d][0], daxa_i32(y)+nb[d][1], daxa_i32(z)+nb[d][2]))
           {
-            surf[VSB.surf_offset + n] = x | (y << 8u) | (z << 16u) | (d << 24u);
-            ++n;
+            packed = x | (y << 8u) | (z << 16u) | (d << 24u);
+            surface = true;
             break;
           }
-        }
       }
     }
+    if (surface)
+    {
+      daxa_u32 unused;
+      InterlockedOr(vsb_surface_masks[lane / 32u], 1u << (lane % 32u), unused);
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (surface)
+    {
+      daxa_u32 rank = countbits(vsb_surface_masks[lane / 32u] & ((1u << (lane % 32u))-1u));
+      if (lane >= 32u) rank += countbits(vsb_surface_masks[0]);
+      surf[VSB.surf_offset + vsb_surface_count + rank] = packed;
+    }
+    // Readers must consume the old count before lane zero advances it. The
+    // next tile's first barrier publishes the new count and cleared masks.
+    daxa_u32 tile_count = countbits(vsb_surface_masks[0]) + countbits(vsb_surface_masks[1]);
+    GroupMemoryBarrierWithGroupSync();
+    if (lane == 0u) vsb_surface_count += tile_count;
   }
-  shapes[VSB.shape_index].surf_count = n;
+  if (lane == 0u) ((VoxelShape*)(VSB.shapes_addr))[VSB.shape_index].surf_count = vsb_surface_count;
 }
 
 // MASS-PROPERTY REDUCTION on the GPU (fracture primitive): count, CoM and unit inertia
@@ -178,32 +197,47 @@ static const daxa_f32 VSB_INF = 1.0e30f;
   VoxelShapeDerived* derived = (VoxelShapeDerived*)(VSB.derived_addr);
   daxa_f32 vs = VSB.voxel_size;
 
+  daxa_u32 cells = VSB.cell_dims.x*VSB.cell_dims.y*VSB.cell_dims.z;
   daxa_u32 cnt = 0u;
   daxa_f32vec3 csum = daxa_f32vec3(0.0f);
-  for (daxa_u32 z = 0u; z < VSB.cell_dims.z; ++z)
-    for (daxa_u32 y = 0u; y < VSB.cell_dims.y; ++y)
-      for (daxa_u32 x = 0u; x < VSB.cell_dims.x; ++x)
-        if (vsb_cell_solid(occ, daxa_i32(x), daxa_i32(y), daxa_i32(z)))
-        {
-          csum += daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f);
-          ++cnt;
-        }
+  for (daxa_u32 word = 0u; word < (cells+31u)/32u; ++word)
+  {
+    daxa_u32 bits = occ[VSB.occ_offset+word];
+    if (word == cells/32u && (cells%32u)!=0u) bits &= (1u << (cells%32u))-1u;
+    while (bits != 0u)
+    {
+      daxa_u32 bit = word*32u + firstbitlow(bits);
+      bits &= bits-1u;
+      daxa_u32 x = bit % VSB.cell_dims.x;
+      daxa_u32 y = (bit / VSB.cell_dims.x) % VSB.cell_dims.y;
+      daxa_u32 z = bit / (VSB.cell_dims.x*VSB.cell_dims.y);
+      csum += daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f);
+      ++cnt;
+    }
+  }
   daxa_f32vec3 com = csum / daxa_f32(max(cnt, 1u)) * vs;
 
   // parallel-axis voxel inertia per unit voxel mass: point term + own-cube term vs^2/6
   daxa_f32mat3x3 I = daxa_f32mat3x3(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-  for (daxa_u32 z = 0u; z < VSB.cell_dims.z; ++z)
-    for (daxa_u32 y = 0u; y < VSB.cell_dims.y; ++y)
-      for (daxa_u32 x = 0u; x < VSB.cell_dims.x; ++x)
-        if (vsb_cell_solid(occ, daxa_i32(x), daxa_i32(y), daxa_i32(z)))
-        {
-          daxa_f32vec3 c = daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f) * vs - com;
-          daxa_f32 r2 = dot(c, c);
-          daxa_f32 own = vs * vs / 6.0f;
-          I[0][0] += r2 - c.x * c.x + own; I[0][1] += -c.x * c.y;       I[0][2] += -c.x * c.z;
-          I[1][0] += -c.y * c.x;           I[1][1] += r2 - c.y * c.y + own; I[1][2] += -c.y * c.z;
-          I[2][0] += -c.z * c.x;           I[2][1] += -c.z * c.y;       I[2][2] += r2 - c.z * c.z + own;
-        }
+  for (daxa_u32 word = 0u; word < (cells+31u)/32u; ++word)
+  {
+    daxa_u32 bits = occ[VSB.occ_offset+word];
+    if (word == cells/32u && (cells%32u)!=0u) bits &= (1u << (cells%32u))-1u;
+    while (bits != 0u)
+    {
+      daxa_u32 bit = word*32u + firstbitlow(bits);
+      bits &= bits-1u;
+      daxa_u32 x = bit % VSB.cell_dims.x;
+      daxa_u32 y = (bit / VSB.cell_dims.x) % VSB.cell_dims.y;
+      daxa_u32 z = bit / (VSB.cell_dims.x*VSB.cell_dims.y);
+      daxa_f32vec3 c = daxa_f32vec3(daxa_f32(x) + 0.5f, daxa_f32(y) + 0.5f, daxa_f32(z) + 0.5f) * vs - com;
+      daxa_f32 r2 = dot(c, c);
+      daxa_f32 own = vs * vs / 6.0f;
+      I[0][0] += r2 - c.x * c.x + own; I[0][1] += -c.x * c.y;       I[0][2] += -c.x * c.z;
+      I[1][0] += -c.y * c.x;           I[1][1] += r2 - c.y * c.y + own; I[1][2] += -c.y * c.z;
+      I[2][0] += -c.z * c.x;           I[2][1] += -c.z * c.y;       I[2][2] += r2 - c.z * c.z + own;
+    }
+  }
   derived[VSB.shape_index].count = cnt;
   derived[VSB.shape_index].com = com;
   derived[VSB.shape_index].unit_inertia = I;

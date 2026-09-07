@@ -1549,6 +1549,55 @@ public:
     }
   }
 
+  // Debug-only independent reference for newly cropped shapes. Runtime packing
+  // reserves these slices but deliberately does not author their derived data.
+  void refresh_fracture_sdf_reference(daxa_u32 si)
+  {
+    auto const &sh=voxel_shape_cpu[si];
+    auto d=sh.dims;
+    auto solid=[&](int x,int y,int z) {
+      if (x<0 || y<0 || z<0 || x>=int(d.x) || y>=int(d.y) || z>=int(d.z)) return false;
+      u32 bit=u32(x)+u32(y)*d.x+u32(z)*d.x*d.y;
+      return (voxel_occ_cpu[sh.occ_offset+bit/32u] & (1u<<(bit%32u)))!=0u;
+    };
+    std::vector<glm::vec3> occupied,empty;
+    glm::dvec3 sum(0.0);
+    u32 surface_count=0u;
+    int const neighbors[6][3]={{-1,0,0},{1,0,0},{0,-1,0},{0,1,0},{0,0,-1},{0,0,1}};
+    for (u32 z=0;z<d.z;++z) for (u32 y=0;y<d.y;++y) for (u32 x=0;x<d.x;++x) {
+      glm::vec3 cell(x,y,z);
+      if (!solid(x,y,z)) { empty.push_back(cell);continue; }
+      occupied.push_back(cell);sum+=glm::dvec3(cell)+glm::dvec3(0.5);
+      for (u32 n=0;n<6u;++n)
+        if (!solid(int(x)+neighbors[n][0],int(y)+neighbors[n][1],int(z)+neighbors[n][2])) {
+          voxel_surf_cpu[sh.surf_offset+surface_count++]=x|(y<<8u)|(z<<16u)|(n<<24u);
+          break;
+        }
+    }
+    if (surface_count!=sh.surf_count || occupied.empty()) {
+      std::cerr << "[SDF-REFERENCE] invalid cropped occupancy" << std::endl;std::abort();
+    }
+    glm::vec3 com(sum/double(occupied.size())*double(sh.voxel_size));
+    glm::mat3 inertia(0.0f);
+    for (auto cell:occupied) {
+      auto c=(cell+glm::vec3(0.5f))*sh.voxel_size-com;
+      inertia+=glm::mat3(glm::dot(c,c))-glm::outerProduct(c,c);
+      inertia+=glm::mat3(sh.voxel_size*sh.voxel_size/6.0f);
+    }
+    voxel_derived_cpu[si]={.count=u32(occupied.size()),
+      .com=daxa_f32vec3(com.x,com.y,com.z),.unit_inertia=daxa_mat3_from_glm_mat3(inertia)};
+    auto distance=[](glm::vec3 p,glm::vec3 cell) {
+      return glm::length(glm::max(glm::max(cell-p,p-cell-glm::vec3(1.0f)),glm::vec3(0.0f)));
+    };
+    for (u32 z=0;z<=d.z;++z) for (u32 y=0;y<=d.y;++y) for (u32 x=0;x<=d.x;++x) {
+      glm::vec3 p(x,y,z);
+      float ds=1e30f,de=float(std::min({x,y,z,d.x-x,d.y-y,d.z-z}));
+      for (auto cell:occupied) ds=std::min(ds,distance(p,cell));
+      for (auto cell:empty) de=std::min(de,distance(p,cell));
+      voxel_sdf_cpu[sh.sdf_offset+x+y*(d.x+1u)+z*(d.x+1u)*(d.y+1u)]=(ds>0.0f ? ds : -de)*sh.voxel_size;
+    }
+  }
+
   // One event: read-only GPU partition + component labels, then private fragment grids.
   bool apply_fracture(FractureEventSummary const &ev, std::vector<FragFix> &fixes,
                       bool partitioned = false, std::span<FractureBatchChild const> batch = {})
@@ -1648,6 +1697,7 @@ public:
         shape_private.resize(nsi+1u);voxel_derived_cpu.resize(nsi+1u);
       }
       voxel_shape_cpu[nsi] = ns;
+      if (bb_getenv("BB_SDF_VERIFY")) refresh_fracture_sdf_reference(nsi);
       shape_private[nsi] = true;
       voxel_shape_prims[nsi].clear(); // Runtime primitives are generated exclusively on the GPU.
       crop_off = glm::vec3((f32)b[0] * vs, (f32)b[1] * vs, (f32)b[2] * vs);
