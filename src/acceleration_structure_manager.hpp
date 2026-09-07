@@ -46,8 +46,11 @@ struct AccelerationStructureManager
   daxa::BufferId get_next_rigid_body_buffer();
 
 
-  // NOTE: queue sync assures double buffering is filled
-  void build_AS();
+  // Runtime publication can defer completion to the renderer's final boundary.
+  // Initial loading keeps the synchronous default before its immediate TLAS update.
+  void build_AS(bool defer_completion = false);
+  // Call after a completion boundary; never waits to collect profiling results.
+  void collect_publication_timings();
   // Post-upload hook, after all host writes and before AS construction.
   // Arguments: primitive scratch, body scratch, and instance data. GPU fragment
   // publication may update these inputs. The hook submits on MAIN; the following
@@ -98,6 +101,14 @@ private:
   bool initialized = false;
   bool publication_timing = false;
   daxa::TimelineQueryPool publication_queries = {};
+  struct PublicationTiming
+  {
+    daxa::TimelineQueryPool queries;
+    bool pending = false, deferred = false;
+    double record_ms = 0.0, host_wait_ms = 0.0;
+    size_t blas_count = 0;
+  };
+  std::vector<PublicationTiming> publication_samples;
   daxa::TimelineQueryPool tlas_queries = {};
   bool tlas_query_pending = false;
   // Task manager reference

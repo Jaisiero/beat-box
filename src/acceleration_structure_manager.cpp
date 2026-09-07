@@ -20,7 +20,6 @@ AccelerationStructureManager::AccelerationStructureManager(daxa::Device &device,
     publication_timing = std::getenv("BB_AS_TIMING") != nullptr;
     if (publication_timing)
     {
-      publication_queries = device.create_timeline_query_pool({.query_count = 4, .name = "AS publication phases"});
       tlas_queries = device.create_timeline_query_pool({.query_count = 2, .name = "Final TLAS build"});
     }
     update_pipeline = task_manager->create_compute(UpdateAccelerationStructures{}.info);
@@ -221,34 +220,56 @@ daxa::BufferId AccelerationStructureManager::get_next_rigid_body_buffer()
   return rigid_body_buffer[renderer_manager->get_sim_next_frame_index()];
 }
 
-void AccelerationStructureManager::build_AS()
+void AccelerationStructureManager::build_AS(bool defer_completion)
 {
-  if(!initialized) {
-    return;
+  if (!initialized) return;
+  size_t sample_index = 0;
+  if (publication_timing)
+  {
+    while (sample_index < publication_samples.size() && publication_samples[sample_index].pending) ++sample_index;
+    if (sample_index == publication_samples.size())
+      publication_samples.push_back({.queries=device.create_timeline_query_pool({.query_count=4,.name="AS publication phases"})});
+    publication_queries = publication_samples[sample_index].queries;
   }
   auto const record_start = std::chrono::steady_clock::now();
   AS_build_TG.execute();
-
-  // The graph copies scratch -> current -> next, publishing both parities.
-  // Keep the host lifetime boundary: later scene edits may overwrite staging
-  // memory or retire AS handles. Removing it requires deferred host ownership.
   auto const wait_start = std::chrono::steady_clock::now();
-  device.wait_idle();
+  // All body copies now belong to the graph, including the next parity, so
+  // COMPUTE_0 consumers inherit MAIN's dependency. Runtime staging uploads own
+  // their snapshots, and later scene-edit manifest waits protect AS retirement.
+  // The renderer still completes all edits before rebuilding the final TLAS.
+  if (!defer_completion) device.wait_idle();
   auto const wait_end = std::chrono::steady_clock::now();
   if (publication_timing)
   {
-    auto const q = publication_queries.get_query_results(0, 4);
+    auto &sample = publication_samples[sample_index];
+    sample.pending = true;
+    sample.deferred = defer_completion;
+    sample.record_ms = std::chrono::duration<double,std::milli>(wait_start-record_start).count();
+    sample.host_wait_ms = defer_completion ? 0.0 : std::chrono::duration<double,std::milli>(wait_end-wait_start).count();
+    sample.blas_count = blas_build_infos.size();
+    if (!defer_completion) collect_publication_timings();
+  }
+}
+
+void AccelerationStructureManager::collect_publication_timings()
+{
+  if (!publication_timing) return;
+  for (auto &sample : publication_samples)
+  {
+    if (!sample.pending) continue;
+    auto const q = sample.queries.get_query_results(0, 4);
     bool ready = true;
     for (u32 i = 0; i < 4; ++i) ready &= q[2*i+1] != 0;
-    if (ready)
-    {
-      auto const scale = device.properties().limits.timestamp_period / 1.0e6;
-      std::cout << "[AS-PUBLISH] record_ms=" << std::chrono::duration<double,std::milli>(wait_start-record_start).count()
-                << " host_wait_ms=" << std::chrono::duration<double,std::milli>(wait_end-wait_start).count()
-                << " copy_gpu_ms=" << (q[2]-q[0])*scale
-                << " blas_gpu_ms=" << (q[6]-q[4])*scale
-                << " blas_count=" << blas_build_infos.size() << std::endl;
-    }
+    if (!ready) continue;
+    auto const scale = device.properties().limits.timestamp_period / 1.0e6;
+    std::cout << "[AS-PUBLISH] record_ms=" << sample.record_ms
+              << " host_wait_ms=" << sample.host_wait_ms
+              << " copy_gpu_ms=" << (q[2]-q[0])*scale
+              << " blas_gpu_ms=" << (q[6]-q[4])*scale
+              << " blas_count=" << sample.blas_count
+              << " deferred=" << sample.deferred << std::endl;
+    sample.pending = false;
   }
 }
 

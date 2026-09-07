@@ -1782,8 +1782,8 @@ public:
       return;
     }
     auto _t1b = _now(); // AS structs (CPU: dirty-diff + create/size-query for changed bodies) done
-    accel_struct_mngr->build_AS();
-    auto _t2 = _now(); // build_AS publication completed
+    accel_struct_mngr->build_AS(true);
+    auto _t2 = _now(); // publication enqueued; renderer completes before final TLAS
     rigid_body_manager->update_sim();
     rigid_body_manager->update_active_rigid_body_list();
     // Both update methods refresh both parities and restore current bindings.

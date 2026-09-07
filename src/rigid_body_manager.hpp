@@ -206,7 +206,13 @@ struct RigidBodyManager{
     events->scratch_addr = device.device_address(fracture_impact_scratch).value();
   }
 
+  // The renderer calls this only after all queues complete the frame's edits.
+  void release_completed_scene_uploads() { sim_config_upload_cursor = 0; }
+
 private:
+  daxa::TaskBuffer task_sim_config_upload{{.name="Immutable simulation upload"}};
+  std::vector<daxa::BufferId> sim_config_uploads;
+  size_t sim_config_upload_cursor = 0;
   daxa::InlineTaskInfo sim_config_readback_task();
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
   void record_update_sim_config_tasks(TaskGraph &out_update_SC_TG);
@@ -282,7 +288,7 @@ private:
       daxa_u32 body_id, daxa_u32 body_count, daxa_u64 batch_addr, daxa_u32 recorded_passes,
       bool compact, daxa::TimelineQueryPool *queries = nullptr);
   std::shared_ptr<daxa::ComputePipeline> pipeline_body_list;
-  std::shared_ptr<daxa::ComputePipeline> pipeline_fracture_setup, pipeline_fracture_gather, pipeline_fracture_scene_edit, pipeline_fracture_layout;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_fracture_setup, pipeline_fracture_gather, pipeline_fracture_scene_edit, pipeline_fracture_layout, pipeline_voxel_primitive_batch;
   daxa::BufferId fracture_plan_manifest{};
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_CARVE;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_VORONOI;

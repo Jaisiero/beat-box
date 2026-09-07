@@ -12,6 +12,7 @@
 #include "fragment_finalization.inl"
 #include "fracture_setup.inl"
 #include "body_list.inl"
+#include "voxel_primitive_batch.inl"
 #include "fracture_allocator.inl"
 #include "fragment_census.inl"
 #include "fragment_plan.inl"
@@ -1017,6 +1018,12 @@ struct FractureSceneEditInfo {
     .shader_info = {.source = daxa::ShaderFile{"fracture_scene_edits.slang"},
                     .compile_options = {.entry_point = "entry_fracture_scene_edit"}},
     .push_constant_size = sizeof(FractureSceneEditPushConstants), .name = "GPU scene retirement and spawning"};
+};
+struct VoxelPrimitiveBatchInfo {
+  daxa::ComputePipelineCompileInfo info = {
+    .shader_info = {.source = daxa::ShaderFile{"voxel_primitive_batch.slang"},
+                    .compile_options = {.entry_point = "entry_voxel_primitive_batch"}},
+    .push_constant_size = sizeof(VoxelPrimitiveBatchPushConstants), .name = "Batched voxel AS primitives"};
 };
 struct FractureLayoutInfo {
   daxa::ComputePipelineCompileInfo info = {
