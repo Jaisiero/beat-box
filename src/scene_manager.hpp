@@ -1148,7 +1148,7 @@ public:
     // Second line format (the thin-feature wedge investigation — voxel repros as text files):
     //   vox <l|cross|frame> px py pz [qx qy qz qw]   -> a concave voxel piece (scene_5 shape set)
     bool shapes_built = false;
-    VoxelShapeBuild vox_l{}, vox_cross{}, vox_frame{};
+    VoxelShapeBuild vox_l{}, vox_cross{}, vox_frame{}, vox_timber{};
     auto ensure_shapes = [&]() {
       if (shapes_built) { return; }
       f32 const vvs = 0.5f; f32 const vdensity = 2.0f;
@@ -1178,8 +1178,11 @@ public:
         if (ss >> qt) { strength = qt; }
         Quaternion q = Quaternion(qx, qy, qz, qw).normalize(); // hand-typed quats: keep |q|==1
         ensure_shapes();
+        if (shape == "timber" && vox_timber.shape_id == 0u)
+          vox_timber = build_voxel_shape(glm::uvec3(24,16,4), 0.25f, 12.0f,
+              [](u32 x,u32 y,u32) { return x<3u || x>=21u || y<2u || (y>=7u && y<9u) || y>=14u; });
         VoxelShapeBuild const *vsb = shape == "l" ? &vox_l : shape == "cross" ? &vox_cross
-                                   : shape == "frame" ? &vox_frame : nullptr;
+                                   : shape == "frame" ? &vox_frame : shape == "timber" ? &vox_timber : nullptr;
         if (vsb == nullptr) { std::cerr << "BB_SCENE_FILE: unknown vox shape '" << shape << "'" << std::endl; continue; }
         // palette above: 3=green (l), 5=yellow (cross), 7=magenta (frame) — the scene_5 look
         daxa_u32 const vmat = shape == "l" ? 3u : shape == "cross" ? 5u : 7u;
