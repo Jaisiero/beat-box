@@ -1,4 +1,4 @@
-#include "shared.inl"
+#include "as_instances.inl"
 
 [[vk::push_constant]] UpdateInstancesPushConstants UI;
 

@@ -31,8 +31,10 @@ struct AccelerationStructureManager
   // TaskGraph for updating acceleration structures
   TaskGraph AS_update_buffers_TG;
 
-  daxa::TaskBuffer task_dispatch_buffer{{.name = "dispatch_buffer"}};
   daxa::TaskBuffer task_blas_instance_data{{.name = "blas_instance_data"}};
+  daxa::TaskBuffer task_dispatch_buffer{{.name = "dispatch_buffer"}};
+  bool update_TLAS_resources(daxa::BufferId dispatch_buffer);
+  std::optional<daxa_BlasInstanceData> pending_debug_instance;
 
   explicit AccelerationStructureManager(daxa::Device &device, std::shared_ptr<TaskManager> task_manager);
   ~AccelerationStructureManager();
@@ -79,7 +81,6 @@ struct AccelerationStructureManager
     // state (a scene reset/switch invalidates every per-body BLAS + the region pool).
     incremental_ready_ = false;
   }
-  bool update_TLAS_resources(daxa::BufferId dispatch_buffer);
   void update_AS_buffers();
 
 private:

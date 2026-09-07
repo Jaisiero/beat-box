@@ -19,9 +19,12 @@ struct RigidBodyManager{
   void destroy();
 
   bool simulate();
-  // true requires wait_for_simulation() after the latest simulate(), with no subsequent reset or parity change.
+  // true requires observed completion of the latest simulate() (wait or timeline poll),
+  // with no subsequent reset or parity change.
   bool read_back_sim_config(bool completed_simulation_snapshot = false);
   SimConfig& get_sim_config_reference();
+  SimConfig completed_config = {};
+  SimConfig render_config = {}; // CPU copy associated with the published render snapshot
 
   bool update();
   bool update_resources();
@@ -113,34 +116,20 @@ struct RigidBodyManager{
   // mouse pick-and-drag bridge (host-visible; input half host-written, state half GPU-written)
   daxa::TaskBuffer task_pick_state{{.buffer = {}, .name = "RB_pick_state_task"}};
 
-  // Mouse pick input, called once per render frame from the render loop: the camera ray under the
-  // cursor + button edges. `request` grabs (ray-cast) on the left-press edge; `dragging` keeps
-  // the spring alive while held. The GPU consumes REQUEST; the existing post-simulation wait protects host access.
-  void set_pick_input(daxa_f32vec3 ray_origin, daxa_f32vec3 ray_dir, bool request, bool dragging)
+  // Input stays on the CPU until the next step; never overwrite the mapped pick
+  // bridge while an asynchronous step may still read/write it.
+  daxa_f32vec3 pending_pick_origin = {}, pending_pick_dir = {};
+  bool pending_pick_request = false, pending_pick_dragging = false;
+  daxa_u32 completed_picked_body = MAX_U32, completed_grab_count = 0;
+  void set_pick_input(daxa_f32vec3 origin, daxa_f32vec3 direction, bool request, bool dragging)
   {
-    if (!initialized) { return; }
-    auto *ps = device.buffer_host_address_as<PickState>(pick_state_buffer).value();
-    ps->ray_origin = ray_origin;
-    ps->ray_dir = ray_dir;
-    // Render frames can outnumber physics steps: retain an unconsumed edge while
-    // held. Release cancels it. The pick pass clears REQUEST after one raycast.
-    bool const pending = dragging && (request || (ps->flags & BB_PICK_REQUEST) != 0u);
-    ps->flags = (pending ? BB_PICK_REQUEST : 0u) | (dragging ? BB_PICK_DRAGGING : 0u);
+    pending_pick_origin = origin;
+    pending_pick_dir = direction;
+    pending_pick_request = dragging && (request || pending_pick_request);
+    pending_pick_dragging = dragging;
   }
-
-  // The currently grabbed body's persistent id (MAX_U32 = none) — a host read of the GPU-written
-  // half of the pick bridge (single u32: tear-free). Lets the render loop suppress camera rotation
-  // while the left button is dragging a body instead of orbiting.
-  daxa_u32 get_picked_body()
-  {
-    if (!initialized) { return MAX_U32; }
-    return device.buffer_host_address_as<PickState>(pick_state_buffer).value()->picked_id;
-  }
-  daxa_u32 get_grab_count() // diagnostic (BB_PICK_TRACE)
-  {
-    if (!initialized) { return 0u; }
-    return device.buffer_host_address_as<PickState>(pick_state_buffer).value()->grab_count;
-  }
+  daxa_u32 get_picked_body() const { return completed_picked_body; }
+  daxa_u32 get_grab_count() const { return completed_grab_count; }
   // voxel collision shape pools (static after scene load; host-writable, filled by the
   // SceneManager and addressed through SimConfig - no task-graph attachments needed)
   daxa::BufferId get_voxel_shapes_buffer() const { return voxel_shapes; }

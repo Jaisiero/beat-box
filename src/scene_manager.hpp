@@ -2103,12 +2103,8 @@ public:
     rigid_body_manager->update_active_rigid_body_list(); // GPU body inputs now exist in both parities
 
 
-    // Rebuild the TLAS instances via the GPU update shader so the INITIAL (pre-simulation)
-    // render uses the same instance-transform convention as the runtime path. The CPU-side
-    // get_instance_transform() produces a transposed rotation relative to the intersection
-    // shader's world_to_object(), which makes rotated cubes render with clipped/beveled
-    // corners. Running the GPU instance update once here makes the static frame correct.
-    accel_struct_mngr->update_TLAS();
+    // The renderer builds the initial TLAS from its first coherent GPU snapshot.
+    // The instance shader retains the same transform convention as runtime.
 
     std::cout << "SUCCESS: Scene loaded successfully with " << rigid_body_count << " rigid bodies!" << std::endl;
     return initialized;

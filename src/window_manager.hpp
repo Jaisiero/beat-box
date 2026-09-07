@@ -20,6 +20,7 @@ BB_NAMESPACE_BEGIN
 struct WindowManager{
     GLFWwindow * glfw_window_ptr;
     u32 width, height;
+    f64 cursor_x = 0.0, cursor_y = 0.0;
     bool minimized = false;
     bool iconified = false;
     bool swapchain_out_of_date = false;
@@ -71,11 +72,16 @@ struct WindowManager{
             win->minimized = size_x == 0 || size_y == 0;
         });
 
+        // Seed once; subsequent positions arrive with GLFW events. X11's
+        // glfwGetCursorPos performs a synchronous XQueryPointer round trip.
+        glfwGetCursorPos(glfw_window_ptr, &cursor_x, &cursor_y);
         glfwSetCursorPosCallback(
             glfw_window_ptr,
             [](GLFWwindow * window_ptr, f64 x, f64 y)
             {
                 auto & app = *reinterpret_cast<WindowManager *>(glfwGetWindowUserPointer(window_ptr));
+                app.cursor_x = x;
+                app.cursor_y = y;
                 app.input_manager.on_mouse_move(static_cast<f32>(x), static_cast<f32>(y));
             });
         glfwSetMouseButtonCallback(
@@ -85,6 +91,8 @@ struct WindowManager{
                 auto & app = *reinterpret_cast<WindowManager *>(glfwGetWindowUserPointer(window_ptr));
                 f64 mouse_x, mouse_y;
                 glfwGetCursorPos(window_ptr, &mouse_x, &mouse_y);
+                app.cursor_x = mouse_x;
+                app.cursor_y = mouse_y;
                 app.input_manager.on_mouse_button(button, action, static_cast<f32>(mouse_x), static_cast<f32>(mouse_y));
             });
         glfwSetKeyCallback(
