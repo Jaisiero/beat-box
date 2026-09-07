@@ -42,13 +42,15 @@
     return; // fully at rest / static pair
   }
 
+  AvbdMotion motion1 = avbd_motion(r1, &states[b1], dyn1);
+  AvbdMotion motion2 = avbd_motion(r2, &states[b2], dyn2);
   daxa_u32 cc = min((daxa_u32)max(m->contact_count, 0), MAX_CONTACT_POINT_COUNT);
   daxa_f32 mu = sqrt(max(r1->friction, 0.0f) * max(r2->friction, 0.0f));
   for (daxa_u32 j = 0u; j < cc; ++j)
   {
     daxa_f32vec3 rr1, rr2;
     // dual updates only run during the main sweeps -> stab_alpha = 1 (delta-only constraint)
-    daxa_f32 C = avbd_contact_C(m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, rr1, rr2);
+    daxa_f32 C = avbd_contact_C(m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, motion1, motion2, rr1, rr2);
     daxa_f32 lam = m->contacts[j].normal_impulse;
     daxa_f32 k = m->contacts[j].mass_coefficient;
     // lambda update (reference Eq 11): ASSIGN the clamped force estimate
@@ -68,8 +70,8 @@
     daxa_f32vec3 td1 = m->tangent_vectors[1];
     daxa_f32vec3 ar1_0, ar2_0, ar1_1, ar2_1;
     daxa_f32 C0t0, C0t1;
-    daxa_f32 Ct0 = avbd_dir_C(td0, m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, ar1_0, ar2_0, C0t0);
-    daxa_f32 Ct1 = avbd_dir_C(td1, m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, ar1_1, ar2_1, C0t1);
+    daxa_f32 Ct0 = avbd_dir_C(td0, m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, motion1, motion2, ar1_0, ar2_0, C0t0);
+    daxa_f32 Ct1 = avbd_dir_C(td1, m, j, r1, r2, &states[b1], &states[b2], dyn1, dyn2, 1.0f, motion1, motion2, ar1_1, ar2_1, C0t1);
     daxa_f32 ft0 = m->contacts[j].tangent_mass[0] * Ct0 + m->contacts[j].tangent_impulse[0];
     daxa_f32 ft1 = m->contacts[j].tangent_mass[1] * Ct1 + m->contacts[j].tangent_impulse[1];
     daxa_f32 fmag = sqrt(ft0 * ft0 + ft1 * ft1);

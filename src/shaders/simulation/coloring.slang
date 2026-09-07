@@ -38,6 +38,67 @@ static const daxa_u32 GC_PROPOSED_BASE = 0x80000000u;
   dispatch_buffer->graph_color_dispatch = daxa_u32vec3(cnt, 1, 1);
 }
 
+[[vk::push_constant]] GraphColorSolveListPushConstants GCL;
+
+// Shared by arbitration and overflow ordering; independent of packed allocation.
+daxa_u32 gc_pair_code(daxa_u32 m, RigidBody* bodies, Manifold* collisions)
+{
+  daxa_u32 a = bodies[collisions[m].obb1_index].id;
+  daxa_u32 b = bodies[collisions[m].obb2_index].id;
+  return ((min(a, b) & 0x3FFu) << 14) | ((max(a, b) & 0x3FFu) << 4) |
+         (daxa_u32(collisions[m].key) & 0xFu);
+}
+
+void overflow_sift(daxa_u32* ids, daxa_u32 root, daxa_u32 count,
+                   RigidBody* bodies, Manifold* collisions)
+{
+  while (2u * root + 1u < count)
+  {
+    daxa_u32 child = 2u * root + 1u;
+    if (child + 1u < count && gc_pair_code(ids[child], bodies, collisions) <
+                            gc_pair_code(ids[child + 1u], bodies, collisions)) ++child;
+    if (gc_pair_code(ids[root], bodies, collisions) >= gc_pair_code(ids[child], bodies, collisions)) break;
+    daxa_u32 tmp = ids[root]; ids[root] = ids[child]; ids[child] = tmp;
+    root = child;
+  }
+}
+
+void build_overflow_list(SimConfig* config, DispatchBuffer* dispatch)
+{
+  dispatch->graph_color_overflow_count = 0u;
+  if (config->graph_color_overflow == 0u) return;
+  daxa_u32* colors = (daxa_u32*)(GCL.task_head.manifold_color);
+  RigidBody* bodies = (RigidBody*)(GCL.task_head.rigid_bodies);
+  Manifold* collisions = (Manifold*)(GCL.task_head.collisions);
+  daxa_u32* ids = &dispatch->graph_color_overflow_ids[0];
+  daxa_u32 count = 0u;
+  daxa_u32 coll_count = min(config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  for (daxa_u32 m = 0u; m < coll_count; ++m)
+    if (colors[m] >= BB_MAX_COLORS_SOLVE &&
+        collisions[m].obb1_index < config->rigid_body_count &&
+        collisions[m].obb2_index < config->rigid_body_count &&
+        collisions[m].obb1_index != collisions[m].obb2_index) ids[count++] = m;
+  // In-place heapsort, O(n log n), once per step rather than every solver sweep.
+  for (daxa_u32 n = count / 2u; n > 0u; --n) overflow_sift(ids, n - 1u, count, bodies, collisions);
+  for (daxa_u32 n = count; n > 1u; --n)
+  {
+    daxa_u32 tmp = ids[0]; ids[0] = ids[n - 1u]; ids[n - 1u] = tmp;
+    overflow_sift(ids, 0u, n - 1u, bodies, collisions);
+  }
+  dispatch->graph_color_overflow_count = count;
+  if (config->has_flag(SimFlag::DET_HASHES))
+  {
+    bool valid = count == config->graph_color_overflow;
+    for (daxa_u32 n = 1u; n < count; ++n)
+      valid = valid && gc_pair_code(ids[n - 1u], bodies, collisions) < gc_pair_code(ids[n], bodies, collisions);
+    if (!valid)
+    {
+      daxa_u32 ignored;
+      InterlockedAdd(config->dbg_chain_errors, 1u, ignored);
+    }
+  }
+}
+
 // Runs AFTER the validator (graph_color_count is final). One thread per color: USED colors get
 // ceil(collision_count/X) workgroups, unused colors (c >= graph_color_count) get 0 -> the per-color
 // solve dispatch (make_gcs, indirect at GRAPH_COLOR_SOLVE_DISPATCH_OFFSET + c) skips empty colors
@@ -47,8 +108,9 @@ static const daxa_u32 GC_PROPOSED_BASE = 0x80000000u;
 {
   daxa_u32 c = compute_i.x;
   if (c >= BB_MAX_COLORS) return;
-  SimConfig* sim_config = (SimConfig*)(GCD.task_head.sim_config);
-  DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCD.task_head.dispatch_buffer);
+  SimConfig* sim_config = (SimConfig*)(GCL.task_head.sim_config);
+  DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCL.task_head.dispatch_buffer);
+  if (c == 0u) build_overflow_list(sim_config, dispatch_buffer);
   let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
   let cnt = (coll + COLOR_SOLVE_COMPUTE_X - 1u) / COLOR_SOLVE_COMPUTE_X;
   let used = min(sim_config->graph_color_count, BB_MAX_COLORS);
@@ -201,14 +263,10 @@ daxa_u32 gc_hash(daxa_u32 x)
 // the coloring is a pure function of the contact graph (determinism + a still G view).
 daxa_u32 gc_pair_id(daxa_u32 m)
 {
-  RigidBody* rigid_bodies = (RigidBody*)(GC.task_head.rigid_bodies);
-  Manifold* collisions = (Manifold*)(GC.task_head.collisions);
-  daxa_u32 ida = rigid_bodies[collisions[m].obb1_index].id;
-  daxa_u32 idb = rigid_bodies[collisions[m].obb2_index].id;
-  daxa_u32 lo = min(ida, idb);
-  daxa_u32 hi = max(ida, idb);
-  return ((lo & 0x3FFu) << 14) | ((hi & 0x3FFu) << 4) | (daxa_u32(collisions[m].key) & 0xFu);
+  return gc_pair_code(m, (RigidBody*)(GC.task_head.rigid_bodies),
+                       (Manifold*)(GC.task_head.collisions));
 }
+
 daxa_u32 gc_priority(daxa_u32 pair_id, daxa_u32 round)
 {
   daxa_u32 h = gc_hash(pair_id + round * 0x85ebca6bu) & 0xFFu; // 8-bit per-round fairness hash

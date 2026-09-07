@@ -457,8 +457,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
         // dbg_fresh accumulates in the narrow phase, so its reset must precede it (the
         // graph-coloring stat reset runs between narrow phase and readback and would
         // wipe the value before the CPU ever saw it)
-        auto reset_fresh = std::array<daxa_u32, 19>{}; // dbg_fresh..dbg_state_pad (per-frame block;
-                                                      // dm_ids/walk_a/walk_b persist as the latch)
+        constexpr auto reset_bytes = offsetof(SimConfig, dbg_dm_ids) - offsetof(SimConfig, dbg_fresh);
+        static_assert(reset_bytes % sizeof(daxa_u32) == 0u);
+        auto reset_fresh = std::array<daxa_u32, reset_bytes / sizeof(daxa_u32)>{};
         allocate_fill_copy(ti, reset_fresh, ti.get(task_sim_config), offsetof(SimConfig, dbg_fresh));
 
         // DIAG: zero the explosion-latch fields once per config buffer (device memory starts
@@ -1321,23 +1322,26 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                      user_callback_GCD);
 
   // per-color solve dispatcher: after the validator, write per-color solve dispatch args
-  // (used colors -> ceil(coll/X) workgroups, empty colors -> 0). Reuses the dispatcher head.
+  // and a persistent-pair-ordered worklist for contacts in the serial overflow bucket.
   auto user_callback_GCSD = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_GCSD);
-    ti.recorder.push_constant(RigidBodyDispatcherPushConstants{.task_head = ti.attachment_shader_blob});
+    ti.recorder.push_constant(GraphColorSolveListPushConstants{.task_head = ti.attachment_shader_blob});
     ti.recorder.dispatch({.x = 1, .y = 1, .z = 1});
   };
-  using TTask_GCSD = TaskTemplate<RigidBodyDispatcherTaskHead::Task, decltype(user_callback_GCSD)>;
+  using TTask_GCSD = TaskTemplate<GraphColorSolveListTaskHead::Task, decltype(user_callback_GCSD)>;
   TTask_GCSD task_GCSD(std::array{
-                           daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
-                           daxa::attachment_view(RigidBodyDispatcherTaskHead::AT.sim_config, task_sim_config),
+                           daxa::attachment_view(GraphColorSolveListTaskHead::AT.dispatch_buffer, accel_struct_mngr->task_dispatch_buffer),
+                           daxa::attachment_view(GraphColorSolveListTaskHead::AT.sim_config, task_sim_config),
+                           daxa::attachment_view(GraphColorSolveListTaskHead::AT.rigid_bodies, task_rigid_bodies),
+                           daxa::attachment_view(GraphColorSolveListTaskHead::AT.collisions, task_collisions),
+                           daxa::attachment_view(GraphColorSolveListTaskHead::AT.manifold_color, task_manifold_color),
                        },
                        user_callback_GCSD);
 
   // AVBD per-color primal dispatcher (A1): after the AVBD body-color validator, write per-color
   // workgroup counts (used body colors -> ceil(rigid_body_count/X), empty -> 0). Reuses the same
-  // dispatcher head as GCSD; the AVBD primal sweeps then dispatch_indirect per color (skip empty).
+  // original dispatcher head; primal sweeps dispatch_indirect per color (skip empty).
   auto user_callback_AVBD_CDISP = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_AVBD_CDISP);

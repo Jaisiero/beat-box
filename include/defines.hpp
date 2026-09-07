@@ -62,6 +62,7 @@ BB_DAXA_TASK_ALIAS(RigidBodyUpdateTaskHead)
 BB_DAXA_TASK_ALIAS(UpdateInstancesTaskHead)
 BB_DAXA_TASK_ALIAS(CreatePointsTaskHead)
 BB_DAXA_TASK_ALIAS(GraphColorTaskHead)
+BB_DAXA_TASK_ALIAS(GraphColorSolveListTaskHead)
 BB_DAXA_TASK_ALIAS(GraphColorSolveTaskHead)
 BB_DAXA_TASK_ALIAS(SleepTaskHead)
 BB_DAXA_TASK_ALIAS(AvbdTaskHead)
@@ -1378,7 +1379,7 @@ struct GraphColorSolveDispatcherInfo {
   };
   daxa::ComputePipelineCompileInfo info = {
       .shader_info = compute_shader,
-      .push_constant_size = sizeof(RigidBodyDispatcherPushConstants),
+      .push_constant_size = sizeof(GraphColorSolveListPushConstants),
       .name = graph_color_solve_dispatcher_pipeline_name,
   };
 };

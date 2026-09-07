@@ -537,13 +537,14 @@ int RendererManager::render()
         ++det_count;
         rigid_body_manager->read_back_sim_config(true);
         auto const &dsc = rigid_body_manager->get_sim_config_reference();
+        std::cout << "[CHAIN] max=" << dsc.dbg_chain_max << " errors=" << dsc.dbg_chain_errors << " overflow=" << dsc.graph_color_overflow << std::endl;
         std::cout << "DET step=" << det_count << std::hex << " ph=" << dsc.dbg_poshash
                   << " rh=" << dsc.dbg_rothash << " cp2=" << dsc.dbg_cp2_poshash
                   << " cph=" << dsc.dbg_cp_poshash << " vhf=" << dsc.dbg_vh_fin
                   << " vhi=" << dsc.dbg_vh_imp << " chash=" << dsc.dbg_color_hash
                   << " lh=" << dsc.dbg_color_pad << " sh=" << dsc.dbg_state_hash
                   << " wh=" << dsc.dbg_state_pad
-                  << std::dec << " viol=" << dsc.avbd_violations << std::endl;
+                  << std::dec << " viol=" << (dsc.avbd_violations + dsc.graph_color_violations + dsc.dbg_chain_errors) << std::endl;
         det_acc = det_acc * 0x9e3779b9u + dsc.dbg_poshash; // cumulative path hash (catches transient divergence)
         if (det_count >= (daxa_u32)det_steps)
         {
