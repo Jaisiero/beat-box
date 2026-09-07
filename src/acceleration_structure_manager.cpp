@@ -124,7 +124,6 @@ bool AccelerationStructureManager::create(std::shared_ptr<RendererManager> rende
 
     task_blas.set_blas(placeholder_blas);
     task_tlas.set_tlas(tlas[0]);
-    task_dispatch_buffer.set_buffer(proc_blas_scratch_buffer); // Bind a placeholder buffer
 
     record_accel_struct_tasks(AS_build_TG);
     AS_build_TG.submit();
@@ -192,7 +191,7 @@ daxa::TlasId AccelerationStructureManager::get_tlas()
   if(!initialized) {
     return {};
   }
-  return tlas[renderer_manager->get_sim_frame_index()];
+  return tlas[0];
 }
 
 daxa::BufferId AccelerationStructureManager::get_previous_rigid_body_buffer()
@@ -731,8 +730,6 @@ void AccelerationStructureManager::update_TLAS()
     return;
   }
   TLAS_update_TG.execute();
-  // The shared instance TaskBuffer carries the producer queue dependency to
-  // the AS graph. Daxa waits that submission on the GPU, without a host wait.
   TLAS_build_TG.execute();
 }
 
@@ -743,7 +740,10 @@ bool AccelerationStructureManager::update()
     return false;
   }
 
-  daxa_u32 frame_index = renderer_manager->get_sim_frame_index();
+  // One stable MAIN-owned TLAS keeps Daxa's read/build history intact across
+  // render frames. No solver pass reads or writes this acceleration structure.
+  daxa_u32 frame_index = 0;
+  pending_debug_instance.reset();
 
   // BUILDING BLAS
   auto clear_build_AS = [&](u32 count)
@@ -778,7 +778,7 @@ bool AccelerationStructureManager::update()
     u32 const lbvh_primitive_count = 2u * current_rigid_body_count - 1u;
 
     blas_geometries.at(0).push_back({
-        .data = device.device_address(rigid_body_manager->get_lbvh_node_buffer()).value(),
+        .data = device.device_address(renderer_manager->snapshot.buffers[RenderSnapshot::BVH].id()).value(),
         .stride = sizeof(LBVHNode),
         .count = lbvh_primitive_count,
         .flags = daxa::GeometryFlagBits::NO_DUPLICATE_ANY_HIT_INVOCATION,
@@ -825,7 +825,7 @@ bool AccelerationStructureManager::update()
     // Add the BLAS buffer to the BLAS build info
     blas_build_infos.back().dst_blas = lbvh_blas[frame_index];
 
-    blas_instances_data[current_rigid_body_count] = {
+    pending_debug_instance = daxa_BlasInstanceData{
         .transform = daxa_f32mat3x4(daxa_f32vec4(1.0f, 0.0f, 0.0f, 0.0f),
                                      daxa_f32vec4(0.0f, 1.0f, 0.0f, 0.0f),
                                      daxa_f32vec4(0.0f, 0.0f, 1.0f, 0.0f)),
@@ -997,21 +997,17 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
 
   // Instantiate the task using the template class
   TTaskUI task_UI(std::array{
-                      daxa::attachment_view(UpdateInstancesTaskHead::AT.dispatch_buffer, task_dispatch_buffer),
-                      daxa::attachment_view(UpdateInstancesTaskHead::AT.sim_config, rigid_body_manager->task_sim_config),
+                      daxa::attachment_view(UpdateInstancesTaskHead::AT.sim_config, renderer_manager->snapshot.buffers[RenderSnapshot::CONFIG]),
                       daxa::attachment_view(UpdateInstancesTaskHead::AT.blas_instance_data, task_blas_instance_data),
-                      daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_body_map, rigid_body_manager->task_rigid_body_entries),
-                      daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_bodies, rigid_body_manager->task_rigid_bodies),
-                      daxa::attachment_view(UpdateInstancesTaskHead::AT.aabbs, task_aabb_buffer),
+                      daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_body_map, renderer_manager->snapshot.buffers[RenderSnapshot::BODY_MAP]),
+                      daxa::attachment_view(UpdateInstancesTaskHead::AT.rigid_bodies, renderer_manager->snapshot.buffers[RenderSnapshot::BODIES]),
                   },
                   user_callback_UI);
 
   daxa::InlineTaskInfo task_BB({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
-          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, task_aabb_buffer),
-          // Debug BLAS geometry addresses the simulation's LBVH node buffer.
-          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, rigid_body_manager->task_lbvh_nodes),
+          // Debug BLAS geometry addresses the selected snapshot's LBVH buffer.
+          daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, renderer_manager->snapshot.buffers[RenderSnapshot::BVH]),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_WRITE, task_blas),
       },
       .task = [this](daxa::TaskInterface const &ti)
@@ -1028,8 +1024,6 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
 
   daxa::InlineTaskInfo task_BT({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, rigid_body_manager->task_rigid_bodies),
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_READ, task_aabb_buffer),
           daxa::inl_attachment(daxa::TaskBufferAccess::BUILD_READ, task_blas_instance_data),
           daxa::inl_attachment(daxa::TaskBlasAccess::BUILD_READ, task_blas),
           daxa::inl_attachment(daxa::TaskTlasAccess::BUILD_WRITE, task_tlas),
@@ -1054,25 +1048,30 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
       .name = "tlas update",
   });
 
-  std::array<daxa::TaskBuffer, 6> instance_buffers = {
-      task_dispatch_buffer,
-      rigid_body_manager->task_sim_config,
+  std::array<daxa::TaskBuffer, 4> instance_buffers = {
+      renderer_manager->snapshot.buffers[RenderSnapshot::CONFIG],
       task_blas_instance_data,
-      rigid_body_manager->task_rigid_body_entries,
-      rigid_body_manager->task_rigid_bodies,
-      task_aabb_buffer,
+      renderer_manager->snapshot.buffers[RenderSnapshot::BODY_MAP],
+      renderer_manager->snapshot.buffers[RenderSnapshot::BODIES],
   };
   // Keep separate graphs: this Daxa revision crashes compiling the instance
   // write -> AS read barrier in a combined graph. Shared external resources
-  // preserve the GPU dependency across graphs on the compute queue.
-  instances_TG = task_manager->create_task_graph("Update TLAS Instances", std::span<daxa::TaskBuffer>(instance_buffers), {}, {}, {}, false, daxa::QUEUE_COMPUTE_0);
+  // preserve the GPU dependency across graphs on MAIN.
+  instances_TG = task_manager->create_task_graph("Update TLAS Instances", std::span<daxa::TaskBuffer>(instance_buffers), {}, {}, {}, false, daxa::QUEUE_MAIN);
+  instances_TG.add_task(daxa::InlineTaskInfo{
+      .attachments = {daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, task_blas_instance_data)},
+      .task = [this](daxa::TaskInterface const &ti) {
+        if (pending_debug_instance)
+          allocate_fill_copy(ti, *pending_debug_instance, ti.get(task_blas_instance_data),
+                             current_rigid_body_count * sizeof(daxa_BlasInstanceData));
+      },
+      .name = "Upload debug instance",
+  });
   instances_TG.add_task(task_UI);
 
-  std::array<daxa::TaskBuffer, 4> build_buffers = {
-      rigid_body_manager->task_rigid_bodies,
-      task_aabb_buffer,
+  std::array<daxa::TaskBuffer, 2> build_buffers = {
       task_blas_instance_data,
-      rigid_body_manager->task_lbvh_nodes,
+      renderer_manager->snapshot.buffers[RenderSnapshot::BVH],
   };
   std::array<daxa::TaskBlas, 1> blas = {
       task_blas,
@@ -1081,7 +1080,7 @@ void AccelerationStructureManager::record_update_TLAS_tasks(TaskGraph &instances
       task_tlas,
   };
 
-  build_TG = task_manager->create_task_graph("Build TLAS", std::span<daxa::TaskBuffer>(build_buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(task_tlases), false, daxa::QUEUE_COMPUTE_0);
+  build_TG = task_manager->create_task_graph("Build TLAS", std::span<daxa::TaskBuffer>(build_buffers), {}, std::span<daxa::TaskBlas>(blas), std::span<daxa::TaskTlas>(task_tlases), false, daxa::QUEUE_MAIN);
   build_TG.add_task(task_BB);
   build_TG.add_task(task_BT);
 }

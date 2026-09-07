@@ -2123,9 +2123,20 @@ bool RigidBodyManager::simulate()
     return !initialized;
   }
 
+  // The scheduler guarantees that the previous step completed before this host write.
+  auto *pick = device.buffer_host_address_as<PickState>(pick_state_buffer).value();
+  pick->ray_origin = pending_pick_origin;
+  pick->ray_dir = pending_pick_dir;
+  bool request = pending_pick_dragging && (pending_pick_request || (pick->flags & BB_PICK_REQUEST) != 0u);
+  pick->flags = (request ? BB_PICK_REQUEST : 0u) | (pending_pick_dragging ? BB_PICK_DRAGGING : 0u);
+  pending_pick_request = false;
+
   // advance the SIM clock (per-step double-buffer parity, decoupled from the render frame):
   // step K works on [parity K] and reads the previous step's output at [parity K^1]
   renderer_manager->begin_sim_step();
+  // Debug vertices belong to this step's parity, including when multiple render
+  // frames occur while the step is pending. Bind before recording the producer.
+  gui_manager->update();
 
   update_buffers();
 
@@ -3077,6 +3088,11 @@ bool RigidBodyManager::read_back_sim_config(bool completed_simulation_snapshot)
         .queue_submit_index = device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0),
     });
   }
+
+  completed_config = get_sim_config_reference();
+  auto const *pick = device.buffer_host_address_as<PickState>(pick_state_buffer).value();
+  completed_picked_body = pick->picked_id;
+  completed_grab_count = pick->grab_count;
 
   if (narrow_phase_timing && narrow_phase_query_pending)
   {

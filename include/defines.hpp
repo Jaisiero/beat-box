@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "shared.inl"
+#include "as_instances.inl"
 #include "fragment_finalization.inl"
 #include "fracture_setup.inl"
 #include "body_list.inl"

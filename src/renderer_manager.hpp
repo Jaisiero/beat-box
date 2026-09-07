@@ -8,6 +8,7 @@
 #include "status_manager.hpp"
 #include "gui_manager.hpp"
 #include "image_manager.hpp"
+#include "render_snapshot.hpp"
 
 BB_NAMESPACE_BEGIN
 
@@ -52,6 +53,8 @@ struct RendererManager
 
   // Task graph information for ray tracing
   TaskGraph RT_TG;
+  RenderSnapshot snapshot;
+  bool snapshot_debug_valid = false;
   daxa::TimelineQueryPool render_queries = {};
   bool render_timing = false;
   bool render_query_pending = false;
@@ -86,7 +89,7 @@ struct RendererManager
     return status_manager->is_gui_enabled();
   }
   bool is_bvh_enabled() {
-    return status_manager->is_bvh_enabled();
+    return snapshot_debug_valid && status_manager->is_bvh_enabled();
   }
   daxa_u64 get_frame_count() {
     return status_manager->get_frame_count();

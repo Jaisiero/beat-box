@@ -81,7 +81,7 @@ def run(runtime, env, log, steps, width, height):
             f"{width}x{height}" not in geometry[0] or
             re.search(r"VUID-|FAILED|MISMATCH|\[CHAIN\] max=\d+ errors=[1-9]", text) or
             any(not line.rstrip().endswith("viol=0") for line in states)):
-        raise RuntimeError(f"Invalid run: {log}; resize errors: {errors}")
+        raise RuntimeError(f"Invalid run: {log}; exit={process.returncode}; states={len(states)}/{steps}; resize errors: {errors}")
     log.with_suffix(".json").write_text(json.dumps(intervals), encoding="utf-8")
     return states, dict(all=stats([r["ms"] for r in intervals]),
                         publication_frames=stats([r["ms"] for r in intervals if r["publications"]]),
