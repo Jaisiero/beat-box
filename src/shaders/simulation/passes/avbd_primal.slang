@@ -78,8 +78,10 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   }
 }
 
-[shader("compute")]
-[numthreads(COLOR_SOLVE_COMPUTE_X, 1, 1)] void entry_avbd_primal(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+// Call with the two supported modes as literals so Slang can remove main-only
+// and post-only constraint work. The host emits alpha=1 for main sweeps and
+// alpha=0 for post-stabilization; iteration counts and arithmetic order stay fixed.
+void avbd_primal_specialized(daxa_u32vec3 compute_i, daxa_f32 stab_alpha)
 {
   SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
   if (sim_config->solver_type != SimSolverType::AVBD)
@@ -89,7 +91,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   // DETERMINISM mode: skip the non-convergent alpha=0 post-stab (the driver's per-launch SPIR-V->ISA
   // codegen perturbs its FP sub-ULP, and with no unique fixed point it can't converge that out). ph
   // collapses to cph (the CONVERGED main solve), which IS bitwise-deterministic. Main sweeps untouched.
-  if (AVBD_PC.stab_alpha < 0.5f && sim_config->has_flag(SimFlag::DETERMINISTIC))
+  if (stab_alpha < 0.5f && sim_config->has_flag(SimFlag::DETERMINISTIC))
   {
     return;
   }
@@ -130,7 +132,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
   // the remaining sweeps would only re-derive it - skip them. Rest converges in a few
   // iterations (the bulk of AVBD's cost at rest); impacts keep the full budget because
   // their steps stay large. asuint on non-negative floats preserves ordering.
-  bool main_sweep = AVBD_PC.stab_alpha > 0.5f && AVBD_PC.ps_depth == MAX_U32;
+  bool main_sweep = stab_alpha > 0.5f && AVBD_PC.ps_depth == MAX_U32;
   daxa_u32 tick = sim_config->avbd_iter_tick;
   if (main_sweep && tick > 0u &&
       sim_config->avbd_step_res[(tick + 1u) & 1u] < asuint(BB_AVBD_CONV_EPS))
@@ -197,6 +199,9 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
         AvbdBodyState* s1 = &states[b1];
         AvbdBodyState* s2 = &states[b2];
 
+        AvbdMotion motion1 = avbd_motion(r1, s1, dyn1);
+        AvbdMotion motion2 = avbd_motion(r2, s2, dyn2);
+
         // NOTE on shock propagation: the cascade ORDERS the layer solves (dispatch
         // order) but every row stays - including partners above. Skipping upper rows
         // was tried TWICE (unordered v1, ordered v2) and both boiled identically: in a
@@ -207,7 +212,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
         for (daxa_u32 j = 0u; j < cc; ++j)
         {
           daxa_f32vec3 rr1, rr2;
-          daxa_f32 C = avbd_contact_C(m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, rr1, rr2);
+          daxa_f32 C = avbd_contact_C(m, j, r1, r2, s1, s2, dyn1, dyn2, stab_alpha, motion1, motion2, rr1, rr2);
           daxa_f32 lam = m->contacts[j].normal_impulse; // <= 0 (force convention)
           daxa_f32 k = m->contacts[j].mass_coefficient;
           // Compare the geometric separation, before margin/slop, with the sleep depth
@@ -215,8 +220,8 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
           // delays extraction by another 5.5 mm and prevents the island from sleeping.
           daxa_f32 initial_C = m->contacts[j].penetration + BB_AVBD_MARGIN;
           daxa_f32 removed_slop = min(max(-initial_C, 0.0f), BB_AVBD_PS_SLOP);
-          daxa_f32 geometric_C = C - (BB_AVBD_MARGIN + removed_slop) * (1.0f - AVBD_PC.stab_alpha);
-          if (AVBD_PC.stab_alpha < 0.5f && geometric_C < -BB_AVBD_DEEP_EXTRACT_THRESH)
+          daxa_f32 geometric_C = C - (BB_AVBD_MARGIN + removed_slop) * (1.0f - stab_alpha);
+          if (stab_alpha < 0.5f && geometric_C < -BB_AVBD_DEEP_EXTRACT_THRESH)
           {
             k = max(k, BB_AVBD_DEEP_EXTRACT_K);
           }
@@ -254,8 +259,8 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
           daxa_f32vec3 td1 = m->tangent_vectors[1];
           daxa_f32vec3 ar1_0, ar2_0, ar1_1, ar2_1;
           daxa_f32 C0t0, C0t1;
-          daxa_f32 Ct0 = avbd_dir_C(td0, m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, ar1_0, ar2_0, C0t0);
-          daxa_f32 Ct1 = avbd_dir_C(td1, m, j, r1, r2, s1, s2, dyn1, dyn2, AVBD_PC.stab_alpha, ar1_1, ar2_1, C0t1);
+          daxa_f32 Ct0 = avbd_dir_C(td0, m, j, r1, r2, s1, s2, dyn1, dyn2, stab_alpha, motion1, motion2, ar1_0, ar2_0, C0t0);
+          daxa_f32 Ct1 = avbd_dir_C(td1, m, j, r1, r2, s1, s2, dyn1, dyn2, stab_alpha, motion1, motion2, ar1_1, ar2_1, C0t1);
           daxa_f32 ft0 = m->contacts[j].tangent_mass[0] * Ct0 + m->contacts[j].tangent_impulse[0];
           daxa_f32 ft1 = m->contacts[j].tangent_mass[1] * Ct1 + m->contacts[j].tangent_impulse[1];
           daxa_f32 fmag = sqrt(ft0 * ft0 + ft1 * ft1);
@@ -314,4 +319,11 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
     daxa_u32 prev;
     InterlockedMax(sim_config->avbd_step_res[tick & 1u], asuint(mag), prev);
   }
+}
+
+[shader("compute")]
+[numthreads(COLOR_SOLVE_COMPUTE_X, 1, 1)] void entry_avbd_primal(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+{
+  if (AVBD_PC.stab_alpha > 0.5f) avbd_primal_specialized(compute_i, 1.0f);
+  else avbd_primal_specialized(compute_i, 0.0f);
 }

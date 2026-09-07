@@ -43,3 +43,7 @@ With Khronos synchronization validation enabled, the final code preserves all 60
 The DET `viol` output now includes graph-color violations and ordering errors as well as AVBD violations, so the existing replay runner cannot silently ignore TGS coloring failures. The reset size is derived from the contiguous diagnostic block's offsets rather than another hard-coded field count.
 
 A real-time accelerated-F11 smoke test also completes 595 stepped frames with synchronization validation, including minimize/restore, without reported validation errors.
+
+## Subsequent performance work
+
+The corrected replay is now the reference for the AVBD optimization and full collision/contact audit in `F11_SOLVER_AND_CONTACT_AUDIT.md`. Its performance comparison preserves this corrected trajectory instead of comparing against the old unordered path.

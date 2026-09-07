@@ -9,9 +9,31 @@ daxa_f32vec3 avbd_small_angle_delta(Quaternion q_now, Quaternion q_start)
   return dq.v * (2.0f * sign);
 }
 
+// The current pose delta is shared by all contacts of one manifold visit.
+// Recompute on every visit: another color may have updated the partner since
+// the previous sweep. This is thread-local reuse, not a cross-sweep pose cache.
+struct AvbdMotion
+{
+  daxa_f32vec3 translation;
+  daxa_f32vec3 rotation;
+};
+
+AvbdMotion avbd_motion(RigidBody* r, AvbdBodyState* s, bool dynamic)
+{
+  AvbdMotion motion;
+  motion.translation = daxa_f32vec3(0.0f);
+  motion.rotation = daxa_f32vec3(0.0f);
+  if (dynamic)
+  {
+    motion.translation = r->position - s->pos_start;
+    motion.rotation = avbd_small_angle_delta(r->rotation, s->rot_start);
+  }
+  return motion;
+}
+
 daxa_f32 avbd_contact_C(Manifold* m, daxa_u32 j, RigidBody* r1, RigidBody* r2,
                         AvbdBodyState* s1, AvbdBodyState* s2,
-                        bool dyn1, bool dyn2, daxa_f32 stab_alpha,
+                        bool dyn1, bool dyn2, daxa_f32 stab_alpha, AvbdMotion motion1, AvbdMotion motion2,
                         out daxa_f32vec3 rr1, out daxa_f32vec3 rr2)
 {
   daxa_f32vec3 n = m->normal;
@@ -31,15 +53,11 @@ daxa_f32 avbd_contact_C(Manifold* m, daxa_u32 j, RigidBody* r1, RigidBody* r2,
   daxa_f32 C = C0 * (1.0f - stab_alpha);
   if (dyn1)
   {
-    daxa_f32vec3 dp1 = r1->position - s1->pos_start;
-    daxa_f32vec3 dth1 = avbd_small_angle_delta(r1->rotation, s1->rot_start);
-    C -= dot(n, dp1 + cross(dth1, rr1));
+    C -= dot(n, motion1.translation + cross(motion1.rotation, rr1));
   }
   if (dyn2)
   {
-    daxa_f32vec3 dp2 = r2->position - s2->pos_start;
-    daxa_f32vec3 dth2 = avbd_small_angle_delta(r2->rotation, s2->rot_start);
-    C += dot(n, dp2 + cross(dth2, rr2));
+    C += dot(n, motion2.translation + cross(motion2.rotation, rr2));
   }
   return C;
 }
@@ -52,7 +70,7 @@ daxa_f32vec3 avbd_q_rotate(Quaternion q, daxa_f32vec3 u)
 daxa_f32 avbd_dir_C(daxa_f32vec3 d, Manifold* m, daxa_u32 j,
                     RigidBody* r1, RigidBody* r2,
                     AvbdBodyState* s1, AvbdBodyState* s2,
-                    bool dyn1, bool dyn2, daxa_f32 stab_alpha,
+                    bool dyn1, bool dyn2, daxa_f32 stab_alpha, AvbdMotion motion1, AvbdMotion motion2,
                     out daxa_f32vec3 ar1, out daxa_f32vec3 ar2, out daxa_f32 C0t)
 {
   // step-start poses (statics: current pose == start pose)
@@ -72,15 +90,11 @@ daxa_f32 avbd_dir_C(daxa_f32vec3 d, Manifold* m, daxa_u32 j,
   daxa_f32 C = c0_eff * (1.0f - stab_alpha);
   if (dyn1)
   {
-    daxa_f32vec3 dp1 = r1->position - s1->pos_start;
-    daxa_f32vec3 dth1 = avbd_small_angle_delta(r1->rotation, s1->rot_start);
-    C -= dot(d, dp1 + cross(dth1, ar1));
+    C -= dot(d, motion1.translation + cross(motion1.rotation, ar1));
   }
   if (dyn2)
   {
-    daxa_f32vec3 dp2 = r2->position - s2->pos_start;
-    daxa_f32vec3 dth2 = avbd_small_angle_delta(r2->rotation, s2->rot_start);
-    C += dot(d, dp2 + cross(dth2, ar2));
+    C += dot(d, motion2.translation + cross(motion2.rotation, ar2));
   }
   return C;
 }
