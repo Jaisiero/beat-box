@@ -286,7 +286,8 @@ private:
   void record_fragment_census(daxa::CommandRecorder &rec, daxa_u32vec3 dims, daxa_u64 labels_addr, bool compact, daxa_u32 body_id = MAX_U32);
   void record_fracture_partition(daxa::CommandRecorder &rec,
       daxa_u32 body_id, daxa_u32 body_count, daxa_u64 batch_addr, daxa_u32 recorded_passes,
-      bool compact, daxa::TimelineQueryPool *queries = nullptr);
+      bool compact, daxa::TimelineQueryPool *queries = nullptr,
+      daxa::TimelineQueryPool *stage_queries = nullptr, daxa_u32 stage_query_base = 0u);
   std::shared_ptr<daxa::ComputePipeline> pipeline_body_list;
   std::shared_ptr<daxa::ComputePipeline> pipeline_fracture_setup, pipeline_fracture_gather, pipeline_fracture_scene_edit, pipeline_fracture_layout, pipeline_voxel_primitive_batch;
   daxa::BufferId fracture_plan_manifest{};

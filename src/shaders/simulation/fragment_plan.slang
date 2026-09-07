@@ -32,55 +32,82 @@ uint plan_cells() {
   return dims.x*dims.y*dims.z;
 }
 
+// Cooperatively fetch census tiles; lane zero retains the original label order,
+// tie-breaking, centroid calculations, merges and final sort.
+groupshared FragmentComponent plan_tile[64];
+groupshared uint plan_failed;
 [shader("compute")]
-[numthreads(1,1,1)]
+[numthreads(64,1,1)]
 void entry_fragment_plan(uint3 tid : SV_DispatchThreadID)
 {
   FragmentComponent* census=(FragmentComponent*)P.census_addr;
   uint* remap=(uint*)P.remap_addr;
   FragmentPlanManifest* out=(FragmentPlanManifest*)P.manifest_addr;
-  out->status=0u;out->count=0u;out->source_count=0u;out->solid_count=0u;
+  uint lane=tid.x;
+  if (lane==0u) {
+    out->status=0u;out->count=0u;out->source_count=0u;out->solid_count=0u;
+    plan_failed=0u;
+  }
   uint largest=0xffffffffu, largest_count=0u;
   uint cells=plan_cells();
   // Dense roots are visited in label order, preserving all tie-breaking.
-  for (uint i=0u;i<cells;++i)
+  for (uint tile=0u;tile<cells;tile+=64u)
   {
-    uint n=census[i].count;
-    if (n==0u) continue;
-    ++out->source_count;out->solid_count+=n;
-    if (n>largest_count) { largest=i;largest_count=n; }
-    if (n>=3u)
+    if (tile+lane<cells) plan_tile[lane]=census[tile+lane];
+    GroupMemoryBarrierWithGroupSync();
+    if (lane==0u)
+    for (uint j=0u;j<min(64u,cells-tile);++j)
     {
-      if (out->count==FRAGMENT_PLAN_CAPACITY) { out->status=1u;return; }
-      out->components[out->count++]=census[i];
+      uint i=tile+j;
+      uint n=plan_tile[j].count;
+      if (n==0u) continue;
+      ++out->source_count;out->solid_count+=n;
+      if (n>largest_count) { largest=i;largest_count=n; }
+      if (n>=3u)
+      {
+        if (out->count==FRAGMENT_PLAN_CAPACITY) { out->status=1u;plan_failed=1u;break; }
+        out->components[out->count++]=plan_tile[j];
+      }
     }
+    // Prevent the next tile from overwriting values still used by lane zero.
+    GroupMemoryBarrierWithGroupSync();
+    if (plan_failed!=0u) return;
   }
-  if (out->count==0u && largest!=0xffffffffu) out->components[out->count++]=census[largest];
-  for (uint i=0u;i<cells;++i)
+  if (lane==0u && out->count==0u && largest!=0xffffffffu) out->components[out->count++]=census[largest];
+  for (uint tile=0u;tile<cells;tile+=64u)
   {
-    FragmentComponent source=census[i];
-    if (source.count==0u) continue;
-    if (source.count>=3u) { remap[i]=i;continue; }
-    float3 cc=centroid(source);
-    uint best=0u;
-    float best_distance=3.402823466e38f;
-    for (uint t=0u;t<out->count;++t)
+    if (tile+lane<cells) plan_tile[lane]=census[tile+lane];
+    GroupMemoryBarrierWithGroupSync();
+    if (lane==0u)
+    for (uint j=0u;j<min(64u,cells-tile);++j)
     {
-      // Targets use their ORIGINAL centroids, never the progressively merged one.
-      uint label=out->components[t].label;
-      precise float3 d=cc-centroid(census[label]);
-      precise float distance=(d.x*d.x+d.y*d.y)+d.z*d.z;
-      if (distance<best_distance) { best_distance=distance;best=t; }
+      uint i=tile+j;
+      FragmentComponent source=plan_tile[j];
+      if (source.count==0u) continue;
+      if (source.count>=3u) { remap[i]=i;continue; }
+      float3 cc=centroid(source);
+      uint best=0u;
+      float best_distance=3.402823466e38f;
+      for (uint t=0u;t<out->count;++t)
+      {
+        // Targets use their ORIGINAL centroids, never the progressively merged one.
+        uint label=out->components[t].label;
+        precise float3 d=cc-centroid(census[label]);
+        precise float distance=(d.x*d.x+d.y*d.y)+d.z*d.z;
+        if (distance<best_distance) { best_distance=distance;best=t; }
+      }
+      uint target=out->components[best].label;
+      remap[i]=target;
+      if (i==target) continue; // largest fallback is already present
+      FragmentComponent* dest=&out->components[best];
+      dest->count+=source.count;
+      dest->sum_x+=source.sum_x;dest->sum_y+=source.sum_y;dest->sum_z+=source.sum_z;
+      dest->lo_x=min(dest->lo_x,source.lo_x);dest->lo_y=min(dest->lo_y,source.lo_y);dest->lo_z=min(dest->lo_z,source.lo_z);
+      dest->hi_x=max(dest->hi_x,source.hi_x);dest->hi_y=max(dest->hi_y,source.hi_y);dest->hi_z=max(dest->hi_z,source.hi_z);
     }
-    uint target=out->components[best].label;
-    remap[i]=target;
-    if (i==target) continue; // largest fallback is already present
-    FragmentComponent* dest=&out->components[best];
-    dest->count+=source.count;
-    dest->sum_x+=source.sum_x;dest->sum_y+=source.sum_y;dest->sum_z+=source.sum_z;
-    dest->lo_x=min(dest->lo_x,source.lo_x);dest->lo_y=min(dest->lo_y,source.lo_y);dest->lo_z=min(dest->lo_z,source.lo_z);
-    dest->hi_x=max(dest->hi_x,source.hi_x);dest->hi_y=max(dest->hi_y,source.hi_y);dest->hi_z=max(dest->hi_z,source.hi_z);
+    GroupMemoryBarrierWithGroupSync();
   }
+  if (lane!=0u) return;
   // Fragment publication retains the largest component in the parent's body slot.
   for (uint i=1u;i<out->count;++i)
   {
