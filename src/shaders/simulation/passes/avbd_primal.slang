@@ -1,3 +1,4 @@
+#include "color_solve_dispatch.slang"
 #include "avbd_constraints.slang"
 
 daxa_f32mat3x3 avbd_inverse3(daxa_f32mat3x3 a)
@@ -78,7 +79,7 @@ void avbd_solve6(inout daxa_f32 H[6][6], inout daxa_f32 b[6], out daxa_f32 x[6])
 }
 
 [shader("compute")]
-[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_avbd_primal(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+[numthreads(COLOR_SOLVE_COMPUTE_X, 1, 1)] void entry_avbd_primal(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config = (SimConfig*)(AVBD_PC.task_head.sim_config);
   if (sim_config->solver_type != SimSolverType::AVBD)
