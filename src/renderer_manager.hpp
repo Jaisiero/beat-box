@@ -9,6 +9,7 @@
 #include "gui_manager.hpp"
 #include "image_manager.hpp"
 #include "render_snapshot.hpp"
+#include "performance_overlay.hpp"
 
 BB_NAMESPACE_BEGIN
 
@@ -54,6 +55,8 @@ struct RendererManager
   // Task graph information for ray tracing
   TaskGraph RT_TG;
   RenderSnapshot snapshot;
+  PerformanceOverlay performance;
+  GpuPerformanceTimer frame_timer;
   bool snapshot_debug_valid = false;
   daxa::TimelineQueryPool render_queries = {};
   bool render_timing = false;

@@ -149,3 +149,7 @@ add_executable(gpu_pool_allocator_tests tests/gpu_pool_allocator_tests.cpp)
 target_include_directories(gpu_pool_allocator_tests PRIVATE include)
 target_link_libraries(gpu_pool_allocator_tests PRIVATE daxa::daxa glm::glm)
 add_test(NAME gpu_pool_allocator_tests COMMAND gpu_pool_allocator_tests)
+
+add_executable(performance_metrics_tests tests/performance_metrics_tests.cpp)
+target_include_directories(performance_metrics_tests PRIVATE src)
+add_test(NAME performance_metrics_tests COMMAND performance_metrics_tests)

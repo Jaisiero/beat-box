@@ -1,4 +1,5 @@
 #pragma once
+#include "gpu_performance_timer.hpp"
 
 #include "defines.hpp"
 #include "task_manager.hpp"
@@ -10,6 +11,7 @@ struct RendererManager;
 struct GUIManager;
 
 struct RigidBodyManager{
+  GpuPerformanceTimer step_timer;
 
   explicit RigidBodyManager(daxa::Device& device, 
   std::shared_ptr<TaskManager> task_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr);

@@ -30,6 +30,9 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
       gui_manager->task_vertex_buffer, gui_manager->task_line_vertex_buffer,
       gui_manager->task_axes_vertex_buffer, rigid_body_manager->task_sim_config});
 
+  performance.create(gpu->device, gpu->swapchain.get_format());
+  frame_timer.create(gpu->device, "Render GPU HUD timestamps");
+
   render_timing = std::getenv("BB_FRAME_TIMING") != nullptr;
   if (render_timing)
     render_queries = gpu->device.create_timeline_query_pool({.query_count=2,.name="ray_tracing_timing"});
@@ -86,6 +89,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
+        frame_timer.begin(ti.recorder);
         auto const accumulating = status_manager->is_accumulating();
         auto const show_islands = status_manager->is_showing_islands();
         auto const show_normals = status_manager->is_showing_normals();
@@ -242,6 +246,19 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   RT_TG.add_task(axes);
   RT_TG.add_task(lines);
   RT_TG.add_task(points);
+  RT_TG.add_task(daxa::InlineTaskInfo{
+    .attachments = {daxa::inl_attachment(daxa::TaskAccessConsts::COLOR_ATTACHMENT, task_swapchain_image)},
+    .task = [this](daxa::TaskInterface const &ti) {
+      auto const image = ti.get(task_swapchain_image).id;
+      auto const extent = ti.device.image_info(image).value().size;
+      char const *solver = get_solver() == SimSolverType::AVBD ? "AVBD" :
+                           get_solver() == SimSolverType::TGS_SOFT ? "TGS" : "PGS";
+      performance.draw(ti.recorder, image, extent.x, extent.y, rigid_body_manager->step_timer.metric,
+                       frame_timer.metric, solver, !status_manager->is_simulating());
+      frame_timer.end(ti.recorder);
+    },
+    .name = "Performance overlay (final render pass)",
+  });
 
   // Daxa waits the last producer queue of shared external resources (including
   // task_tlas). TaskSubmitInfo's additional semaphore fields are unused in 3.6.
@@ -265,6 +282,8 @@ void RendererManager::destroy()
   }
 
   if (render_timing) { render_queries={}; render_query_pending=false; }
+  performance.destroy();
+  frame_timer.destroy();
   snapshot.destroy(gpu->device);
   gpu->device.destroy_buffer(ray_tracing_config_buffer);
 
@@ -280,7 +299,10 @@ bool RendererManager::execute()
   {
     return false;
   }
+  frame_timer.prepare(gpu->device);
   RT_TG.execute();
+  frame_timer.submitted(gpu->device, daxa::QUEUE_MAIN);
+  ++performance.rates.frames;
   return true;
 }
 
@@ -415,6 +437,14 @@ int RendererManager::render()
     }
     return true;
   };
+  auto performance_solver = get_solver();
+  bool performance_has_frame = false;
+  auto reset_performance = [&] {
+    frame_timer.reset(); rigid_body_manager->step_timer.reset();
+    performance.frame = {}; performance.rates = {};
+    performance.rates.since = std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count();
+    performance_has_frame = false;
+  };
   auto fracture_frame_clock = std::chrono::steady_clock::now();
   while (!window.should_close())
   {
@@ -438,6 +468,14 @@ int RendererManager::render()
     bool const render_due = !snapshot.allocated || (det_steps > 0 && !async_sim) || frame_clock >= next_render;
     double const previous_frame_ms = std::chrono::duration<double, std::milli>(frame_clock - fracture_frame_clock).count();
     if (render_due) {
+      frame_timer.collect(gpu->device);
+      rigid_body_manager->step_timer.collect(gpu->device);
+      if (performance_has_frame) performance.frame.add(previous_frame_ms);
+      performance_has_frame = true;
+      double const seconds = std::chrono::duration<double>(frame_clock - run_start).count();
+      if (performance.rates.refresh(seconds)) {
+        performance.frame.refresh(); frame_timer.metric.refresh(); rigid_body_manager->step_timer.metric.refresh();
+      }
       fracture_frame_clock = frame_clock;
       next_render = frame_clock + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
           std::chrono::duration<double>(1.0 / render_hz));
@@ -480,9 +518,13 @@ int RendererManager::render()
     }
 
     if (!sim_pending) {
+    if (get_solver() != performance_solver) {
+      performance_solver = get_solver(); reset_performance();
+    }
     // reset request (key R): restart the sim from the initial scene at this frame boundary (prior
     // GPU work is already synchronized here), and clear the catch-up accumulator so it doesn't burst.
     if (status_manager->consume_reset()) {
+      reset_performance();
       snapshot_debug_valid = false;
       render_snapshot_current = false;
       snapshot.invalidate();
@@ -494,6 +536,7 @@ int RendererManager::render()
     // scene switch request (F1-F8): rebuild from the chosen scene at this same frame boundary,
     // paused, and clear the catch-up accumulator so it doesn't burst on the first resumed step.
     if (int const requested_scene = status_manager->consume_scene(); requested_scene >= 0) {
+      reset_performance();
       snapshot_debug_valid = false;
       render_snapshot_current = false;
       snapshot.invalidate();
@@ -607,11 +650,13 @@ int RendererManager::render()
         }
       }
       // CPU submit/completion span, including any queued render dependency.
+      ++performance.rates.steps;
       return ms(t1,t3);
     };
     auto const poll_start = std::chrono::steady_clock::now();
     if (sim_pending && gpu->device.oldest_pending_submit_index() > pending_submit) {
       sim_pending = false;
+      ++performance.rates.steps;
       completed_simulation_snapshot = true;
       sim_steps_this_frame = 1u;
       completed_compute_submit = pending_submit;
