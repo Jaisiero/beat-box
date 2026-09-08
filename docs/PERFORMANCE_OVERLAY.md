@@ -57,3 +57,36 @@ five steps, excludes the first ten seconds:
 
 This verifies preserved cadence in the tested workload; it does not claim zero
 GPU cost or statistical significance for the small timing differences.
+
+
+## Investigating the approximately 90 ms session peak
+
+`[SLOW-FRAME]` now records intervals above 33.33 ms with CPU phase totals and
+resize/control/publication tags. Totals include all simulation-only pumps
+between rendering boundaries. They describe the interval that just ended;
+per-pump `[FRAME-PHASES]` fields alone must not be interpreted as the cause of
+the preceding `wall_ms`. Unattributed time is reported separately.
+
+A paused F11 run reproduced **88.34 ms**, of which **84.08 ms** was resize work,
+with zero simulation steps and zero geometry publications. The application
+starts at 860×640; changing it to 3840×2160 recreates the swapchain and render
+images. Daxa 3.6's `ImplSwapchain::recreate` calls `daxa_dvc_wait_idle` before
+cleanup and swapchain creation. The measured resize bucket includes that whole
+operation plus application image allocation, not just the idle wait.
+
+A separate 90-second active F11/AVBD run at 4K, spawning every five steps,
+recorded one 88.24 ms startup interval (80.95 ms resize). It processed 51 fracture
+body events and had no other interval above 33.33 ms. After the first ten seconds:
+
+| Metric | Measured |
+| --- | ---: |
+| Worst frame interval | 18.36 ms |
+| P99 frame interval | 17.17 ms |
+| Physics cadence | 59.98 Hz |
+| Session worst GPU step | 12.00 ms |
+| Session worst GPU render | 6.34 ms |
+
+This reproduces a peak very close to the reported 89.66 ms and isolates a resize
+cause. The original 89.66 ms event had no phase trace, so its exact attribution
+cannot be recovered retrospectively. Peaks remain session-wide, including these
+resize events; instrumentation does not hide them or reset the counters.

@@ -437,9 +437,30 @@ int RendererManager::render()
     }
     return true;
   };
+  // Attribute an interval to the work BEFORE its ending frame boundary,
+  // including non-render simulation pumps. FRAME-PHASES is per-pump detail.
+  struct FrameWindow {
+    enum Phase { WAIT, FRONT, EVENTS, RESIZE, ACQUIRE, EARLY_RENDER, SIM,
+                 EDITS, SYNC, CAPTURE_RENDER, SUBMIT, GC, COUNT };
+    std::array<double, COUNT> ms = {};
+    unsigned resizes = 0, controls = 0, publications = 0, steps = 0;
+    void report(double wall, u64 frame, bool pending) const {
+      if (wall < 1000.0 / 30.0) return;
+      static char const *names[] = {"wait", "front", "events", "resize", "acquire", "early_render",
+                                   "sim", "edits", "sync", "capture_render", "submit", "gc"};
+      double accounted = 0;
+      std::cout << "[SLOW-FRAME] frame=" << frame << " wall_ms=" << wall;
+      for (unsigned i = 0; i < COUNT; ++i) { accounted += ms[i]; std::cout << ' ' << names[i] << "_ms=" << ms[i]; }
+      std::cout << " unattributed_ms=" << wall - accounted << " resizes=" << resizes
+                << " controls=" << controls << " publications=" << publications
+                << " steps=" << steps << " pending=" << pending << std::endl;
+    }
+  } frame_window;
+  auto elapsed_ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b-a).count(); };
   auto performance_solver = get_solver();
   bool performance_has_frame = false;
   auto reset_performance = [&] {
+    ++frame_window.controls;
     frame_timer.reset(); rigid_body_manager->step_timer.reset();
     performance.frame.reset_average(); performance.rates = {};
     performance.rates.since = std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count();
@@ -467,7 +488,10 @@ int RendererManager::render()
     auto const frame_clock = std::chrono::steady_clock::now();
     bool const render_due = !snapshot.allocated || (det_steps > 0 && !async_sim) || frame_clock >= next_render;
     double const previous_frame_ms = std::chrono::duration<double, std::milli>(frame_clock - fracture_frame_clock).count();
+    frame_window.ms[FrameWindow::WAIT] += elapsed_ms(now, frame_clock);
     if (render_due) {
+      if (performance_has_frame) frame_window.report(previous_frame_ms, render_frames_total, sim_pending);
+      frame_window = {};
       frame_timer.collect(gpu->device);
       rigid_body_manager->step_timer.collect(gpu->device);
       if (performance_has_frame) performance.frame.add(previous_frame_ms);
@@ -573,11 +597,15 @@ int RendererManager::render()
     // simulación se ralentiza en algunos momentos"; pace=[rf71 st71] with 31 print
     // frames was the tell). Latent flaw exposed by the render getting 2x faster.
     auto const timing_events_start = std::chrono::steady_clock::now();
-    if (!window.update())
+    if (!window.update()) {
+      frame_window.ms[FrameWindow::FRONT] += elapsed_ms(timing_start, timing_events_start);
+      frame_window.ms[FrameWindow::EVENTS] += elapsed_ms(timing_events_start, std::chrono::steady_clock::now());
       continue;
+    }
     auto const timing_events_end = std::chrono::steady_clock::now();
     if (window.swapchain_out_of_date)
     {
+      ++frame_window.resizes;
       gpu->swapchain_resize();
       window.swapchain_out_of_date = false;
       gpu->device.destroy_image(accumulation_buffer);
@@ -601,6 +629,10 @@ int RendererManager::render()
     auto const timing_acquire_start = std::chrono::steady_clock::now();
     auto swapchain_image = render_due ? gpu->swapchain_acquire_next_image() : daxa::ImageId{};
     auto const timing_acquire_end = std::chrono::steady_clock::now();
+    frame_window.ms[FrameWindow::FRONT] += elapsed_ms(timing_start, timing_events_start);
+    frame_window.ms[FrameWindow::EVENTS] += elapsed_ms(timing_events_start, timing_events_end);
+    frame_window.ms[FrameWindow::RESIZE] += elapsed_ms(timing_events_end, timing_acquire_start);
+    frame_window.ms[FrameWindow::ACQUIRE] += elapsed_ms(timing_acquire_start, timing_acquire_end);
     if (render_due && swapchain_image.is_empty())
       continue;
 
@@ -975,7 +1007,7 @@ int RendererManager::render()
           status_manager->is_updating() ||
           gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN) != completed_main_submit ||
           gpu->device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0) != completed_compute_submit;
-      if (publication_pending) gpu->synchronize();
+      if (publication_pending) { ++frame_window.publications; gpu->synchronize(); }
       timing_sync_end = std::chrono::steady_clock::now();
       accel_struct_mngr->collect_publication_timings();
       rigid_body_manager->release_completed_scene_uploads();
@@ -1033,6 +1065,14 @@ int RendererManager::render()
     }
     auto const timing_async_end = std::chrono::steady_clock::now();
     gpu->garbage_collector();
+    frame_window.steps += sim_steps_this_frame;
+    frame_window.ms[FrameWindow::EARLY_RENDER] += elapsed_ms(timing_acquire_end, sim_phase_start);
+    frame_window.ms[FrameWindow::SIM] += elapsed_ms(sim_phase_start, timing_sim_end);
+    frame_window.ms[FrameWindow::EDITS] += elapsed_ms(timing_sim_end, timing_edits_end);
+    frame_window.ms[FrameWindow::SYNC] += elapsed_ms(timing_edits_end, timing_sync_end);
+    frame_window.ms[FrameWindow::CAPTURE_RENDER] += elapsed_ms(timing_sync_end, timing_render_end);
+    frame_window.ms[FrameWindow::SUBMIT] += elapsed_ms(timing_render_end, timing_async_end);
+    frame_window.ms[FrameWindow::GC] += elapsed_ms(timing_async_end, std::chrono::steady_clock::now());
     if (frame_timing && render_due) {
       auto const end = std::chrono::steady_clock::now();
       auto ms = [](auto a,auto b) { return std::chrono::duration<double,std::milli>(b-a).count(); };
