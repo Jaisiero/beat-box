@@ -1,4 +1,7 @@
 #pragma once
+#include <cstdlib>
+#include <iostream>
+#include <string>
 #include "defines.hpp"
 #include "performance_metrics.hpp"
 
@@ -11,9 +14,13 @@ struct GpuPerformanceTimer {
   std::array<Slot, SLOT_COUNT> slots = {};
   daxa::TimelineQueryPool pool = {};
   PerformanceMetric metric;
+  std::string trace_name;
+  bool trace_enabled = false;
   u64 epoch = 0;
   u32 active = SLOT_COUNT;
   void create(daxa::Device &device, char const *name) {
+    trace_name = name;
+    trace_enabled = std::getenv("BB_GPU_TIMELINE") != nullptr;
     pool = device.create_timeline_query_pool({.query_count = SLOT_COUNT * 2, .name = name});
   }
   void collect(daxa::Device &device) {
@@ -22,6 +29,11 @@ struct GpuPerformanceTimer {
       auto q = pool.get_query_results(i * 2, 2);
       if (!q[1] || !q[3]) continue;
       double const ms = double(q[2] - q[0]) * device.properties().limits.timestamp_period / 1e6;
+      if (trace_enabled)
+        std::cout << "[GPU-SPAN] name=\"" << trace_name << "\" submit=" << slots[i].submit
+                  << " begin_tick=" << q[0] << " end_tick=" << q[2]
+                  << " period_ns=" << device.properties().limits.timestamp_period
+                  << " ms=" << ms << std::endl;
       // Late results from an older scene still count toward session peaks.
       if (slots[i].epoch == epoch) metric.add(ms); else metric.observe_peak(ms);
       slots[i].pending = false;

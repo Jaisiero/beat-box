@@ -301,7 +301,11 @@ bool RendererManager::execute()
     return false;
   }
   frame_timer.prepare(gpu->device);
+  bool const query_was_pending = render_query_pending;
   RT_TG.execute();
+  // Availability can still describe the previous use until the queued reset runs.
+  if (render_query_pending && !query_was_pending)
+    render_query_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN);
   frame_timer.submitted(gpu->device, daxa::QUEUE_MAIN);
   ++performance.rates.frames;
   return true;
@@ -550,7 +554,8 @@ int RendererManager::render()
       std::cout << "[PERF] BB_RUN_SECONDS=" << run_limit_s << " elapsed -> exiting." << std::endl;
       break;
     }
-    if (render_timing && render_query_pending) {
+    if (render_timing && render_query_pending &&
+          render_query_submit < gpu->device.oldest_pending_submit_index()) {
       auto q = render_queries.get_query_results(0, 2);
       if (q[1] && q[3]) {
         std::cout << "[RENDER-GPU] trace_ms=" << double(q[2]-q[0])*gpu->device.properties().limits.timestamp_period/1e6 << std::endl;
@@ -704,7 +709,8 @@ int RendererManager::render()
       auto ms=[](auto a,auto b) { return std::chrono::duration<double,std::milli>(b-a).count(); };
       sim_order_ms+=ms(t0,t1); sim_submit_ms+=ms(t1,t2); sim_wait_ms+=ms(t2,t3);
       // The simulation completion boundary also covers the sampled render.
-      if (render_timing && render_query_pending) {
+      if (render_timing && render_query_pending &&
+          render_query_submit < gpu->device.oldest_pending_submit_index()) {
         auto const q=render_queries.get_query_results(0,2);
         if (q[1]!=0u && q[3]!=0u) {
           std::cout << "[RENDER-GPU] trace_ms=" << double(q[2]-q[0])*gpu->device.properties().limits.timestamp_period/1e6 << std::endl;

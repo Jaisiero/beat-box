@@ -19,7 +19,8 @@ endif()
 # bump; see patches/daxa-3.6/README.md) or it does not compile. Apply it idempotently on every
 # configure: if it applies cleanly -> apply; if it reverse-applies -> already patched, skip;
 # otherwise the local Daxa tree diverged -> warn (do not hard-fail a working local setup).
-set(BB_DAXA_PATCH "${CMAKE_CURRENT_LIST_DIR}/../patches/daxa-3.6/local-changes.patch")
+foreach(BB_DAXA_PATCH_NAME local-changes.patch compute-occupancy.patch)
+set(BB_DAXA_PATCH "${CMAKE_CURRENT_LIST_DIR}/../patches/daxa-3.6/${BB_DAXA_PATCH_NAME}")
 if(EXISTS "${BB_DAXA_PATCH}")
     find_package(Git REQUIRED)
     execute_process(COMMAND ${GIT_EXECUTABLE} apply --check "${BB_DAXA_PATCH}"
@@ -29,18 +30,20 @@ if(EXISTS "${BB_DAXA_PATCH}")
         execute_process(COMMAND ${GIT_EXECUTABLE} apply "${BB_DAXA_PATCH}"
             WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../lib/Daxa"
             COMMAND_ERROR_IS_FATAL ANY)
-        message(STATUS "beat-box: applied patches/daxa-3.6/local-changes.patch to lib/Daxa")
+        message(STATUS "beat-box: applied patches/daxa-3.6/${BB_DAXA_PATCH_NAME} to lib/Daxa")
     else()
         execute_process(COMMAND ${GIT_EXECUTABLE} apply --check --reverse "${BB_DAXA_PATCH}"
             WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/../lib/Daxa"
             RESULT_VARIABLE BB_DAXA_PATCH_REVERSED OUTPUT_QUIET ERROR_QUIET)
         if(NOT BB_DAXA_PATCH_REVERSED EQUAL 0)
             message(WARNING "beat-box: lib/Daxa matches neither a clean 3.6 checkout nor the patched "
-                "state (patches/daxa-3.6/local-changes.patch). The build may fail to compile; see "
+                "state (patches/daxa-3.6/${BB_DAXA_PATCH_NAME}). The build may fail to compile; see "
                 "patches/daxa-3.6/README.md to reconcile the tree.")
         endif()
     endif()
 endif()
+
+endforeach()
 
 # If the user has set a toolchain file, we'll want to chainload it via vcpkg
 if(NOT (CMAKE_TOOLCHAIN_FILE MATCHES "/scripts/buildsystems/vcpkg.cmake") AND DEFINED CMAKE_TOOLCHAIN_FILE)

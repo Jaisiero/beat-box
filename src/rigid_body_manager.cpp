@@ -3135,6 +3135,10 @@ bool RigidBodyManager::read_back_sim_config(bool completed_simulation_snapshot)
       std::cout << (tgs ? "[TGS-STAGES]" : "[AVBD-STAGES]");
       for (daxa_u32 i = 0u; i < 5u; ++i)
         std::cout << ' ' << names[i] << '=' << double(results[2u*(i+1u)] - results[2u*i]) * device.properties().limits.timestamp_period / 1.0e6;
+      if (std::getenv("BB_GPU_TIMELINE")) {
+        std::cout << " gpu_ticks=";
+        for (daxa_u32 i = 0u; i < 6u; ++i) std::cout << (i ? ":" : "") << results[2u*i];
+      }
       std::cout << std::endl;
     }
     solver_stage_query_pending = false;
