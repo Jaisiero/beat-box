@@ -13,13 +13,16 @@ patch block in `cmake/deps.cmake`). To apply it by hand instead:
 cd lib/Daxa
 git checkout 3.6
 git apply ../../patches/daxa-3.6/local-changes.patch
+git apply ../../patches/daxa-3.6/compute-occupancy.patch
 ```
 
-If you modify `lib/Daxa` further, regenerate the patch so fresh clones pick it up:
+Keep the two patches separate when updating Daxa: regenerate each against the
+checkout with only that patch reversed, rather than combining all vendor changes.
 
-```sh
-git -C lib/Daxa diff > patches/daxa-3.6/local-changes.patch
-```
+`compute-occupancy.patch` enables optional NVIDIA compute occupancy priority on
+supported devices. It preserves the original behavior elsewhere and supports
+`BB_NV_COMPUTE_PRIORITY=0` for A/B comparisons. See
+[GPU step contention](../../docs/GPU_STEP_CONTENTION.md) for measurements and scope.
 
 Contents of `local-changes.patch`:
 - `cmake/deps.cmake`: bump bundled Slang `2025.11` -> `2026.10`

@@ -61,6 +61,7 @@ struct RendererManager
   daxa::TimelineQueryPool render_queries = {};
   bool render_timing = false;
   bool render_query_pending = false;
+  u64 render_query_submit = 0;
   daxa::TaskImage task_swapchain_image{{.is_swapchain_image = true, .name = "swapchain_image"}};
   daxa::TaskImage task_accumulation_buffer{{.is_swapchain_image = false, .name = "accumulation_buffer"}};
   // render scale (BB_RENDER_SCALE env, 0.25..1.0): trace into a SCALED offscreen target,
