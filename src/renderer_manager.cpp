@@ -1,3 +1,4 @@
+#include "render_pacing.hpp"
 #define _CRT_SECURE_NO_WARNINGS // std::getenv (BB_RUN_SECONDS) on MSVC
 #include "renderer_manager.hpp"
 #include "runtime_diagnostics.hpp"
@@ -402,6 +403,9 @@ int RendererManager::render()
       : det_steps == 0;
   double render_hz = 60.0;
   if (auto const *e = std::getenv("BB_RENDER_HZ")) render_hz = std::clamp(std::atof(e), 1.0, 240.0);
+  bool const render_fairness = !std::getenv("BB_RENDER_FAIRNESS") ||
+      beat_box_diagnostics::parse_boolean("BB_RENDER_FAIRNESS", std::getenv("BB_RENDER_FAIRNESS"));
+  daxa_u64 deferred_render_polls = 0;
   auto next_render = std::chrono::steady_clock::now();
   bool sim_pending = false;
   bool render_snapshot_current = false;
@@ -486,8 +490,19 @@ int RendererManager::render()
       if (wait_s > 0) glfwWaitEventsTimeout(wait_s);
     }
     auto const frame_clock = std::chrono::steady_clock::now();
-    bool const render_due = !snapshot.allocated || (det_steps > 0 && !async_sim) || frame_clock >= next_render;
+    bool render_due = !snapshot.allocated || (det_steps > 0 && !async_sim) || frame_clock >= next_render;
     double const previous_frame_ms = std::chrono::duration<double, std::milli>(frame_clock - fracture_frame_clock).count();
+    if (render_due && snapshot.allocated && render_fairness && async_sim && det_steps == 0 &&
+        sim_pending && render_hz > 1.0 / SIM_DT_S) {
+      double const step_age = std::chrono::duration<double>(frame_clock - pending_start).count();
+      double const retry = render_retry_delay(step_age, previous_frame_ms / 1000.0, SIM_DT_S);
+      if (retry > 0) {
+        render_due = false;
+        ++deferred_render_polls;
+        next_render = frame_clock + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(retry));
+      }
+    }
     frame_window.ms[FrameWindow::WAIT] += elapsed_ms(now, frame_clock);
     if (render_due) {
       if (performance_has_frame) frame_window.report(previous_frame_ms, render_frames_total, sim_pending);
@@ -510,6 +525,7 @@ int RendererManager::render()
                     << " sim_ms=" << sim.current_ms << " worst_step_ms=" << sim.worst_ms
                     << " render_ms=" << render.current_ms << " worst_render_ms=" << render.worst_ms
                     << " sim_hz=" << performance.rates.sim_hz << " render_fps=" << performance.rates.render_fps
+                    << " deferred_render_polls=" << deferred_render_polls
                     << " frame_ms=" << performance.frame.current_ms << " worst_frame_ms=" << performance.frame.worst_ms
                     << std::endl;
         }

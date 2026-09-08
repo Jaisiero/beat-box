@@ -153,3 +153,7 @@ add_test(NAME gpu_pool_allocator_tests COMMAND gpu_pool_allocator_tests)
 add_executable(performance_metrics_tests tests/performance_metrics_tests.cpp)
 target_include_directories(performance_metrics_tests PRIVATE src)
 add_test(NAME performance_metrics_tests COMMAND performance_metrics_tests)
+
+add_executable(render_pacing_tests tests/render_pacing_tests.cpp)
+target_include_directories(render_pacing_tests PRIVATE src)
+add_test(NAME render_pacing_tests COMMAND render_pacing_tests)
