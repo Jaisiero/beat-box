@@ -23,11 +23,12 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
   if (device.is_valid())
   {
     step_timer.create(device, "Simulation step HUD timestamps");
-    narrow_phase_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr || std::getenv("BB_FRAME_TIMING") != nullptr;
+    avbd_fine_timing = std::getenv("BB_AVBD_FINE_TIMING") != nullptr;
+    narrow_phase_timing = avbd_fine_timing || std::getenv("BB_RESPAWN_TIMING") != nullptr || std::getenv("BB_FRAME_TIMING") != nullptr;
     if (narrow_phase_timing)
     {
       narrow_phase_queries = device.create_timeline_query_pool({.query_count = 2, .name = "fracture_narrow_phase"});
-      solver_stage_queries = device.create_timeline_query_pool({.query_count = 6, .name = "solver_stages"});
+      solver_stage_queries = device.create_timeline_query_pool({.query_count = 6u + (avbd_fine_timing ? 2u + 2u * BB_AVBD_ITERATIONS : 0u), .name = "solver_stages"});
     }
     pipeline_RBD = task_manager->create_compute(RigidBodyDispatcherInfo{}.info);
     pipeline_GMC = task_manager->create_compute(GenerateMortonCodesInfo{}.info);
@@ -1691,6 +1692,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   auto record_solve = [&](TaskGraph &G, SimSolverType solver)
   {
   auto profile_point = [&](daxa_u32 index) {
+    if (index >= 6u && !avbd_fine_timing) return;
     if (!narrow_phase_timing || (solver != SimSolverType::AVBD && solver != SimSolverType::TGS_SOFT)) return;
     G.add_task(daxa::InlineTaskInfo{
       // Anchor the marker to the ordered simulation chain. An attachment-free
@@ -1698,7 +1700,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .attachments = {daxa::inl_attachment(daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE, task_sim_config)},
       .task = [this, index, solver](daxa::TaskInterface const &ti) {
         if (index == 0u)
-          ti.recorder.reset_timestamps({.query_pool = solver_stage_queries, .start_index = 0, .count = 6});
+          ti.recorder.reset_timestamps({.query_pool = solver_stage_queries, .start_index = 0, .count = 6u + (avbd_fine_timing ? 2u + 2u * BB_AVBD_ITERATIONS : 0u)});
         ti.recorder.write_timestamp({.query_pool = solver_stage_queries, .pipeline_stage = daxa::PipelineStageFlagBits::ALL_COMMANDS, .query_index = index});
         if (index == 5u) { solver_stage_query_pending = true; stage_query_solver = solver; }
       },
@@ -1808,7 +1810,9 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   for (daxa_u32 it = 0u; it < BB_AVBD_ITERATIONS; ++it)
   {
     G.add_task(task_AVBD_PRIM);
+    profile_point(8u + 2u * it);
     G.add_task(task_AVBD_DUAL);
+    profile_point(9u + 2u * it);
   }
   } // end AVBD primal/dual
   if (solver == SimSolverType::AVBD) profile_point(3u);
@@ -1851,6 +1855,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   G.add_task(task_AVBD_FIN); // AVBD: reconstruct velocities from the pose delta
   G.add_task(task_AVBD_IMPJ);  // inelastic impact (e=0): rebound-removal impulses
   G.add_task(task_AVBD_IMPA);  // inelastic impact (e=0): per-body application
+  profile_point(6u);
   // AVBD post-stabilization (reference postStabilize): primal passes with alpha = 0
   // (full C0) AFTER velocities are reconstructed -> corrects pre-existing penetration
   // positionally without injecting momentum. Multiple sweeps converge deep piles, and
@@ -1866,6 +1871,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   {
     G.add_task(task_AVBD_PRIM_PS_vec[d]);
   }
+  profile_point(7u);
   for (daxa_u32 ps = 1u; ps < BB_AVBD_POST_STAB_SWEEPS; ++ps)
   {
     G.add_task(task_AVBD_PRIM_PS_plain);
@@ -3123,9 +3129,11 @@ bool RigidBodyManager::read_back_sim_config(bool completed_simulation_snapshot)
 
   if (narrow_phase_timing && solver_stage_query_pending)
   {
-    auto const results = solver_stage_queries.get_query_results(0, 6);
+    bool const fine = avbd_fine_timing && stage_query_solver == SimSolverType::AVBD;
+    daxa_u32 const count = 6u + (fine ? 2u + 2u * BB_AVBD_ITERATIONS : 0u);
+    auto const results = solver_stage_queries.get_query_results(0, count);
     bool available = true;
-    for (daxa_u32 i = 0u; i < 6u; ++i) available &= results[2u*i+1u] != 0u;
+    for (daxa_u32 i = 0u; i < count; ++i) available &= results[2u*i+1u] != 0u;
     if (available)
     {
       static constexpr char const *avbd_names[] = {"setup_ms", "prepare_ms", "main_ms", "post_ms", "finalize_ms"};
@@ -3140,6 +3148,19 @@ bool RigidBodyManager::read_back_sim_config(bool completed_simulation_snapshot)
         for (daxa_u32 i = 0u; i < 6u; ++i) std::cout << (i ? ":" : "") << results[2u*i];
       }
       std::cout << std::endl;
+      if (fine) {
+        auto elapsed = [&](daxa_u32 a, daxa_u32 b) {
+          return double(results[2u*b] - results[2u*a]) * device.properties().limits.timestamp_period / 1.0e6;
+        };
+        double primal = 0.0, dual = 0.0;
+        for (daxa_u32 i = 0u; i < BB_AVBD_ITERATIONS; ++i) {
+          primal += elapsed(i ? 7u + 2u*i : 2u, 8u + 2u*i);
+          dual += elapsed(8u + 2u*i, 9u + 2u*i);
+        }
+        std::cout << "[AVBD-DETAIL] primal_ms=" << primal << " dual_ms=" << dual
+                  << " impact_ms=" << elapsed(3u, 6u) << " cascade_ms=" << elapsed(6u, 7u)
+                  << " symmetric_ms=" << elapsed(7u, 4u) << std::endl;
+      }
     }
     solver_stage_query_pending = false;
   }
@@ -3493,17 +3514,18 @@ void beatbox::RigidBodyManager::verify_fracture_allocator_gpu()
   state->private_shapes[0]=1u;
   shapes[0]={.dims={1,1,1}};
   shapes[1]={.dims={1,1,1},.occ_offset=1u,.surf_offset=1u,.sdf_offset=8u};
-  edit_bodies[0]={.id=0u,.position={0,-10,0},.rotation=Quaternion(0,0,0,1)}; // a static below the kill plane must survive
+  edit_bodies[0]={.id=0u,.primitive_count=1u,.position={0,-10,0},.rotation=Quaternion(0,0,0,1)}; // a static below the kill plane must survive
   edit_bodies[1]={.id=1u,.flags=RigidBodyFlag::DYNAMIC,.primitive_count=1u,.shape_index=1u,
                   .position={0,-1,0},.rotation=Quaternion(0,0,0,1)};
   *edit_template={.flags=RigidBodyFlag::DYNAMIC | RigidBodyFlag::GRAVITY,
                   .primitive_count=1u,.shape_index=2u,.rotation=Quaternion(0,0,0,1)};
-  auto run_edit=[&](daxa_u32 operation) {
+  std::swap(edit_bodies[0],edit_bodies[1]); // GPU body rows need not equal stable IDs.
+  auto run_edit=[&](daxa_u32 operation, daxa_u32 primitive_capacity=MAX_PRIMITIVE_COUNT) {
     auto rec=device.create_command_recorder({});
     rec.pipeline_barrier({.src_access=daxa::AccessConsts::WRITE,.dst_access=daxa::AccessConsts::COMPUTE_SHADER_READ_WRITE});
     rec.set_pipeline(*pipeline_fracture_scene_edit);
     rec.push_constant(FractureSceneEditPushConstants{address(state_buffer),address(edit_bodies_buffer),
-        address(shapes_buffer),address(edit_template_buffer),address(edit_spawn_buffer),address(edit_output_buffer),2u,1u,operation,0.0f});
+        address(shapes_buffer),address(edit_template_buffer),address(edit_spawn_buffer),address(edit_output_buffer),2u,1u,operation,0.0f,primitive_capacity});
     rec.dispatch({.x=1u});
     rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,.dst_access=daxa::AccessConsts::HOST_READ});
     auto commands=rec.complete_current_commands();device.submit_commands({.command_lists=std::array{commands}});
@@ -3512,17 +3534,22 @@ void beatbox::RigidBodyManager::verify_fracture_allocator_gpu()
   run_edit(FRACTURE_EDIT_SPAWN);
   check(edit_output->status==2u && edit_output->retired_count==0u && edit_output->spawn_id==MAX_U32);
   check(state->spawn_seed==123u && state->pools[5].live_units==2u && state->private_shapes[0]==1u);
-  run_edit(FRACTURE_EDIT_RETIRE | FRACTURE_EDIT_SPAWN);
-  check(edit_output->status==0u && edit_output->retired_count==1u && edit_output->ids[0]==1u);
+  run_edit(FRACTURE_EDIT_RETIRE | FRACTURE_EDIT_SPAWN,1u);
+  check(edit_output->status==2u && edit_output->retired_count==1u && edit_output->ids[0]==1u);
+  check(edit_output->spawn_id==MAX_U32 && state->spawn_seed==123u);
+  check(state->pools[5].live_units==1u && state->body_edits[1].kind==2u);
+  for (auto &pool:state->pools) check(pool.valid());
+  run_edit(FRACTURE_EDIT_SPAWN,2u); // exact fit: static primitive plus reused spawn
+  check(edit_output->status==0u && edit_output->retired_count==0u);
   check(edit_output->spawn_id==1u && edit_output->spawn_template==0u);
   check(edit_spawn->id==1u && edit_spawn->shape_index==2u && edit_spawn->position.y>=10.6f && edit_spawn->position.y<=11.4f);
   check(state->pools[5].live_units==2u && state->pools[4].live_units==1u && state->private_shapes[0]==0u);
   check(state->body_edits[1].kind==3u && state->body_edits[0].kind==0u);
-  check(edit_bodies[0].position.y==-10.0f && edit_bodies[1].shape_index==1u);
+  check(edit_bodies[1].position.y==-10.0f && edit_bodies[0].shape_index==1u);
   for (auto &pool:state->pools) check(pool.valid());
   run_edit(0u);
   check(edit_output->status==0u && edit_output->retired_count==0u && edit_output->spawn_id==MAX_U32);
-  std::cout << "[SCENE-EDIT-VERIFY] full-pool refusal, retire-and-reuse, static preservation and no-op MATCH" << std::endl;
+  std::cout << "[SCENE-EDIT-VERIFY] full-pool/AS-budget refusal, rollback, exact-fit reuse, static preservation and no-op MATCH" << std::endl;
   for (auto buffer:buffers) device.destroy_buffer(buffer);
   std::cout << "[ALLOCATION-VERIFY] reservation, indirect packing, retirement and last-pool rollback MATCH" << std::endl;
 }
@@ -3542,7 +3569,7 @@ FractureSceneEditManifest beatbox::RigidBodyManager::edit_fracture_scene_gpu(boo
       .spawn_addr=device.device_address(fracture_spawn_body).value(),
       .output_addr=device.device_address(fracture_scene_manifest).value(),
       .body_count=renderer_manager->get_rigid_body_count(),.template_count=fracture_spawn_template_count,
-      .operation=(cull ? FRACTURE_EDIT_RETIRE : 0u) | (spawn ? FRACTURE_EDIT_SPAWN : 0u),.kill_y=kill_y});
+      .operation=(cull ? FRACTURE_EDIT_RETIRE : 0u) | (spawn ? FRACTURE_EDIT_SPAWN : 0u),.kill_y=kill_y,.primitive_capacity=MAX_PRIMITIVE_COUNT});
   rec.dispatch({.x=1u});
   rec.pipeline_barrier({.src_access=daxa::AccessConsts::COMPUTE_SHADER_WRITE,.dst_access=daxa::AccessConsts::HOST_READ});
   auto list=rec.complete_current_commands();device.submit_commands({.command_lists=std::array{list}});

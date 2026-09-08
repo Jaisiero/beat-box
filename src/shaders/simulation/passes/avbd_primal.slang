@@ -260,7 +260,11 @@ void avbd_primal_specialized(daxa_u32vec3 compute_i, daxa_f32 stab_alpha)
           daxa_f32vec3 ar1_0, ar2_0, ar1_1, ar2_1;
           daxa_f32 C0t0, C0t1;
           daxa_f32 Ct0 = avbd_dir_C(td0, m, j, r1, r2, s1, s2, dyn1, dyn2, stab_alpha, motion1, motion2, ar1_0, ar2_0, C0t0);
-          daxa_f32 Ct1 = avbd_dir_C(td1, m, j, r1, r2, s1, s2, dyn1, dyn2, stab_alpha, motion1, motion2, ar1_1, ar2_1, C0t1);
+          // The second tangent uses exactly the same step-start anchor arms.
+          ar1_1 = ar1_0; ar2_1 = ar2_0;
+          daxa_f32 Ct1 = avbd_dir_C_from_arms(td1,
+              dyn1 ? s1->pos_start : r1->position, dyn2 ? s2->pos_start : r2->position,
+              ar1_1, ar2_1, dyn1, dyn2, stab_alpha, motion1, motion2, C0t1);
           daxa_f32 ft0 = m->contacts[j].tangent_mass[0] * Ct0 + m->contacts[j].tangent_impulse[0];
           daxa_f32 ft1 = m->contacts[j].tangent_mass[1] * Ct1 + m->contacts[j].tangent_impulse[1];
           daxa_f32 fmag = sqrt(ft0 * ft0 + ft1 * ft1);

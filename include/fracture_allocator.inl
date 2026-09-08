@@ -73,6 +73,7 @@ struct FractureSceneEditPushConstants
   daxa_u64 allocator_addr, bodies_addr, shapes_addr, templates_addr, spawn_addr, output_addr;
   daxa_u32 body_count, template_count, operation;
   daxa_f32 kill_y;
+  daxa_u32 primitive_capacity;
 };
 
 #if defined(__cplusplus)

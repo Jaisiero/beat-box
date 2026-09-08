@@ -371,6 +371,7 @@ private:
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
   daxa::BufferId pick_state_buffer = {}; // host-visible bridge (see task_pick_state)
   bool narrow_phase_timing = false;
+  bool avbd_fine_timing = false;
   bool narrow_phase_query_pending = false;
   daxa::TimelineQueryPool narrow_phase_queries = {};
   daxa::TimelineQueryPool solver_stage_queries = {};
