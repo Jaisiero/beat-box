@@ -22,6 +22,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
   }
   if (device.is_valid())
   {
+    step_timer.create(device, "Simulation step HUD timestamps");
     narrow_phase_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr || std::getenv("BB_FRAME_TIMING") != nullptr;
     if (narrow_phase_timing)
     {
@@ -1704,6 +1705,16 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .name = "Solver profiling boundary",
     });
   };
+  auto hud_timestamp = [&](bool start) {
+    G.add_task(daxa::InlineTaskInfo{
+      .attachments = {daxa::inl_attachment(daxa::TaskBufferAccess::COMPUTE_SHADER_READ_WRITE, task_sim_config)},
+      .task = [this, start](daxa::TaskInterface const &ti) {
+        if (start) step_timer.begin(ti.recorder); else step_timer.end(ti.recorder);
+      },
+      .name = start ? "Step GPU timer begin" : "Step GPU timer end",
+    });
+  };
+  hud_timestamp(true);
   profile_point(0u);
   G.add_task(task_PS); // mouse pick-and-drag spring (velocity injection BEFORE the step)
   G.add_task(task_RC);
@@ -1918,6 +1929,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
   G.add_task(task_update);
   profile_point(5u);
   G.add_task(sim_config_readback_task());
+  hud_timestamp(false);
   }; // end record_solve lambda
   record_solve(RB_TG_pgs,  SimSolverType::PGS_SOFT);
   record_solve(RB_TG_avbd, SimSolverType::AVBD);
@@ -2058,6 +2070,7 @@ void RigidBodyManager::record_update_sim_config_tasks(TaskGraph &out_update_SC_T
 
 void RigidBodyManager::destroy()
 {
+  step_timer.destroy();
   if (!initialized)
   {
     return;
@@ -2144,7 +2157,9 @@ bool RigidBodyManager::simulate()
   TaskGraph &RB_TG_active = (solver_type == SimSolverType::AVBD)     ? RB_TG_avbd
                                 : (solver_type == SimSolverType::TGS_SOFT) ? RB_TG_tgs
                                                                            : RB_TG_pgs;
+  step_timer.prepare(device);
   RB_TG_active.execute();
+  step_timer.submitted(device, daxa::QUEUE_COMPUTE_0);
 
   return initialized;
 }
