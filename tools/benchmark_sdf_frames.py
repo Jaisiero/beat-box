@@ -79,7 +79,7 @@ def run(runtime, env, log, steps, width, height):
     log.write_text(text, encoding="utf-8")
     if (process.returncode or len(states) != steps or errors or not geometry or
             f"{width}x{height}" not in geometry[0] or
-            re.search(r"VUID-|FAILED|MISMATCH|\[CHAIN\] max=\d+ errors=[1-9]", text) or
+            re.search(r"ERROR:|AS rebuild failed|VUID-|FAILED|MISMATCH|\[CHAIN\] max=\d+ errors=[1-9]", text) or
             any(not line.rstrip().endswith("viol=0") for line in states)):
         raise RuntimeError(f"Invalid run: {log}; exit={process.returncode}; states={len(states)}/{steps}; resize errors: {errors}")
     log.with_suffix(".json").write_text(json.dumps(intervals), encoding="utf-8")

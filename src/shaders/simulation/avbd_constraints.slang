@@ -67,20 +67,12 @@ daxa_f32vec3 avbd_q_rotate(Quaternion q, daxa_f32vec3 u)
   return u + 2.0f * cross(q.v, cross(q.v, u) + q.w * u);
 }
 
-daxa_f32 avbd_dir_C(daxa_f32vec3 d, Manifold* m, daxa_u32 j,
-                    RigidBody* r1, RigidBody* r2,
-                    AvbdBodyState* s1, AvbdBodyState* s2,
-                    bool dyn1, bool dyn2, daxa_f32 stab_alpha, AvbdMotion motion1, AvbdMotion motion2,
-                    out daxa_f32vec3 ar1, out daxa_f32vec3 ar2, out daxa_f32 C0t)
+// Reuse already-rotated anchor arms for another tangent direction of the same contact.
+daxa_f32 avbd_dir_C_from_arms(daxa_f32vec3 d, daxa_f32vec3 c1, daxa_f32vec3 c2,
+                            daxa_f32vec3 ar1, daxa_f32vec3 ar2,
+                            bool dyn1, bool dyn2, daxa_f32 stab_alpha,
+                            AvbdMotion motion1, AvbdMotion motion2, out daxa_f32 C0t)
 {
-  // step-start poses (statics: current pose == start pose)
-  daxa_f32vec3 c1 = dyn1 ? s1->pos_start : r1->position;
-  daxa_f32vec3 c2 = dyn2 ? s2->pos_start : r2->position;
-  Quaternion q1 = dyn1 ? Quaternion(s1->rot_start.v, s1->rot_start.w) : Quaternion(r1->rotation.v, r1->rotation.w);
-  Quaternion q2 = dyn2 ? Quaternion(s2->rot_start.v, s2->rot_start.w) : Quaternion(r2->rotation.v, r2->rotation.w);
-  // world arms of the anchored contact points at step start
-  ar1 = avbd_q_rotate(q1, m->contacts[j].anchor_a);
-  ar2 = avbd_q_rotate(q2, m->contacts[j].anchor_b);
   // pre-existing tangential drift between the anchors (C grows when body2 leads along +d).
   // The positional pull-back only acts on the drift beyond a small slop: a deadband that
   // keeps the post-stabilization sweep from perpetually micro-correcting compressed pile
@@ -97,4 +89,21 @@ daxa_f32 avbd_dir_C(daxa_f32vec3 d, Manifold* m, daxa_u32 j,
     C += dot(d, motion2.translation + cross(motion2.rotation, ar2));
   }
   return C;
+}
+
+daxa_f32 avbd_dir_C(daxa_f32vec3 d, Manifold* m, daxa_u32 j,
+                    RigidBody* r1, RigidBody* r2,
+                    AvbdBodyState* s1, AvbdBodyState* s2,
+                    bool dyn1, bool dyn2, daxa_f32 stab_alpha, AvbdMotion motion1, AvbdMotion motion2,
+                    out daxa_f32vec3 ar1, out daxa_f32vec3 ar2, out daxa_f32 C0t)
+{
+  // step-start poses (statics: current pose == start pose)
+  daxa_f32vec3 c1 = dyn1 ? s1->pos_start : r1->position;
+  daxa_f32vec3 c2 = dyn2 ? s2->pos_start : r2->position;
+  Quaternion q1 = dyn1 ? Quaternion(s1->rot_start.v, s1->rot_start.w) : Quaternion(r1->rotation.v, r1->rotation.w);
+  Quaternion q2 = dyn2 ? Quaternion(s2->rot_start.v, s2->rot_start.w) : Quaternion(r2->rotation.v, r2->rotation.w);
+  // world arms of the anchored contact points at step start
+  ar1 = avbd_q_rotate(q1, m->contacts[j].anchor_a);
+  ar2 = avbd_q_rotate(q2, m->contacts[j].anchor_b);
+  return avbd_dir_C_from_arms(d, c1, c2, ar1, ar2, dyn1, dyn2, stab_alpha, motion1, motion2, C0t);
 }

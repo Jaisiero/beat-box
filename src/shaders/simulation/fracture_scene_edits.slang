@@ -41,6 +41,24 @@ void entry_fracture_scene_edit(uint3 tid : SV_DispatchThreadID)
   uint source=spawn_random(rng)%P.template_count;
   uint anvil=spawn_random(rng)%4u;
   RigidBody body=((RigidBody*)P.templates_addr)[source];
+  // Reject a spawn before publishing it if its AS primitives cannot fit.
+  // Retired slots still publish a one-primitive tombstone; a reused slot replaces it.
+  RigidBody* bodies=(RigidBody*)P.bodies_addr;
+  uint remaining=P.primitive_capacity;
+  bool fits=body.primitive_count<=remaining;
+  if (fits) remaining-=body.primitive_count;
+  for (uint i=0u;i<P.body_count && fits;++i) {
+    RigidBody live=bodies[i];
+    if (live.id==slot) continue; // rows are spatially sorted; allocator slots are stable IDs
+    uint count=state->body_edits[live.id].kind==2u ? 1u : live.primitive_count;
+    fits=count<=remaining;
+    if (fits) remaining-=count;
+  }
+  if (!fits) {
+    if (!state->pools[5].release(slot,1u)) { ++state->failures;out->status=3u; }
+    else out->status=2u;
+    return; // Preserve spawn_seed and body_edits: no partial spawn survives rejection.
+  }
   body.id=slot;
   float x=-9.0f+float(anvil)*6.0f+(spawn_unit(rng)*2.0f-1.0f)*0.4f;
   float y=11.0f+(spawn_unit(rng)*2.0f-1.0f)*0.4f;
