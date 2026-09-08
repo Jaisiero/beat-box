@@ -97,3 +97,40 @@ session-wide and are not reset.
 A resize-filter regression run recorded an unfiltered 82.13 ms interval while
 WORST FRAME remained at 18.89 ms. All nine CTest targets pass, including exclusion
 of resize duration and frame count from FPS without changing simulation Hz.
+
+## Dense F11 at 60 versus 144 Hz
+
+`BB_HUD_TRACE=1` logs the published HUD values every half second without enabling
+per-frame or per-stage tracing. `BB_FRAME_TIMING` also includes these records.
+This makes a reported current/peak contradiction auditable without clamping or
+otherwise hiding the values. The same metric owns the mean and session maximum;
+scene/solver resets clear only its mean. No numerical inconsistency was reproduced.
+
+Two 90-second AVBD runs at 4K used `BB_FRACTURE_SPAWN_STEPS=1` and stage tracing,
+reaching 995 bodies. The last 30 seconds give the following averages of published
+HUD windows (stage rows are per-step averages):
+
+| Metric | Render target 60 Hz | Render target 144 Hz |
+| --- | ---: | ---: |
+| Simulation GPU interval | 7.40 ms | 17.90 ms |
+| Simulation cadence | 59.99 Hz | 44.09 Hz |
+| Render GPU interval | 5.21 ms | 5.18 ms |
+| Render cadence | 59.75 FPS | 133.77 FPS |
+| Narrow phase | 1.17 ms | 1.15 ms |
+| AVBD main | 2.25 ms | 6.56 ms |
+| AVBD post stabilization | 1.66 ms | 3.51 ms |
+| Session worst simulation step | 16.53 ms | 40.92 ms |
+| Session worst GPU render | 6.37 ms | 6.49 ms |
+
+The evidence points to GPU contention when rendering more frequently: independent
+cadences do not guarantee independent GPU execution resources. Timestamp intervals
+include execution delays between markers, not just exclusive shader work. This is
+not a measurement of warp divergence or proof of a convergence regression. Both
+runs use the same scene/spawn settings but are not identical step-by-step replays;
+their different physics throughput also changes the trajectories.
+
+All 357 published HUD samples satisfied current <= session worst for simulation
+and render; all three maxima were nondecreasing. Nine CTest targets pass. The
+reported approximately 20 ms GPU render peak was not reproduced in these runs;
+its original cause remains unassigned. The low-volume HUD trace is left enabled
+in the interactive session to capture future reports.

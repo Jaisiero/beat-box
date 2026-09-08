@@ -503,6 +503,16 @@ int RendererManager::render()
       double const seconds = std::chrono::duration<double>(frame_clock - run_start).count();
       if (performance.rates.refresh(seconds)) {
         performance.frame.refresh(); frame_timer.metric.refresh(); rigid_body_manager->step_timer.metric.refresh();
+        if (frame_timing || std::getenv("BB_HUD_TRACE")) {
+          auto const &sim = rigid_body_manager->step_timer.metric;
+          auto const &render = frame_timer.metric;
+          std::cout << "[HUD-METRICS] seconds=" << seconds
+                    << " sim_ms=" << sim.current_ms << " worst_step_ms=" << sim.worst_ms
+                    << " render_ms=" << render.current_ms << " worst_render_ms=" << render.worst_ms
+                    << " sim_hz=" << performance.rates.sim_hz << " render_fps=" << performance.rates.render_fps
+                    << " frame_ms=" << performance.frame.current_ms << " worst_frame_ms=" << performance.frame.worst_ms
+                    << std::endl;
+        }
       }
       fracture_frame_clock = frame_clock;
       next_render = frame_clock + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
