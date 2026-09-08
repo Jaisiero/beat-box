@@ -441,9 +441,9 @@ int RendererManager::render()
   bool performance_has_frame = false;
   auto reset_performance = [&] {
     frame_timer.reset(); rigid_body_manager->step_timer.reset();
-    performance.frame = {}; performance.rates = {};
+    performance.frame.reset_average(); performance.rates = {};
     performance.rates.since = std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count();
-    performance_has_frame = false;
+    // Keep frame history across scene changes: their stalls also count.
   };
   auto fracture_frame_clock = std::chrono::steady_clock::now();
   while (!window.should_close())
@@ -1058,6 +1058,9 @@ int RendererManager::render()
                 << " render_ms=" << ms(timing_sync_end,timing_render_end)
                 << " async_submit_ms=" << ms(timing_render_end,timing_async_end)
                 << " gc_ms=" << ms(timing_async_end,end)
+                << " worst_step_ms=" << rigid_body_manager->step_timer.metric.worst_ms
+                << " worst_render_ms=" << frame_timer.metric.worst_ms
+                << " worst_frame_ms=" << performance.frame.worst_ms
                 << " total_ms=" << ms(timing_start,end) << std::endl;
     }
     if (render_due) {

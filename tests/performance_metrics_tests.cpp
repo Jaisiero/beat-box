@@ -14,5 +14,10 @@ int main() {
   check(!rate.refresh(0.25)); check(rate.refresh(0.5));
   check(rate.sim_hz == 60 && rate.render_fps == 30); // independent cadences
   rate.frames = 30; check(rate.refresh(1)); check(rate.sim_hz == 0 && rate.render_fps == 60);
-  cost = {}; check(cost.worst_ms == 0 && cost.current_ms == 0);
+  cost.reset_average(); check(cost.worst_ms == 12 && cost.current_ms == 0);
+  cost.observe_peak(18); // pending old-scene GPU result must not be lost
+  check(cost.worst_ms == 18 && cost.samples == 0 && cost.current_ms == 0);
+  cost.add(5); cost.refresh(); check(cost.current_ms == 5 && cost.worst_ms == 18);
+  cost.reset_average(); check(cost.worst_ms == 18); // solver/reset keeps peak
+  cost = {}; check(cost.worst_ms == 0); // only a new application session clears it
 }

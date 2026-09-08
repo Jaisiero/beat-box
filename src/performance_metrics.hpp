@@ -12,6 +12,8 @@ struct PerformanceMetric {
     if (!std::isfinite(ms) || ms < 0) return;
     worst_ms = std::max(worst_ms, ms); sum_ms += ms; ++samples;
   }
+  void reset_average() { current_ms = sum_ms = 0; samples = 0; }
+  void observe_peak(double ms) { if (std::isfinite(ms) && ms >= 0) worst_ms = std::max(worst_ms, ms); }
   void refresh() { if (samples) current_ms = sum_ms / double(samples); sum_ms = 0; samples = 0; }
 };
 struct PerformanceRates {

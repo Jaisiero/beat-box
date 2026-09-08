@@ -21,8 +21,9 @@ struct GpuPerformanceTimer {
     for (u32 i = 0; i < SLOT_COUNT; ++i) if (slots[i].pending && slots[i].submit < oldest) {
       auto q = pool.get_query_results(i * 2, 2);
       if (!q[1] || !q[3]) continue;
-      if (slots[i].epoch == epoch)
-        metric.add(double(q[2] - q[0]) * device.properties().limits.timestamp_period / 1e6);
+      double const ms = double(q[2] - q[0]) * device.properties().limits.timestamp_period / 1e6;
+      // Late results from an older scene still count toward session peaks.
+      if (slots[i].epoch == epoch) metric.add(ms); else metric.observe_peak(ms);
       slots[i].pending = false;
     }
   }
@@ -42,7 +43,7 @@ struct GpuPerformanceTimer {
   void submitted(daxa::Device &device, daxa::Queue queue) {
     if (active != SLOT_COUNT) slots[active] = {device.latest_queue_submit_index(queue), epoch, true};
   }
-  void reset() { ++epoch; metric = {}; }
+  void reset() { ++epoch; metric.reset_average(); }
   void destroy() { pool = {}; }
 };
 BB_NAMESPACE_END
