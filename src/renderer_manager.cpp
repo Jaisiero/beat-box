@@ -491,10 +491,14 @@ int RendererManager::render()
     frame_window.ms[FrameWindow::WAIT] += elapsed_ms(now, frame_clock);
     if (render_due) {
       if (performance_has_frame) frame_window.report(previous_frame_ms, render_frames_total, sim_pending);
+      bool const resize_interval = frame_window.resizes != 0;
       frame_window = {};
       frame_timer.collect(gpu->device);
       rigid_body_manager->step_timer.collect(gpu->device);
-      if (performance_has_frame) performance.frame.add(previous_frame_ms);
+      if (performance_has_frame) {
+        if (resize_interval) performance.rates.exclude_render_interval(previous_frame_ms / 1000.0);
+        else performance.frame.add(previous_frame_ms);
+      }
       performance_has_frame = true;
       double const seconds = std::chrono::duration<double>(frame_clock - run_start).count();
       if (performance.rates.refresh(seconds)) {

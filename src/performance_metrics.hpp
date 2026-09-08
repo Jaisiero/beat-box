@@ -19,10 +19,17 @@ struct PerformanceMetric {
 struct PerformanceRates {
   double since = 0, sim_hz = 0, render_fps = 0;
   uint64_t steps = 0, frames = 0;
+  double excluded_render_seconds = 0;
+  void exclude_render_interval(double seconds) {
+    excluded_render_seconds += seconds;
+    if (frames) --frames;
+  }
   bool refresh(double now) {
     if (now - since < 0.5) return false;
     sim_hz = double(steps) / (now - since);
-    render_fps = double(frames) / (now - since);
+    double const render_seconds = now - since - excluded_render_seconds;
+    if (render_seconds > 1e-6) render_fps = double(frames) / render_seconds;
+    excluded_render_seconds = 0;
     steps = frames = 0; since = now; return true;
   }
 };

@@ -31,7 +31,7 @@ struct PerformanceOverlay {
     ImGui::Text("RENDER GPU  %6.2f ms   %6.1f FPS", render.current_ms, rates.render_fps);
     ImGui::Text("WORST STEP  %6.2f ms   RENDER %6.2f ms", sim.worst_ms, render.worst_ms);
     ImGui::Text("FRAME       %6.2f ms   WORST  %6.2f ms", frame.current_ms, frame.worst_ms);
-    ImGui::TextDisabled("Peaks for the entire application session");
+    ImGui::TextDisabled("Session peaks; resize frames excluded");
     ImGui::End(); ImGui::Render();
     // Daxa's ImGui utility owns its vertex/index buffers outside this graph.
     // Order previous MAIN shader/index reads before its next transfer overwrite.

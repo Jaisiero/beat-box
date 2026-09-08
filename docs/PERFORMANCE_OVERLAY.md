@@ -11,8 +11,9 @@ path-tracing accumulation image. Font size scales from 1080p to 4K.
   final overlay. Includes path tracing, accumulation clear, upscale and debug
   draws; excludes the preceding snapshot capture, AS publication and TLAS build.
 - **Hz / FPS**: completed simulation steps and submitted render frames per elapsed
-  wall-clock second, independently counted. FPS is application throughput, not a
-  Moonlight/display presentation measurement.
+  wall-clock second, independently counted. FPS excludes resize-containing intervals
+  (and their render counts); simulation Hz remains actual wall-clock throughput.
+  FPS is application throughput, not a Moonlight/display presentation measurement.
 - **WORST STEP / RENDER**: largest completed GPU measurement in the application session.
 - **FRAME / WORST**: average and largest wall-clock interval between render-loop
   frames, including pacing, CPU work and stalls. It can exceed GPU render time.
@@ -21,8 +22,9 @@ Values refresh every half second. Pause reports zero simulation Hz after the
 current reporting interval and retains the last GPU step cost. Scene switch,
 scene reset and solver change reset current averages but **never clear peaks**.
 Only restarting the application clears them. The first application frame has no
-interval to measure; all subsequent intervals, including scene-load, resize and
-OS scheduling stalls, are counted.
+interval to measure; subsequent intervals containing swapchain reconstruction are excluded from
+FRAME, WORST FRAME and FPS. Scene-load and OS scheduling stalls still count.
+GPU timings and their session peaks are unchanged.
 
 Each GPU timer uses sixteen pairs of timestamp queries. A slot can be read or
 reused only after its exact submission has completed. Query availability alone
@@ -88,5 +90,10 @@ body events and had no other interval above 33.33 ms. After the first ten second
 
 This reproduces a peak very close to the reported 89.66 ms and isolates a resize
 cause. The original 89.66 ms event had no phase trace, so its exact attribution
-cannot be recovered retrospectively. Peaks remain session-wide, including these
-resize events; instrumentation does not hide them or reset the counters.
+cannot be recovered retrospectively. The follow-up resize filter excludes such intervals from FRAME/WORST FRAME/FPS,
+while the unfiltered slow-frame trace retains their full cost. Other peaks remain
+session-wide and are not reset.
+
+A resize-filter regression run recorded an unfiltered 82.13 ms interval while
+WORST FRAME remained at 18.89 ms. All nine CTest targets pass, including exclusion
+of resize duration and frame count from FPS without changing simulation Hz.
