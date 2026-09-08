@@ -85,7 +85,7 @@
 +    // Command-buffer state starts at NORMAL; set it for every compute recorder.
 +    // MAIN and TRANSFER retain their default priority. No occupancy cap is imposed.
 +    if (info->queue_type == DAXA_QUEUE_TYPE_COMPUTE && device->bb_set_occupancy) {
-+        VkComputeOccupancyPriorityParametersNV priority{VK_STRUCTURE_TYPE_COMPUTE_OCCUPANCY_PRIORITY_PARAMETERS_NV, nullptr, 0.75f, 0.0f};
++        VkComputeOccupancyPriorityParametersNV priority{VK_STRUCTURE_TYPE_COMPUTE_OCCUPANCY_PRIORITY_PARAMETERS_NV, nullptr, VK_COMPUTE_OCCUPANCY_PRIORITY_HIGH_NV, 0.0f};
 +        device->bb_set_occupancy(cmd_arena->vk_command_buffer, &priority);
 +    }
 +
@@ -94,15 +94,18 @@
      ret.info = *info;
 --- /dev/null
 +++ b/src/impl_compute_occupancy.hpp
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,24 @@
 +#pragma once
 +
 +// Compatibility with the Vulkan headers shipped with Daxa 3.6.
 +// Definitions from Khronos Vulkan-Headers, extension 646, revision 1.
 +#ifndef VK_NV_compute_occupancy_priority
 +#define VK_NV_compute_occupancy_priority 1
-+#define VK_STRUCTURE_TYPE_COMPUTE_OCCUPANCY_PRIORITY_PARAMETERS_NV static_cast<VkStructureType>(1000645000)
-+#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_OCCUPANCY_PRIORITY_FEATURES_NV static_cast<VkStructureType>(1000645001)
++#define VK_COMPUTE_OCCUPANCY_PRIORITY_HIGH_NV 0.75f
++// These enumerators are absent from older VkStructureType declarations.
++// C++ cannot extend an existing enum; preserve their official type and ABI values.
++inline constexpr VkStructureType VK_STRUCTURE_TYPE_COMPUTE_OCCUPANCY_PRIORITY_PARAMETERS_NV = static_cast<VkStructureType>(1000645000);
++inline constexpr VkStructureType VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_OCCUPANCY_PRIORITY_FEATURES_NV = static_cast<VkStructureType>(1000645001);
 +struct VkComputeOccupancyPriorityParametersNV {
 +    VkStructureType sType;
 +    void const *pNext;
