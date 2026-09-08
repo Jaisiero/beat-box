@@ -499,7 +499,8 @@ int RendererManager::render()
     if (render_due && snapshot.allocated && render_fairness && async_sim && det_steps == 0 &&
         sim_pending && render_hz > 1.0 / SIM_DT_S) {
       double const step_age = std::chrono::duration<double>(frame_clock - pending_start).count();
-      double const retry = render_retry_delay(step_age, previous_frame_ms / 1000.0, SIM_DT_S);
+      double const retry = render_retry_delay(step_age, previous_frame_ms / 1000.0, SIM_DT_S,
+          rigid_body_manager->step_timer.metric.current_ms / 1000.0);
       if (retry > 0) {
         render_due = false;
         ++deferred_render_polls;
