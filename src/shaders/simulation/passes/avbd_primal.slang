@@ -173,17 +173,16 @@ void avbd_primal_specialized(daxa_u32vec3 compute_i, daxa_f32 stab_alpha)
   g[3] = g_ang.x; g[4] = g_ang.y; g[5] = g_ang.z;
 
   // contact energies over this body's manifold list
-  ManifoldNode* manifold_nodes = (ManifoldNode*)(AVBD_PC.task_head.manifold_nodes);
-  CollisionEntry* collision_map = (CollisionEntry*)(AVBD_PC.task_head.collision_map);
+  daxa_u32vec2* resolved_links = avbd_resolved_links(states);
   Manifold* collisions = (Manifold*)(AVBD_PC.task_head.collisions);
   daxa_u32 manifold_node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
-  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
 
   daxa_u32 node = r->manifold_node_index;
   daxa_u32 steps = 0u;
-  while (node != MAX_U32 && steps < manifold_node_count)
+  while (node < manifold_node_count && steps < manifold_node_count)
   {
-    daxa_u32 packed = avbd_node_to_packed(node, manifold_node_count, collision_count, manifold_nodes, collision_map);
+    daxa_u32vec2 link = resolved_links[node];
+    daxa_u32 packed = link.x;
     if (packed != MAX_U32)
     {
       Manifold* m = &collisions[packed];
@@ -292,8 +291,7 @@ void avbd_primal_specialized(daxa_u32vec3 compute_i, daxa_f32 stab_alpha)
         }
       }
     }
-    daxa_i32 next = manifold_nodes[node].next;
-    node = next < 0 ? MAX_U32 : daxa_u32(next);
+    node = link.y;
     ++steps;
   }
 

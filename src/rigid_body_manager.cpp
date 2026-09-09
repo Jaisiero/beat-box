@@ -399,8 +399,10 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
       .name = "color_count",
   });
   // AVBD buffers
+  // Body states followed by GPU-resolved (packed manifold, next node) links.
+  // Keep this tail layout paired with avbd_resolved_links in avbd_common.slang.
   avbd_state = create_owned({
-      .size = sizeof(AvbdBodyState) * MAX_RIGID_BODY_COUNT,
+      .size = sizeof(AvbdBodyState) * MAX_RIGID_BODY_COUNT + sizeof(daxa_u32vec2) * BB_MAX_MANIFOLD_NODE_COUNT,
       .name = "avbd_state",
   });
   avbd_body_color = create_owned({

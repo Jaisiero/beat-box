@@ -31,3 +31,11 @@ bool avbd_is_dynamic(RigidBody* r)
 {
   return (r->flags & RigidBodyFlag::DYNAMIC) != RigidBodyFlag::NONE;
 }
+
+// Step-local resolved links occupy the tail of the AVBD state allocation.
+// Prepare fills links for awake dynamic bodies after manifold island packing;
+// primal and post sweeps share the same immutable topology until step end.
+daxa_u32vec2* avbd_resolved_links(AvbdBodyState* states)
+{
+  return (daxa_u32vec2*)(states + BB_MAX_RIGID_BODY_COUNT);
+}

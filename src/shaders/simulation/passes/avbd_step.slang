@@ -51,6 +51,23 @@
   AvbdBodyState* states = (AvbdBodyState*)(AVBD_PC.task_head.avbd_state);
   AvbdBodyState* s = &states[i];
 
+  // Each node belongs to one body's chain, so these writes are disjoint.
+  // Preserve its canonical order while resolving the scratch-to-packed map once.
+  ManifoldNode* nodes = (ManifoldNode*)AVBD_PC.task_head.manifold_nodes;
+  CollisionEntry* map = (CollisionEntry*)AVBD_PC.task_head.collision_map;
+  daxa_u32 node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
+  daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  daxa_u32vec2* links = avbd_resolved_links(states);
+  daxa_u32 node = r->manifold_node_index;
+  for (daxa_u32 visited = 0u; node < node_count && visited < node_count; ++visited)
+  {
+    daxa_u32 packed = avbd_node_to_packed(node, node_count, collision_count, nodes, map);
+    daxa_i32 next = nodes[node].next;
+    daxa_u32 successor = next < 0 ? MAX_U32 : daxa_u32(next);
+    links[node] = daxa_u32vec2(packed, successor);
+    node = successor;
+  }
+
   // anti-spin clamp (reference solver.cpp)
   daxa_f32 om_len = length(r->omega);
   if (om_len > 50.0f)
