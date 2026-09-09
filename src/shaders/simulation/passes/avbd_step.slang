@@ -57,7 +57,10 @@
   CollisionEntry* map = (CollisionEntry*)AVBD_PC.task_head.collision_map;
   daxa_u32 node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
   daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
-  daxa_u32vec2* links = avbd_resolved_links(states);
+  daxa_u32vec2 span = avbd_contact_spans(states)[i];
+  daxa_u32 offset = span.x;
+  bool fits = offset != MAX_U32;
+  daxa_u32* stream = avbd_contact_stream(states);
   bool profile_work = sim_config->has_flag(SimFlag::PROFILE_AVBD_WORK);
   daxa_u32 work_contacts = 0u, work_manifolds = 0u;
   daxa_u32 node = r->manifold_node_index;
@@ -72,7 +75,7 @@
       work_contacts += min(daxa_u32(max(m->contact_count, 0)), MAX_CONTACT_POINT_COUNT);
       ++work_manifolds;
     }
-    links[node] = daxa_u32vec2(packed, successor);
+    if (fits) stream[offset + visited] = packed;
     node = successor;
   }
 
