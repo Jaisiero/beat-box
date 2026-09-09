@@ -119,6 +119,10 @@ int main()
       std::cout << "[AUTOSTART] determinism debug hashes ON" << std::endl;
     }
 
+    if (std::getenv("BB_AVBD_WORK_PROFILE")) {
+      rigid_body_manager->set_sim_flags(SimFlag::PROFILE_AVBD_WORK);
+    }
+
     // D1-offline: BB_COMPILE_ONLY warms the SPIR-V cache and exits. All pipelines were already compiled
     // by the create() calls above (the ~100s cold Slang->SPIR-V pass), so spirv_cache/ is now populated
     // next to the exe — skip the render loop so a build step (the warm_shader_cache CMake target) can

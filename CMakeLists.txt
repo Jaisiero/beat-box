@@ -132,6 +132,8 @@ if (Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/solver_replay_tests.py)
     add_test(NAME shader_dependencies_tests
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/shader_dependencies_tests.py)
+    add_test(NAME avbd_workload_tests
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/avbd_workload_tests.py)
 endif()
 
 # Analytical mass/kinematics checks for the CPU oracle used by BB_FRAGMENT_VERIFY.
