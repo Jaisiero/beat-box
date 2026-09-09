@@ -19,6 +19,13 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
     sim_config->avbd_color_count = 0u;
     sim_config->avbd_violations = 0u;
   }
+  if (sim_config->has_flag(SimFlag::PROFILE_AVBD_WORK) && i < 32u)
+  {
+    sim_config->avbd_work_bodies[i] = 0u;
+    sim_config->avbd_work_contacts[i] = 0u;
+    sim_config->avbd_work_max_contacts[i] = 0u;
+    sim_config->avbd_work_max_manifolds[i] = 0u;
+  }
   if (i >= sim_config->rigid_body_count)
   {
     return;

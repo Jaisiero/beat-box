@@ -58,14 +58,35 @@
   daxa_u32 node_count = min(sim_config->manifold_node_count, BB_MAX_MANIFOLD_NODE_COUNT);
   daxa_u32 collision_count = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
   daxa_u32vec2* links = avbd_resolved_links(states);
+  bool profile_work = sim_config->has_flag(SimFlag::PROFILE_AVBD_WORK);
+  daxa_u32 work_contacts = 0u, work_manifolds = 0u;
   daxa_u32 node = r->manifold_node_index;
   for (daxa_u32 visited = 0u; node < node_count && visited < node_count; ++visited)
   {
     daxa_u32 packed = avbd_node_to_packed(node, node_count, collision_count, nodes, map);
     daxa_i32 next = nodes[node].next;
     daxa_u32 successor = next < 0 ? MAX_U32 : daxa_u32(next);
+    if (profile_work && packed != MAX_U32)
+    {
+      Manifold* m = &((Manifold*)AVBD_PC.task_head.collisions)[packed];
+      work_contacts += min(daxa_u32(max(m->contact_count, 0)), MAX_CONTACT_POINT_COUNT);
+      ++work_manifolds;
+    }
     links[node] = daxa_u32vec2(packed, successor);
     node = successor;
+  }
+
+  if (profile_work)
+  {
+    daxa_u32 color = ((daxa_u32*)AVBD_PC.task_head.body_color)[i];
+    if (color < 32u)
+    {
+      daxa_u32 ignored;
+      InterlockedAdd(sim_config->avbd_work_bodies[color], 1u, ignored);
+      InterlockedAdd(sim_config->avbd_work_contacts[color], work_contacts, ignored);
+      InterlockedMax(sim_config->avbd_work_max_contacts[color], work_contacts, ignored);
+      InterlockedMax(sim_config->avbd_work_max_manifolds[color], work_manifolds, ignored);
+    }
   }
 
   // anti-spin clamp (reference solver.cpp)

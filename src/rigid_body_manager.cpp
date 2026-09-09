@@ -24,7 +24,7 @@ RigidBodyManager::RigidBodyManager(daxa::Device &device,
   {
     step_timer.create(device, "Simulation step HUD timestamps");
     avbd_fine_timing = std::getenv("BB_AVBD_FINE_TIMING") != nullptr;
-    narrow_phase_timing = avbd_fine_timing || std::getenv("BB_RESPAWN_TIMING") != nullptr || std::getenv("BB_FRAME_TIMING") != nullptr;
+    narrow_phase_timing = std::getenv("BB_AVBD_WORK_PROFILE") != nullptr || avbd_fine_timing || std::getenv("BB_RESPAWN_TIMING") != nullptr || std::getenv("BB_FRAME_TIMING") != nullptr;
     if (narrow_phase_timing)
     {
       narrow_phase_queries = device.create_timeline_query_pool({.query_count = 2, .name = "fracture_narrow_phase"});
@@ -3150,6 +3150,22 @@ bool RigidBodyManager::read_back_sim_config(bool completed_simulation_snapshot)
         for (daxa_u32 i = 0u; i < 6u; ++i) std::cout << (i ? ":" : "") << results[2u*i];
       }
       std::cout << std::endl;
+      if (!tgs && static_cast<daxa_u32>(completed_config.flags & SimFlag::PROFILE_AVBD_WORK) != 0u) {
+        auto const &sc = completed_config;
+        std::cout << "[AVBD-WORK] frame=" << sc.frame_count << " begin_tick=" << results[0]
+                  << " bodies=" << sc.rigid_body_count << " sleeping=" << sc.sleeping_count
+                  << " pairs=" << sc.broad_phase_collision_count << " manifolds=" << sc.g_c_info.collision_count
+                  << " colors=" << sc.avbd_color_count << " depth=" << sc.avbd_max_support_depth;
+        auto print_colors = [&](char const *name, auto const &values) {
+          std::cout << ' ' << name << '=';
+          for (daxa_u32 c = 0u; c < 32u; ++c) std::cout << (c ? ":" : "") << values[c];
+        };
+        print_colors("color_bodies", sc.avbd_work_bodies);
+        print_colors("color_contacts", sc.avbd_work_contacts);
+        print_colors("color_max_contacts", sc.avbd_work_max_contacts);
+        print_colors("color_max_manifolds", sc.avbd_work_max_manifolds);
+        std::cout << std::endl;
+      }
       if (fine) {
         auto elapsed = [&](daxa_u32 a, daxa_u32 b) {
           return double(results[2u*b] - results[2u*a]) * device.properties().limits.timestamp_period / 1.0e6;
