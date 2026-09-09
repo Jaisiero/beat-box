@@ -1,3 +1,4 @@
+#include "render_pacing.hpp"
 #define _CRT_SECURE_NO_WARNINGS // std::getenv (BB_RUN_SECONDS) on MSVC
 #include "renderer_manager.hpp"
 #include "runtime_diagnostics.hpp"
@@ -23,6 +24,19 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   {
     return false;
   }
+
+  snapshot.create(*task_manager, {rigid_body_manager->task_rigid_bodies,
+      rigid_body_manager->task_rigid_body_entries, rigid_body_manager->task_lbvh_nodes,
+      rigid_body_manager->task_islands, rigid_body_manager->task_contact_islands,
+      gui_manager->task_vertex_buffer, gui_manager->task_line_vertex_buffer,
+      gui_manager->task_axes_vertex_buffer, rigid_body_manager->task_sim_config});
+
+  performance.create(gpu->device, gpu->swapchain.get_format());
+  frame_timer.create(gpu->device, "Render GPU HUD timestamps");
+
+  render_timing = std::getenv("BB_FRAME_TIMING") != nullptr;
+  if (render_timing)
+    render_queries = gpu->device.create_timeline_query_pool({.query_count=2,.name="ray_tracing_timing"});
 
   // A stable task resource retains cross-frame dependencies. Uploads are staged
   // per execution; the device buffer is reused only through ordered graph access.
@@ -66,16 +80,17 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
       .usage = daxa::ImageUsageFlagBits::SHADER_STORAGE | daxa::ImageUsageFlagBits::TRANSFER_SRC | daxa::ImageUsageFlagBits::TRANSFER_DST,
       .name = "rt_target",
   });
-  
+
   daxa::InlineTaskInfo task_update_RT_config({
       .attachments = {
           daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE,
           task_camera_buffer),
-          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE, 
+          daxa::inl_attachment(daxa::TaskBufferAccess::TRANSFER_WRITE,
            task_ray_tracing_config),
       },
       .task = [this](daxa::TaskInterface const &ti)
       {
+        frame_timer.begin(ti.recorder);
         auto const accumulating = status_manager->is_accumulating();
         auto const show_islands = status_manager->is_showing_islands();
         auto const show_normals = status_manager->is_showing_normals();
@@ -93,7 +108,7 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
             .current_frame_index = status_manager->get_frame_count(),
             .frame_count = accumulating ? status_manager->get_accumulation_count() : 0,
             .light_count = scene_manager->get_light_count(),
-            .instance_count = rigid_body_manager->get_sim_config_reference().rigid_body_count,
+            .instance_count = rigid_body_manager->render_config.rigid_body_count,
         }, ti.get(task_ray_tracing_config));
       },
       .name = "upload camera and ray tracing config",
@@ -104,12 +119,21 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
     auto const image_info = ti.device.image_info(ti.get(RayTracingTaskHead::AT.swapchain).id).value();
     ti.recorder.set_pipeline(*RT_pipeline->pipeline);
     ti.recorder.push_constant(RTPushConstants{.task_head = ti.attachment_shader_blob});
+    bool const measure = render_timing && !render_query_pending;
+    if (measure) {
+      ti.recorder.reset_timestamps({.query_pool=render_queries,.start_index=0,.count=2});
+      ti.recorder.write_timestamp({.query_pool=render_queries,.pipeline_stage=daxa::PipelineStageFlagBits::ALL_COMMANDS,.query_index=0});
+    }
     ti.recorder.trace_rays({
         .width = image_info.size.x,
         .height = image_info.size.y,
         .depth = 1,
         .shader_binding_table = SBT,
     });
+    if (measure) {
+      ti.recorder.write_timestamp({.query_pool=render_queries,.pipeline_stage=daxa::PipelineStageFlagBits::ALL_COMMANDS,.query_index=1});
+      render_query_pending=true;
+    }
   };
 
   using TTask = TaskTemplate<RayTracingTaskHead::Task, decltype(user_callback)>;
@@ -123,22 +147,22 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
                   daxa::attachment_view(RayTracingTaskHead::AT.swapchain, rt_output),
                   daxa::attachment_view(RayTracingTaskHead::AT.accumulation_buffer, task_accumulation_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.tlas, accel_struct_mngr->task_tlas),
-                  daxa::attachment_view(RayTracingTaskHead::AT.rigid_body_map, rigid_body_manager->task_rigid_body_entries),
+                  daxa::attachment_view(RayTracingTaskHead::AT.rigid_body_map, snapshot.buffers[RenderSnapshot::BODY_MAP]),
                   daxa::attachment_view(RayTracingTaskHead::AT.rigid_bodies,
-                                        rigid_body_manager->task_rigid_bodies),
+                                        snapshot.buffers[RenderSnapshot::BODIES]),
                   daxa::attachment_view(RayTracingTaskHead::AT.aabbs, accel_struct_mngr->task_aabb_buffer),
-                  daxa::attachment_view(RayTracingTaskHead::AT.lbvh_nodes, rigid_body_manager->task_lbvh_nodes),
+                  daxa::attachment_view(RayTracingTaskHead::AT.lbvh_nodes, snapshot.buffers[RenderSnapshot::BVH]),
                   daxa::attachment_view(RayTracingTaskHead::AT.lights, scene_manager->task_lights_buffer),
                   daxa::attachment_view(RayTracingTaskHead::AT.materials, scene_manager->task_material_buffer),
-                  daxa::attachment_view(RayTracingTaskHead::AT.islands, rigid_body_manager->task_islands),
-                  daxa::attachment_view(RayTracingTaskHead::AT.contact_islands, rigid_body_manager->task_contact_islands),
+                  daxa::attachment_view(RayTracingTaskHead::AT.islands, snapshot.buffers[RenderSnapshot::ISLANDS]),
+                  daxa::attachment_view(RayTracingTaskHead::AT.contact_islands, snapshot.buffers[RenderSnapshot::CONTACT_ISLANDS]),
                   daxa::attachment_view(RayTracingTaskHead::AT.stbn_texture, task_stbn_texture),
               },
               user_callback);
 
   daxa::InlineTaskInfo task_cpy_to_accum_buffer({
       .attachments = {
-          daxa::inl_attachment(daxa::TaskImageAccess::TRANSFER_WRITE, 
+          daxa::inl_attachment(daxa::TaskImageAccess::TRANSFER_WRITE,
           task_accumulation_buffer),
       },
       .task = [this](daxa::TaskInterface const &ti)
@@ -157,22 +181,22 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
       .name = "copy to accumulation buffer",
   });
 
-  
+
 
   std::array<daxa::TaskBuffer, 13> buffers = {
-    task_camera_buffer, 
-    rigid_body_manager->task_rigid_body_entries,
-    rigid_body_manager->task_rigid_bodies,
-    accel_struct_mngr->task_aabb_buffer, 
-    rigid_body_manager->task_lbvh_nodes, 
-    gui_manager->task_vertex_buffer,
-    gui_manager->task_line_vertex_buffer, 
-    gui_manager->task_axes_vertex_buffer,
-    scene_manager->task_material_buffer, 
-    task_ray_tracing_config, 
-    scene_manager->task_lights_buffer, 
-    rigid_body_manager->task_islands, 
-    rigid_body_manager->task_contact_islands};
+    task_camera_buffer,
+    snapshot.buffers[RenderSnapshot::BODY_MAP],
+    snapshot.buffers[RenderSnapshot::BODIES],
+    accel_struct_mngr->task_aabb_buffer,
+    snapshot.buffers[RenderSnapshot::BVH],
+    snapshot.buffers[RenderSnapshot::POINTS],
+    snapshot.buffers[RenderSnapshot::LINES],
+    snapshot.buffers[RenderSnapshot::AXES],
+    scene_manager->task_material_buffer,
+    task_ray_tracing_config,
+    scene_manager->task_lights_buffer,
+    snapshot.buffers[RenderSnapshot::ISLANDS],
+    snapshot.buffers[RenderSnapshot::CONTACT_ISLANDS]};
 
   std::array<daxa::TaskImage, 4> images = {task_swapchain_image, task_accumulation_buffer, task_stbn_texture, task_rt_target};
 
@@ -214,9 +238,28 @@ bool RendererManager::create(char const *RT_TG_name, std::shared_ptr<RayTracingP
   {
     RT_TG.add_task(task_upscale);
   }
-  RT_TG.add_task(gui_manager->gui_axes_task_info);
-  RT_TG.add_task(gui_manager->gui_line_task_info);
-  RT_TG.add_task(gui_manager->gui_task_info);
+  auto axes = gui_manager->gui_axes_task_info;
+  axes.views[2] = daxa::attachment_view(GUIAxesTaskHead::AT.vertex_buffer, snapshot.buffers[RenderSnapshot::AXES]);
+  auto lines = gui_manager->gui_line_task_info;
+  lines.views[2] = daxa::attachment_view(GUILineTaskHead::AT.vertex_buffer, snapshot.buffers[RenderSnapshot::LINES]);
+  auto points = gui_manager->gui_task_info;
+  points.views[2] = daxa::attachment_view(GUITaskHead::AT.vertex_buffer, snapshot.buffers[RenderSnapshot::POINTS]);
+  RT_TG.add_task(axes);
+  RT_TG.add_task(lines);
+  RT_TG.add_task(points);
+  RT_TG.add_task(daxa::InlineTaskInfo{
+    .attachments = {daxa::inl_attachment(daxa::TaskAccessConsts::COLOR_ATTACHMENT, task_swapchain_image)},
+    .task = [this](daxa::TaskInterface const &ti) {
+      auto const image = ti.get(task_swapchain_image).id;
+      auto const extent = ti.device.image_info(image).value().size;
+      char const *solver = get_solver() == SimSolverType::AVBD ? "AVBD" :
+                           get_solver() == SimSolverType::TGS_SOFT ? "TGS" : "PGS";
+      performance.draw(ti.recorder, image, extent.x, extent.y, rigid_body_manager->step_timer.metric,
+                       frame_timer.metric, solver, !status_manager->is_simulating());
+      frame_timer.end(ti.recorder);
+    },
+    .name = "Performance overlay (final render pass)",
+  });
 
   // Daxa waits the last producer queue of shared external resources (including
   // task_tlas). TaskSubmitInfo's additional semaphore fields are unused in 3.6.
@@ -239,6 +282,10 @@ void RendererManager::destroy()
     return;
   }
 
+  if (render_timing) { render_queries={}; render_query_pending=false; }
+  performance.destroy();
+  frame_timer.destroy();
+  snapshot.destroy(gpu->device);
   gpu->device.destroy_buffer(ray_tracing_config_buffer);
 
   gpu->device.destroy_image(accumulation_buffer);
@@ -253,7 +300,14 @@ bool RendererManager::execute()
   {
     return false;
   }
+  frame_timer.prepare(gpu->device);
+  bool const query_was_pending = render_query_pending;
   RT_TG.execute();
+  // Availability can still describe the previous use until the queued reset runs.
+  if (render_query_pending && !query_was_pending)
+    render_query_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN);
+  frame_timer.submitted(gpu->device, daxa::QUEUE_MAIN);
+  ++performance.rates.frames;
   return true;
 }
 
@@ -317,8 +371,6 @@ int RendererManager::render()
   auto const run_start = std::chrono::steady_clock::now();
   // Preserve the existing one-step publication after a scene load/switch. It
   // initializes the render-facing simulation state even when starting paused.
-  // Synchronization now relies on Daxa's shared external-resource queue tracking,
-  // not on the ignored TaskSubmitInfo semaphore fields.
   // C1 HEADLESS METRICS (env-gated). The ground-truth quality metrics (dbg_pen/deep100/deep200/
   // maxv/min_y) are computed every sim step UNCONDITIONALLY in the narrow phase, so this needs no
   // extra flag. BB_METRICS_CSV=path writes one clean CSV row per stepped frame; BB_ASSERT_MAX_DEEP200
@@ -347,24 +399,147 @@ int RendererManager::render()
   if (const char *e = std::getenv("BB_DUMP_AT_SECONDS")) dump_at_s = std::atof(e);
   bool dump_at_done = false;
 
+  // BB_ASYNC_SIM=0 retains the synchronous scheduler for A/B measurements.
+  // Replays default to the original schedule; explicitly enable async to test
+  // identical physics steps while rendering a variable number of snapshots.
+  bool const async_sim = std::getenv("BB_ASYNC_SIM")
+      ? beat_box_diagnostics::parse_boolean("BB_ASYNC_SIM", std::getenv("BB_ASYNC_SIM"))
+      : det_steps == 0;
+  double render_hz = 60.0;
+  if (auto const *e = std::getenv("BB_RENDER_HZ")) render_hz = std::clamp(std::atof(e), 1.0, 240.0);
+  bool const render_fairness = !std::getenv("BB_RENDER_FAIRNESS") ||
+      beat_box_diagnostics::parse_boolean("BB_RENDER_FAIRNESS", std::getenv("BB_RENDER_FAIRNESS"));
+  daxa_u64 deferred_render_polls = 0;
+  auto next_render = std::chrono::steady_clock::now();
+  bool sim_pending = false;
+  bool render_snapshot_current = false;
+  daxa_u64 built_snapshot_generation = 0;
+  bool built_bvh = false;
+  daxa_u32 steps_since_render = 0;
+  daxa_u64 pending_submit = 0;
+  auto pending_start = std::chrono::steady_clock::now();
   bool force_sim_step = true;
   daxa_u64 render_frames_total = 0; // ALL render frames (stasis ones too) - the PERF frame
                                     // metric divides wall time by THIS, not by stepped
                                     // frames, or full-sleep stasis inflates frame=/deflates
                                     // the printed fps (user-reported "ya no topa 60fps"
                                     // that the present rate disproved)
+  bool const frame_timing = std::getenv("BB_FRAME_TIMING") != nullptr || std::getenv("BB_PACING_TRACE") != nullptr;
   bool const fracture_timing = std::getenv("BB_RESPAWN_TIMING") != nullptr;
   daxa_u32 timed_fracture_serial = 0u;
   unsigned fracture_frame_tail = 0u;
   daxa_u32 previous_frame_steps = 0u;
   double previous_sim_phase_ms = 0.0;
+  auto prepare_snapshot = [&]() {
+    if (!snapshot.select(gpu->device)) return false;
+    auto const &selected = snapshot.slots[snapshot.selected];
+    rigid_body_manager->render_config = selected.config;
+    snapshot_debug_valid = selected.debug_valid;
+    bool const bvh = is_bvh_enabled();
+    if (snapshot.selected_generation != built_snapshot_generation || bvh != built_bvh) {
+      // Accumulate only repeated renders of the same published pose.
+      status_manager->reset_accumulation_count();
+      accel_struct_mngr->update_TLAS();
+      built_snapshot_generation = snapshot.selected_generation;
+      built_bvh = bvh;
+    }
+    return true;
+  };
+  // Attribute an interval to the work BEFORE its ending frame boundary,
+  // including non-render simulation pumps. FRAME-PHASES is per-pump detail.
+  struct FrameWindow {
+    enum Phase { WAIT, FRONT, EVENTS, RESIZE, ACQUIRE, EARLY_RENDER, SIM,
+                 EDITS, SYNC, CAPTURE_RENDER, SUBMIT, GC, COUNT };
+    std::array<double, COUNT> ms = {};
+    unsigned resizes = 0, controls = 0, publications = 0, steps = 0;
+    void report(double wall, u64 frame, bool pending) const {
+      if (wall < 1000.0 / 30.0) return;
+      static char const *names[] = {"wait", "front", "events", "resize", "acquire", "early_render",
+                                   "sim", "edits", "sync", "capture_render", "submit", "gc"};
+      double accounted = 0;
+      std::cout << "[SLOW-FRAME] frame=" << frame << " wall_ms=" << wall;
+      for (unsigned i = 0; i < COUNT; ++i) { accounted += ms[i]; std::cout << ' ' << names[i] << "_ms=" << ms[i]; }
+      std::cout << " unattributed_ms=" << wall - accounted << " resizes=" << resizes
+                << " controls=" << controls << " publications=" << publications
+                << " steps=" << steps << " pending=" << pending << std::endl;
+    }
+  } frame_window;
+  auto elapsed_ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b-a).count(); };
+  auto performance_solver = get_solver();
+  bool performance_has_frame = false;
+  auto reset_performance = [&] {
+    ++frame_window.controls;
+    frame_timer.reset(); rigid_body_manager->step_timer.reset();
+    performance.frame.reset_average(); performance.rates = {};
+    performance.rates.since = std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count();
+    // Keep frame history across scene changes: their stalls also count.
+  };
   auto fracture_frame_clock = std::chrono::steady_clock::now();
   while (!window.should_close())
   {
+    // Wake for physics independently of presentation. While a GPU step is in
+    // flight, poll its completion at most every millisecond and service events.
+    auto now = std::chrono::steady_clock::now();
+    if (det_steps == 0 || async_sim) {
+      auto wake = next_render;
+      if (async_sim) {
+        if (sim_pending) wake = std::min(wake, now + std::chrono::milliseconds(1));
+        else if (status_manager->is_simulating()) {
+          auto sim_due = sim_clock_prev + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+              std::chrono::duration<double>(std::max(0.0, SIM_DT_S - sim_accum_s)));
+          wake = std::min(wake, sim_due);
+        }
+      }
+      double wait_s = std::chrono::duration<double>(wake - now).count();
+      if (wait_s > 0) glfwWaitEventsTimeout(wait_s);
+    }
     auto const frame_clock = std::chrono::steady_clock::now();
+    bool render_due = !snapshot.allocated || (det_steps > 0 && !async_sim) || frame_clock >= next_render;
     double const previous_frame_ms = std::chrono::duration<double, std::milli>(frame_clock - fracture_frame_clock).count();
-    fracture_frame_clock = frame_clock;
-    if (fracture_timing && fracture_frame_tail > 0u)
+    if (render_due && snapshot.allocated && render_fairness && async_sim && det_steps == 0 &&
+        sim_pending && render_hz > 1.0 / SIM_DT_S) {
+      double const step_age = std::chrono::duration<double>(frame_clock - pending_start).count();
+      double const retry = render_retry_delay(step_age, previous_frame_ms / 1000.0, SIM_DT_S,
+          rigid_body_manager->step_timer.metric.current_ms / 1000.0);
+      if (retry > 0) {
+        render_due = false;
+        ++deferred_render_polls;
+        next_render = frame_clock + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(retry));
+      }
+    }
+    frame_window.ms[FrameWindow::WAIT] += elapsed_ms(now, frame_clock);
+    if (render_due) {
+      if (performance_has_frame) frame_window.report(previous_frame_ms, render_frames_total, sim_pending);
+      bool const resize_interval = frame_window.resizes != 0;
+      frame_window = {};
+      frame_timer.collect(gpu->device);
+      rigid_body_manager->step_timer.collect(gpu->device);
+      if (performance_has_frame) {
+        if (resize_interval) performance.rates.exclude_render_interval(previous_frame_ms / 1000.0);
+        else performance.frame.add(previous_frame_ms);
+      }
+      performance_has_frame = true;
+      double const seconds = std::chrono::duration<double>(frame_clock - run_start).count();
+      if (performance.rates.refresh(seconds)) {
+        performance.frame.refresh(); frame_timer.metric.refresh(); rigid_body_manager->step_timer.metric.refresh();
+        if (frame_timing || std::getenv("BB_HUD_TRACE")) {
+          auto const &sim = rigid_body_manager->step_timer.metric;
+          auto const &render = frame_timer.metric;
+          std::cout << "[HUD-METRICS] seconds=" << seconds
+                    << " sim_ms=" << sim.current_ms << " worst_step_ms=" << sim.worst_ms
+                    << " render_ms=" << render.current_ms << " worst_render_ms=" << render.worst_ms
+                    << " sim_hz=" << performance.rates.sim_hz << " render_fps=" << performance.rates.render_fps
+                    << " deferred_render_polls=" << deferred_render_polls
+                    << " frame_ms=" << performance.frame.current_ms << " worst_frame_ms=" << performance.frame.worst_ms
+                    << std::endl;
+        }
+      }
+      fracture_frame_clock = frame_clock;
+      next_render = frame_clock + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+          std::chrono::duration<double>(1.0 / render_hz));
+    }
+    if (render_due && fracture_timing && fracture_frame_tail > 0u)
     {
       // Includes acquire/submission waits in the previous loop, without adding a GPU wait.
       std::cout << "[FRACTURE-FRAME] frame=" << render_frames_total
@@ -372,17 +547,26 @@ int RendererManager::render()
                 << " steps=" << previous_frame_steps << " sim_phase_ms=" << previous_sim_phase_ms << std::endl;
       --fracture_frame_tail;
     }
-    ++render_frames_total;
-    previous_frame_steps = 0u;
-    previous_sim_phase_ms = 0.0;
+    if (render_due) ++render_frames_total;
+    if (render_due) { previous_frame_steps = 0u; previous_sim_phase_ms = 0.0; }
     if (run_limit_s > 0.0 &&
         std::chrono::duration<double>(std::chrono::steady_clock::now() - run_start).count() > run_limit_s)
     {
       std::cout << "[PERF] BB_RUN_SECONDS=" << run_limit_s << " elapsed -> exiting." << std::endl;
       break;
     }
+    if (render_timing && render_query_pending &&
+          render_query_submit < gpu->device.oldest_pending_submit_index()) {
+      auto q = render_queries.get_query_results(0, 2);
+      if (q[1] && q[3]) {
+        std::cout << "[RENDER-GPU] trace_ms=" << double(q[2]-q[0])*gpu->device.properties().limits.timestamp_period/1e6 << std::endl;
+        render_query_pending = false;
+      }
+    }
+    auto const timing_start = std::chrono::steady_clock::now();
     // Update the GUI
     gui_manager->update();
+    auto const timing_gui_end = std::chrono::steady_clock::now();
 
     // A GUI toggle (TAB) rebuilds the ImGui overlay (+ the contact-point debug pass), hitching this
     // frame and the next; suppress the sim's REAL catch-up for those frames so the (AVBD-jittering)
@@ -393,9 +577,17 @@ int RendererManager::render()
       prev_gui_enabled = cur_gui;
     }
 
+    if (!sim_pending) {
+    if (get_solver() != performance_solver) {
+      performance_solver = get_solver(); reset_performance();
+    }
     // reset request (key R): restart the sim from the initial scene at this frame boundary (prior
     // GPU work is already synchronized here), and clear the catch-up accumulator so it doesn't burst.
     if (status_manager->consume_reset()) {
+      reset_performance();
+      snapshot_debug_valid = false;
+      render_snapshot_current = false;
+      snapshot.invalidate();
       scene_manager->reset();
       sim_accum_s = 0.0;
       force_sim_step = true;
@@ -404,6 +596,10 @@ int RendererManager::render()
     // scene switch request (F1-F8): rebuild from the chosen scene at this same frame boundary,
     // paused, and clear the catch-up accumulator so it doesn't burst on the first resumed step.
     if (int const requested_scene = status_manager->consume_scene(); requested_scene >= 0) {
+      reset_performance();
+      snapshot_debug_valid = false;
+      render_snapshot_current = false;
+      snapshot.invalidate();
       scene_manager->switch_scene(requested_scene);
       sim_accum_s = 0.0;
       force_sim_step = true;
@@ -425,6 +621,8 @@ int RendererManager::render()
       rigid_body_manager->update_sim();
     }
 
+    }
+
     // FRAME-PACING ANCHOR: poll events + acquire the swapchain image BEFORE the sim steps.
     // The acquire is the call that blocks at vsync cadence (FIFO); with it up front every
     // loop iteration is evenly ~16.7 ms and the fixed-timestep accumulator receives time
@@ -434,10 +632,16 @@ int RendererManager::render()
     // visibly stuttered at ~20 Hz while the display presented a smooth 60 (user: "la
     // simulación se ralentiza en algunos momentos"; pace=[rf71 st71] with 31 print
     // frames was the tell). Latent flaw exposed by the render getting 2x faster.
-    if (!window.update())
+    auto const timing_events_start = std::chrono::steady_clock::now();
+    if (!window.update()) {
+      frame_window.ms[FrameWindow::FRONT] += elapsed_ms(timing_start, timing_events_start);
+      frame_window.ms[FrameWindow::EVENTS] += elapsed_ms(timing_events_start, std::chrono::steady_clock::now());
       continue;
+    }
+    auto const timing_events_end = std::chrono::steady_clock::now();
     if (window.swapchain_out_of_date)
     {
+      ++frame_window.resizes;
       gpu->swapchain_resize();
       window.swapchain_out_of_date = false;
       gpu->device.destroy_image(accumulation_buffer);
@@ -458,9 +662,28 @@ int RendererManager::render()
       });
       status_manager->reset_accumulation_count();
     }
-    auto swapchain_image = gpu->swapchain_acquire_next_image();
-    if (swapchain_image.is_empty())
+    auto const timing_acquire_start = std::chrono::steady_clock::now();
+    auto swapchain_image = render_due ? gpu->swapchain_acquire_next_image() : daxa::ImageId{};
+    auto const timing_acquire_end = std::chrono::steady_clock::now();
+    frame_window.ms[FrameWindow::FRONT] += elapsed_ms(timing_start, timing_events_start);
+    frame_window.ms[FrameWindow::EVENTS] += elapsed_ms(timing_events_start, timing_events_end);
+    frame_window.ms[FrameWindow::RESIZE] += elapsed_ms(timing_events_end, timing_acquire_start);
+    frame_window.ms[FrameWindow::ACQUIRE] += elapsed_ms(timing_acquire_start, timing_acquire_end);
+    if (render_due && swapchain_image.is_empty())
       continue;
+
+    // Present the already-published snapshot first. A completed physics step or
+    // a fracture transaction must not stand between fresh camera input and RT.
+    bool const rendered_early = async_sim && render_due && render_snapshot_current && prepare_snapshot();
+    auto early_render_start = std::chrono::steady_clock::now();
+    if (rendered_early) {
+      camera_manager->update(gpu->swapchain_get_extent());
+      update_resources(swapchain_image, *camera_manager);
+      execute();
+      snapshot.mark_read(gpu->device);
+    }
+    double const early_render_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - early_render_start).count();
 
     // Simulate rigid bodies: fixed 60 Hz with REAL catch-up. The sim double buffers rotate
     // per STEP (begin_sim_step inside simulate()), so several steps inside one render frame
@@ -469,6 +692,51 @@ int RendererManager::render()
     constexpr daxa_u32 MAX_CATCHUP_STEPS = 4u;
     auto const sim_phase_start = std::chrono::steady_clock::now();
     daxa_u32 sim_steps_this_frame = 0u;
+    bool completed_simulation_snapshot = false;
+    bool launch_async_step = false;
+    auto completed_main_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN);
+    auto completed_compute_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0);
+    double sim_order_ms=0, sim_submit_ms=0, sim_wait_ms=0;
+    auto run_sim_step = [&]() {
+      auto const t0=std::chrono::steady_clock::now();
+      completed_main_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN);
+      gpu->order_simulation_after_rendering();
+      auto const t1=std::chrono::steady_clock::now();
+      rigid_body_manager->simulate();
+      auto const t2=std::chrono::steady_clock::now();
+      gpu->wait_for_simulation();
+      completed_compute_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0);
+      auto const t3=std::chrono::steady_clock::now();
+      auto ms=[](auto a,auto b) { return std::chrono::duration<double,std::milli>(b-a).count(); };
+      sim_order_ms+=ms(t0,t1); sim_submit_ms+=ms(t1,t2); sim_wait_ms+=ms(t2,t3);
+      // The simulation completion boundary also covers the sampled render.
+      if (render_timing && render_query_pending &&
+          render_query_submit < gpu->device.oldest_pending_submit_index()) {
+        auto const q=render_queries.get_query_results(0,2);
+        if (q[1]!=0u && q[3]!=0u) {
+          std::cout << "[RENDER-GPU] trace_ms=" << double(q[2]-q[0])*gpu->device.properties().limits.timestamp_period/1e6 << std::endl;
+          render_query_pending=false;
+        }
+      }
+      // CPU submit/completion span, including any queued render dependency.
+      ++performance.rates.steps;
+      return ms(t1,t3);
+    };
+    auto const poll_start = std::chrono::steady_clock::now();
+    if (sim_pending && gpu->device.oldest_pending_submit_index() > pending_submit) {
+      sim_pending = false;
+      ++performance.rates.steps;
+      completed_simulation_snapshot = true;
+      sim_steps_this_frame = 1u;
+      completed_compute_submit = pending_submit;
+      // No CPU render wait here. Capture uses a free snapshot slot; topology
+      // edits retain their retirement boundary before reusing geometry storage.
+      _sim_ms_accum += std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - pending_start).count();
+      ++_sim_ms_n;
+    }
+    double const completion_poll_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-poll_start).count();
+    double pick_input_ms = 0;
     if (det_steps > 0)
     {
       // Deterministic stepping: one step per frame, wall-clock ignored, scene_3 self-loaded fresh.
@@ -481,22 +749,22 @@ int RendererManager::render()
         if (!status_manager->is_simulating()) { status_manager->switch_simulating(); }
         det_inited = true;
       }
-      else
+      else if (!async_sim || completed_simulation_snapshot)
       {
-        gpu->synchronize();
-        rigid_body_manager->simulate();
-        gpu->wait_for_simulation();
+        if (!async_sim) run_sim_step();
+        completed_simulation_snapshot = true;
         sim_steps_this_frame = 1u;
         ++det_count;
-        rigid_body_manager->read_back_sim_config();
+        rigid_body_manager->read_back_sim_config(true);
         auto const &dsc = rigid_body_manager->get_sim_config_reference();
+        std::cout << "[CHAIN] max=" << dsc.dbg_chain_max << " errors=" << dsc.dbg_chain_errors << " overflow=" << dsc.graph_color_overflow << std::endl;
         std::cout << "DET step=" << det_count << std::hex << " ph=" << dsc.dbg_poshash
                   << " rh=" << dsc.dbg_rothash << " cp2=" << dsc.dbg_cp2_poshash
                   << " cph=" << dsc.dbg_cp_poshash << " vhf=" << dsc.dbg_vh_fin
                   << " vhi=" << dsc.dbg_vh_imp << " chash=" << dsc.dbg_color_hash
                   << " lh=" << dsc.dbg_color_pad << " sh=" << dsc.dbg_state_hash
                   << " wh=" << dsc.dbg_state_pad
-                  << std::dec << " viol=" << dsc.avbd_violations << std::endl;
+                  << std::dec << " viol=" << (dsc.avbd_violations + dsc.graph_color_violations + dsc.dbg_chain_errors) << std::endl;
         det_acc = det_acc * 0x9e3779b9u + dsc.dbg_poshash; // cumulative path hash (catches transient divergence)
         if (det_count >= (daxa_u32)det_steps)
         {
@@ -504,7 +772,12 @@ int RendererManager::render()
           {
             det_hashA = det_acc;
             std::cout << "INPROC passA acc=" << std::hex << det_acc << std::dec << " -> reset + replay" << std::endl;
+            snapshot_debug_valid = false;
+            render_snapshot_current = false;
+            snapshot.invalidate();
             scene_manager->reset();   // reload scene_3 to the IDENTICAL initial state
+            completed_simulation_snapshot = false; // reset replaced the published state
+            sim_steps_this_frame = 0u; // never publish a phantom step into the reset scene
             sim_accum_s = 0.0;
             det_count = 0u; det_acc = 0u; det_pass = 2; det_inited = false; // re-arm for pass 2
           }
@@ -522,6 +795,7 @@ int RendererManager::render()
           }
         }
       }
+      if (async_sim && !sim_pending && det_inited) launch_async_step = true;
     }
     else
     {
@@ -534,11 +808,11 @@ int RendererManager::render()
       // LEFT button: grab + drag a body (statics occlude the ray; empty space grabs nothing).
       // Camera orbit lives on the RIGHT button (input_manager), so there is no conflict.
       {
+        auto const pick_start = std::chrono::steady_clock::now();
         auto &cam = camera_manager->camera;
         bool const left_held = glfwGetMouseButton(window.glfw_window_ptr, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         static bool prev_left = false;
-        f64 cx = 0.0, cy = 0.0;
-        glfwGetCursorPos(window.glfw_window_ptr, &cx, &cy);
+        f64 const cx = window.cursor_x, cy = window.cursor_y;
         glm::vec2 const pixel_center = glm::vec2(static_cast<f32>(cx), static_cast<f32>(cy)) + 0.5f;
         glm::vec2 const inv_uv = pixel_center / glm::vec2(static_cast<f32>(window.width), static_cast<f32>(window.height));
         glm::vec2 const d = inv_uv * 2.0f - 1.0f;
@@ -562,15 +836,15 @@ int RendererManager::render()
                     << " cursor=" << cx << "," << cy << std::endl;
         }
         prev_left = left_held;
+        pick_input_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-pick_start).count();
       }
       // ONE forced step after a scene load/switch to publish the async AS through the shared-resource
       // dependency path (cures the at-rest "dented/rounded cubes"). At rest is_simulating() is false, so
       // only this runs; sim_steps_this_frame=1 makes the AS-update block below rebuild the publication.
       if (force_sim_step)
       {
-        gpu->synchronize();
-        rigid_body_manager->simulate();
-        gpu->wait_for_simulation();
+        run_sim_step();
+        completed_simulation_snapshot = true;
         sim_steps_this_frame = 1u;
         force_sim_step = false;
       }
@@ -582,7 +856,7 @@ int RendererManager::render()
       // skip so the pick pass runs and can grab/wake; the readback is from the last stepped
       // frame, which stays valid precisely because nothing steps.
       bool const stasis = [&] {
-        auto const &ssc = rigid_body_manager->get_sim_config_reference();
+        auto const &ssc = rigid_body_manager->completed_config;
         if (ssc.active_rigid_body_count == 0u ||
             ssc.sleeping_count < ssc.active_rigid_body_count) { return false; }
         // a GUI toggle (TAB) changes DEBUG_INFO, and the contact-point debug buffers only
@@ -598,15 +872,14 @@ int RendererManager::render()
         double const accum_cap = gui_hitch_cooldown > 0 ? SIM_DT_S : (MAX_CATCHUP_STEPS + 1.0) * SIM_DT_S;
         if (gui_hitch_cooldown > 0) { --gui_hitch_cooldown; }
         sim_accum_s = std::min(sim_accum_s + elapsed_s, accum_cap);
-        while (sim_accum_s >= SIM_DT_S && sim_steps_this_frame < MAX_CATCHUP_STEPS)
+        if (async_sim) {
+          launch_async_step = !sim_pending && sim_accum_s >= SIM_DT_S;
+        }
+        while (!async_sim && sim_accum_s >= SIM_DT_S && sim_steps_this_frame < MAX_CATCHUP_STEPS)
         {
           sim_accum_s -= SIM_DT_S;
-          gpu->synchronize();                                          // [PERF] flush prior GPU work
-          auto _s0 = std::chrono::high_resolution_clock::now();        // [PERF]
-          rigid_body_manager->simulate();
-          gpu->wait_for_simulation();                                  // [PERF] wait compute completion
-          _sim_ms_accum += std::chrono::duration<double, std::milli>(
-            std::chrono::high_resolution_clock::now() - _s0).count();  // [PERF]
+          _sim_ms_accum += run_sim_step();
+          completed_simulation_snapshot = true;
           _sim_ms_n++;                                                 // [PERF]
           ++sim_steps_this_frame;
           // A costly contact step must not trigger four equally costly catch-up
@@ -621,27 +894,21 @@ int RendererManager::render()
         sim_accum_s = 0.0; // don't burst-step on resume
       }
     }
-    previous_frame_steps = sim_steps_this_frame;
-    previous_sim_phase_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sim_phase_start).count();
+    auto const timing_sim_end = std::chrono::steady_clock::now();
+    auto timing_edits_end = timing_sim_end;
+    auto timing_sync_end = timing_sim_end;
+    previous_frame_steps += sim_steps_this_frame;
+    previous_sim_phase_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sim_phase_start).count();
     bool const sim_stepped = sim_steps_this_frame > 0u;
-    // accumulation is only VALID over a static world: a sim step may move geometry, and
-    // blending history across poses is the ghost-speckle the user reported (pieces
-    // dissolving between two poses). Camera motion already resets it (input_manager);
-    // this is the geometry half. With pause/full-sleep stasis the world is provably
-    // still, so the progressive refinement keeps working exactly where it is meaningful.
-    if (sim_stepped && status_manager->is_accumulating())
-    {
-      status_manager->reset_accumulation_count();
-    }
     // (window.update() + swapchain acquire moved to the frame-pacing anchor above the sim)
 
     // Update the acceleration structures (only when the sim actually stepped — skipped frames
     // render the unchanged state and avoid the full-pipeline synchronize + readback)
-    if(sim_stepped || status_manager->is_updating()) {
-      rigid_body_manager->read_back_sim_config();
+    if(!sim_pending && (sim_stepped || status_manager->is_updating() || !render_snapshot_current)) {
+      rigid_body_manager->read_back_sim_config(completed_simulation_snapshot);
       // FRACTURE: consume any impact-pass events (dedicated GPU->host bridge buffer).
-      // The orchestrator carves/labels on the GPU and respawns fragments via the
-      // reset-path upload machinery; no-op (one compare) when nothing fractured.
+      // GPU partitioning and publication return compact AS build metadata;
+      // no-op (one generation comparison) when nothing fractured.
       if (sim_stepped)
       {
         if (auto const *feb = rigid_body_manager->get_fracture_events())
@@ -653,15 +920,8 @@ int RendererManager::render()
           }
           scene_manager->process_fracture_events(*feb);
         }
-        // KILL PLANE: reclaim shapes of fragments that flew out of the world. Gated on the
-        // cheap dbg_min_y signal from the readback so the cull's own readback + AS rebuild
-        // only run the frame something actually fell past it.
-        if (scene_manager->any_body_below_kill_plane(rigid_body_manager->get_sim_config_reference().dbg_min_y))
-        {
-          scene_manager->cull_out_of_world();
-        }
-        // SOAK spawner (scene_11 only): rain new breakable bodies on a cadence (no-op elsewhere)
-        scene_manager->maybe_spawn();
+        // Retire and spawn in one GPU edit, reusing freed slots before one AS publication.
+        scene_manager->process_scene_edits(rigid_body_manager->get_sim_config_reference().dbg_min_y);
       }
       // DEEP-POCKET TRACE: one CSV row per stepped frame with the deepest awake contact's
       // {pen,lambda,k,vn,pair,stick} latched by entry_avbd_pocket_trace. Full-rate (every
@@ -776,23 +1036,115 @@ int RendererManager::render()
                     << " | pace=[rf" << _rf << " st" << _steps_n << " acc" << (daxa_u64)(sim_accum_s * 1000.0) << "ms]"
                     << " frame=" << _ms << " ms (" << (1000.0 / _ms) << " fps)"
                     << "  sim=" << _sim_ms << " ms" << std::endl; } }
-      // TODO: change for wait compute queue
-      gpu->synchronize();
+      timing_edits_end = std::chrono::steady_clock::now();
+      // Ordinary pose capture only needs COMPUTE completion. Scene edits may
+      // publish or retire geometry on either queue; keep their existing full
+      // completion boundary before invalidating old geometry snapshots.
+      bool const publication_pending = !completed_simulation_snapshot ||
+          status_manager->is_updating() ||
+          gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN) != completed_main_submit ||
+          gpu->device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0) != completed_compute_submit;
+      if (publication_pending) { ++frame_window.publications; gpu->synchronize(); }
+      timing_sync_end = std::chrono::steady_clock::now();
+      accel_struct_mngr->collect_publication_timings();
+      rigid_body_manager->release_completed_scene_uploads();
       if(status_manager->is_updating()) {
         if(!status_manager->reset_update_sim_buffer()) {
           accel_struct_mngr->update_AS_buffers();
         }
       }
-      accel_struct_mngr->update_TLAS();
+      // Capture the complete publication, including debug data and CPU draw counts.
+      // The next solve cannot overwrite these render-only buffers.
+      auto const &sc = rigid_body_manager->get_sim_config_reference();
+      SimConfig render_config = sc;
+      bool const debug_valid = completed_simulation_snapshot && !publication_pending;
+      if (!debug_valid) render_config.flags = SimFlag(daxa_u32(sc.flags) & ~daxa_u32(SimFlag::DEBUG_INFO));
+      if (publication_pending) {
+        // The lifetime boundary above has drained readers before topology reuse.
+        snapshot.invalidate();
+        render_snapshot_current = false;
+      }
+      daxa_u64 const bodies = std::min(sc.rigid_body_count, daxa_u32(MAX_RIGID_BODY_COUNT));
+      bool const debug = debug_valid && (sc.flags & SimFlag::DEBUG_INFO) != 0u;
+      bool const captured = snapshot.publish(gpu->device, render_config, debug_valid, {
+          bodies * sizeof(RigidBody), bodies * sizeof(RigidBodyEntry),
+          (bodies ? bodies * 2 - 1 : 0) * sizeof(LBVHNode),
+          daxa_u64(sc.island_count) * sizeof(Island),
+          daxa_u64(sc.contact_island_count) * sizeof(ContactIsland),
+          debug ? daxa_u64(std::min(sc.g_c_info.collision_point_count, daxa_u32(BB_MAX_DEBUG_CONTACT_POINT_COUNT))) * sizeof(GUIVertex) : 0,
+          debug ? daxa_u64(std::min(sc.g_c_info.collision_point_count * 2u, daxa_u32(BB_MAX_DEBUG_CONTACT_LINE_VERTEX_COUNT))) * sizeof(GUIVertexLine) : 0,
+          debug ? bodies * 6 * sizeof(GUIVertexLine) : 0,
+          sizeof(SimConfig),
+      }, publication_pending ? gpu->device.latest_queue_submit_index(daxa::QUEUE_MAIN) : 0);
+      if (!captured && !render_snapshot_current) throw std::runtime_error("No snapshot slot after topology retirement");
+      render_snapshot_current |= captured;
     }
 
     // (swapchain resize + acquire moved to the frame-pacing anchor above the sim; the image
     // was acquired there and is rendered here)
-    camera_manager->update(gpu->swapchain_get_extent());
-    update_resources(swapchain_image, *camera_manager);
-    execute();
+    steps_since_render += sim_steps_this_frame;
+    if (render_due && !rendered_early) {
+      if (!prepare_snapshot()) throw std::runtime_error("No render snapshot available");
+      camera_manager->update(gpu->swapchain_get_extent());
+      update_resources(swapchain_image, *camera_manager);
+      execute();
+      snapshot.mark_read(gpu->device);
+    }
+    auto const timing_render_end = std::chrono::steady_clock::now();
+    // The capture copy precedes this step on COMPUTE. No MAIN reader owns the
+    // solver's buffers; occupied snapshot slots are skipped instead of stalling.
+    if (launch_async_step && !rigid_body_manager->is_dirty() && !status_manager->has_pending_scene_request()) {
+      if (det_steps == 0) sim_accum_s -= SIM_DT_S;
+      pending_start = std::chrono::steady_clock::now();
+      rigid_body_manager->simulate();
+      pending_submit = gpu->device.latest_queue_submit_index(daxa::QUEUE_COMPUTE_0);
+      sim_pending = true;
+    }
+    auto const timing_async_end = std::chrono::steady_clock::now();
     gpu->garbage_collector();
-    status_manager->next_frame();
+    frame_window.steps += sim_steps_this_frame;
+    frame_window.ms[FrameWindow::EARLY_RENDER] += elapsed_ms(timing_acquire_end, sim_phase_start);
+    frame_window.ms[FrameWindow::SIM] += elapsed_ms(sim_phase_start, timing_sim_end);
+    frame_window.ms[FrameWindow::EDITS] += elapsed_ms(timing_sim_end, timing_edits_end);
+    frame_window.ms[FrameWindow::SYNC] += elapsed_ms(timing_edits_end, timing_sync_end);
+    frame_window.ms[FrameWindow::CAPTURE_RENDER] += elapsed_ms(timing_sync_end, timing_render_end);
+    frame_window.ms[FrameWindow::SUBMIT] += elapsed_ms(timing_render_end, timing_async_end);
+    frame_window.ms[FrameWindow::GC] += elapsed_ms(timing_async_end, std::chrono::steady_clock::now());
+    if (frame_timing && render_due) {
+      auto const end = std::chrono::steady_clock::now();
+      auto ms = [](auto a,auto b) { return std::chrono::duration<double,std::milli>(b-a).count(); };
+      std::cout << "[FRAME-PHASES] frame=" << render_frames_total
+                << " steps=" << steps_since_render
+                << " pending=" << sim_pending
+                << " wall_ms=" << previous_frame_ms
+                << " front_ms=" << ms(timing_start,sim_phase_start)
+                << " gui_ms=" << ms(timing_start,timing_gui_end)
+                << " scene_updates_ms=" << ms(timing_gui_end,timing_events_start)
+                << " events_ms=" << ms(timing_events_start,timing_events_end)
+                << " front_cpu_ms=" << ms(timing_start,timing_acquire_start)
+                << " acquire_ms=" << ms(timing_acquire_start,timing_acquire_end)
+                << " completion_poll_ms=" << completion_poll_ms
+                << " pick_input_ms=" << pick_input_ms
+                << " sim_ms=" << ms(sim_phase_start,timing_sim_end)
+                << " sim_order_ms=" << sim_order_ms
+                << " sim_submit_ms=" << sim_submit_ms
+                << " sim_wait_ms=" << sim_wait_ms
+                << " edits_ms=" << ms(timing_sim_end,timing_edits_end)
+                << " sync_ms=" << ms(timing_edits_end,timing_sync_end)
+                << " early_render_ms=" << early_render_ms
+                << " render_ms=" << ms(timing_sync_end,timing_render_end)
+                << " async_submit_ms=" << ms(timing_render_end,timing_async_end)
+                << " gc_ms=" << ms(timing_async_end,end)
+                << " worst_step_ms=" << rigid_body_manager->step_timer.metric.worst_ms
+                << " worst_render_ms=" << frame_timer.metric.worst_ms
+                << " worst_frame_ms=" << performance.frame.worst_ms
+                << " total_ms=" << ms(timing_start,end) << std::endl;
+    }
+    if (render_due) {
+      status_manager->next_frame();
+      steps_since_render = 0;
+
+    }
   }
   gpu->synchronize();
   gpu->garbage_collector();

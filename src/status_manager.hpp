@@ -152,6 +152,7 @@ struct StatusManager
   // tool for "send me the exact configuration you are looking at" debugging.
   void request_dump() { dump_requested = true; }
   bool consume_dump() { bool d = dump_requested; dump_requested = false; return d; }
+  bool has_pending_scene_request() const { return reset_requested || requested_scene >= 0 || dump_requested; }
   void stop_simulating() { simulating = false; } // force-pause (used by reset)
 
   void switch_simulating()

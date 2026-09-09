@@ -31,8 +31,10 @@ struct AccelerationStructureManager
   // TaskGraph for updating acceleration structures
   TaskGraph AS_update_buffers_TG;
 
-  daxa::TaskBuffer task_dispatch_buffer{{.name = "dispatch_buffer"}};
   daxa::TaskBuffer task_blas_instance_data{{.name = "blas_instance_data"}};
+  daxa::TaskBuffer task_dispatch_buffer{{.name = "dispatch_buffer"}};
+  bool update_TLAS_resources(daxa::BufferId dispatch_buffer);
+  std::optional<daxa_BlasInstanceData> pending_debug_instance;
 
   explicit AccelerationStructureManager(daxa::Device &device, std::shared_ptr<TaskManager> task_manager);
   ~AccelerationStructureManager();
@@ -46,19 +48,23 @@ struct AccelerationStructureManager
   daxa::BufferId get_next_rigid_body_buffer();
 
 
-  // NOTE: queue sync assures double buffering is filled
-  void build_AS();
+  // Runtime publication can defer completion to the renderer's final boundary.
+  // Initial loading keeps the synchronous default before its immediate TLAS update.
+  void build_AS(bool defer_completion = false);
+  // Call after a completion boundary; never waits to collect profiling results.
+  void collect_publication_timings();
   // Post-upload hook, after all host writes and before AS construction.
   // Arguments: primitive scratch, body scratch, and instance data. GPU fragment
-  // finalization may update these inputs; the hook must finish before returning.
+  // publication may update these inputs. The hook submits on MAIN; the following
+  // AS graph consumes them on MAIN without further host writes.
   bool build_accel_structs(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
-                           std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload = {});
+                           std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload = {}, bool gpu_scene = false);
   // Incremental sibling of build_accel_structs (see the member note by blas_region_pool_): same
-  // dense prim layout + full re-upload, but (re)builds only the BLAS whose prim content changed,
+  // dense primitive layout (GPU-generated at runtime), but rebuilds only changed BLAS,
   // keeping every unchanged body's baked BLAS. Falls back to the full build until seeded by one.
   bool update_accel_structs_incremental(std::vector<RigidBody> &rigid_bodies, std::vector<Aabb> const &primitives,
                                         std::function<void(daxa::BufferId, daxa::BufferId, daxa::BufferId)> const &post_primitive_upload = {},
-                                        std::span<daxa_u32 const> changed_bodies = {});
+                                        std::span<daxa_u32 const> changed_bodies = {}, bool gpu_scene = false);
   void update_TLAS();
   // Zero the incremental upload counters so the next build_accel_structs() re-fills from offset 0
   // (used by scene reset/reload). Without this the counts accumulate and the 2nd reload exceeds the
@@ -75,7 +81,6 @@ struct AccelerationStructureManager
     // state (a scene reset/switch invalidates every per-body BLAS + the region pool).
     incremental_ready_ = false;
   }
-  bool update_TLAS_resources(daxa::BufferId dispatch_buffer);
   void update_AS_buffers();
 
 private:
@@ -95,6 +100,18 @@ private:
   daxa::Device &device;
   // Initialization flag
   bool initialized = false;
+  bool publication_timing = false;
+  daxa::TimelineQueryPool publication_queries = {};
+  struct PublicationTiming
+  {
+    daxa::TimelineQueryPool queries;
+    bool pending = false, deferred = false;
+    double record_ms = 0.0, host_wait_ms = 0.0;
+    size_t blas_count = 0;
+  };
+  std::vector<PublicationTiming> publication_samples;
+  daxa::TimelineQueryPool tlas_queries = {};
+  bool tlas_query_pending = false;
   // Task manager reference
   std::shared_ptr<TaskManager> task_manager;
   // Back-references wired in create() — RAW pointers on purpose (review v3): RendererManager owns
@@ -160,7 +177,7 @@ private:
   bool incremental_ready_ = false;                      // seeded by the last full build
   // FNV-1a over a body's prim span [off, off+count) -- any geometry change flips it. count is
   // folded in so a re-sized span is always caught even on a (negligible) 64-bit float collision.
-  static u64 hash_prim_span(std::vector<Aabb> const &prims, u32 off, u32 count)
+  static u64 hash_prim_span(std::span<Aabb const> prims, u32 off, u32 count)
   {
     u64 h = 1469598103934665603ull;
     auto mix = [&](u32 v) { h = (h ^ v) * 1099511628211ull; };
@@ -172,6 +189,16 @@ private:
       for (f32 x : f) { u32 b; std::memcpy(&b, &x, 4); mix(b); }
     }
     return h;
+  }
+  static u64 hash_body_geometry(RigidBody const &body, std::vector<Aabb> const &primitives)
+  {
+    // Voxel occupancy is GPU-owned and immutable for a live shape. Reused slots
+    // are explicitly dirty in the GPU build manifest, including spawn/cull edits.
+    if (body.shape_index!=0u)
+      return (u64(body.shape_index)<<32u) ^ u64(body.primitive_count) ^ 0x9e3779b97f4a7c15ull;
+    if (!primitives.empty()) return hash_prim_span(primitives,body.primitive_offset,body.primitive_count);
+    Aabb box(body.minimum,body.maximum);
+    return hash_prim_span(std::span<Aabb const>(&box,1),0u,1u);
   }
   // The last full build (build_accel_structs) seeds the incremental state from proc_blas so the
   // first fracture can diff against it; a fresh full build / reset clears it.

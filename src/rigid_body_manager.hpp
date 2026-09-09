@@ -1,4 +1,5 @@
 #pragma once
+#include "gpu_performance_timer.hpp"
 
 #include "defines.hpp"
 #include "task_manager.hpp"
@@ -10,6 +11,7 @@ struct RendererManager;
 struct GUIManager;
 
 struct RigidBodyManager{
+  GpuPerformanceTimer step_timer;
 
   explicit RigidBodyManager(daxa::Device& device, 
   std::shared_ptr<TaskManager> task_manager, std::shared_ptr<AccelerationStructureManager> accel_struct_mngr);
@@ -19,8 +21,12 @@ struct RigidBodyManager{
   void destroy();
 
   bool simulate();
-  bool read_back_sim_config();
+  // true requires observed completion of the latest simulate() (wait or timeline poll),
+  // with no subsequent reset or parity change.
+  bool read_back_sim_config(bool completed_simulation_snapshot = false);
   SimConfig& get_sim_config_reference();
+  SimConfig completed_config = {};
+  SimConfig render_config = {}; // CPU copy associated with the published render snapshot
 
   bool update();
   bool update_resources();
@@ -112,34 +118,20 @@ struct RigidBodyManager{
   // mouse pick-and-drag bridge (host-visible; input half host-written, state half GPU-written)
   daxa::TaskBuffer task_pick_state{{.buffer = {}, .name = "RB_pick_state_task"}};
 
-  // Mouse pick input, called once per render frame from the render loop: the camera ray under the
-  // cursor + button edges. `request` grabs (ray-cast) on the left-press edge; `dragging` keeps
-  // the spring alive while held. The GPU consumes REQUEST; the existing post-simulation wait protects host access.
-  void set_pick_input(daxa_f32vec3 ray_origin, daxa_f32vec3 ray_dir, bool request, bool dragging)
+  // Input stays on the CPU until the next step; never overwrite the mapped pick
+  // bridge while an asynchronous step may still read/write it.
+  daxa_f32vec3 pending_pick_origin = {}, pending_pick_dir = {};
+  bool pending_pick_request = false, pending_pick_dragging = false;
+  daxa_u32 completed_picked_body = MAX_U32, completed_grab_count = 0;
+  void set_pick_input(daxa_f32vec3 origin, daxa_f32vec3 direction, bool request, bool dragging)
   {
-    if (!initialized) { return; }
-    auto *ps = device.buffer_host_address_as<PickState>(pick_state_buffer).value();
-    ps->ray_origin = ray_origin;
-    ps->ray_dir = ray_dir;
-    // Render frames can outnumber physics steps: retain an unconsumed edge while
-    // held. Release cancels it. The pick pass clears REQUEST after one raycast.
-    bool const pending = dragging && (request || (ps->flags & BB_PICK_REQUEST) != 0u);
-    ps->flags = (pending ? BB_PICK_REQUEST : 0u) | (dragging ? BB_PICK_DRAGGING : 0u);
+    pending_pick_origin = origin;
+    pending_pick_dir = direction;
+    pending_pick_request = dragging && (request || pending_pick_request);
+    pending_pick_dragging = dragging;
   }
-
-  // The currently grabbed body's persistent id (MAX_U32 = none) — a host read of the GPU-written
-  // half of the pick bridge (single u32: tear-free). Lets the render loop suppress camera rotation
-  // while the left button is dragging a body instead of orbiting.
-  daxa_u32 get_picked_body()
-  {
-    if (!initialized) { return MAX_U32; }
-    return device.buffer_host_address_as<PickState>(pick_state_buffer).value()->picked_id;
-  }
-  daxa_u32 get_grab_count() // diagnostic (BB_PICK_TRACE)
-  {
-    if (!initialized) { return 0u; }
-    return device.buffer_host_address_as<PickState>(pick_state_buffer).value()->grab_count;
-  }
+  daxa_u32 get_picked_body() const { return completed_picked_body; }
+  daxa_u32 get_grab_count() const { return completed_grab_count; }
   // voxel collision shape pools (static after scene load; host-writable, filled by the
   // SceneManager and addressed through SimConfig - no task-graph attachments needed)
   daxa::BufferId get_voxel_shapes_buffer() const { return voxel_shapes; }
@@ -166,22 +158,32 @@ struct RigidBodyManager{
                              std::vector<std::pair<daxa_u32, daxa_u32>> const &bodies,
                              daxa::BufferId prims_buffer,
                              std::vector<Aabb> const &cpu_reference,
-                             std::span<FragmentFinalizePushConstants const> finalizations = {});
-  // FRACTURE: carve an impact sphere out of a shape's live occupancy slice and label its
-  // fragments, all on the GPU (labels in the EDT scratch buffer). When `sites` is non-empty
-  // the impact zone (within voronoi_radius of the carve center) is partitioned along those
-  // Voronoi sites so it shatters into many fragments; empty `sites` = the legacy natural
-  // connected-components split. Returns labels for host packing and sorted component
-  // statistics (GPU census for large grids, exact CPU census for small grids).
-  void carve_and_label(VoxelShape const &shape, daxa_f32vec3 carve_center_grid, daxa_f32 carve_radius_grid,
-                       std::vector<daxa_f32vec4> const &sites, daxa_f32 voronoi_radius_grid,
-                       std::vector<daxa_u32> &out_labels, std::vector<FragmentComponent> &out_components);
-  // read the GPU mass-property records (count/com/unit inertia) for the first `count`
-  // shapes - the authority for fragment RigidBody records after a pools rebuild
+                             daxa::BufferId publication_bodies = {}, daxa::BufferId publication_instances = {},
+                             daxa_u32 live_count = 0u);
+  // GPU material seeding, partitioning and component planning. Only the compact
+  // build manifest leaves the device; labels are downloaded only for verification.
+  void carve_and_label(VoxelShape const &shape, daxa_u32 body_id,
+                       std::vector<daxa_u32> &out_labels, std::vector<FragmentComponent> &out_components,
+                       std::vector<FractureChildAllocation> &allocations);
+  std::vector<FractureParentContext> read_fracture_contexts();
+  void verify_fracture_events_gpu();
+  void verify_fracture_allocator_gpu();
+  // Initial authored occupancy upload; runtime occupancy remains GPU-owned.
+  void upload_voxel_occupancy(std::span<daxa_u32 const> occupancy);
+  std::vector<daxa_u32> read_voxel_occupancy(daxa_u32 count);
+  void initialize_fracture_allocator(std::array<daxa_u32, GPU_POOL_COUNT> const &high_water,
+                                     std::span<RigidBody const> spawn_templates = {});
+  FractureSceneEditManifest edit_fracture_scene_gpu(bool cull, bool spawn, daxa_f32 kill_y);
+  std::vector<FractureBatchChild> fracture_batch_gpu(std::span<FracturePartitionInput const> inputs);
+  std::vector<GpuFreeList> read_fracture_pools();
   void read_voxel_derived(daxa_u32 count, std::vector<VoxelShapeDerived> &out);
-  // FRACTURE event bridge (host side): GPU-written by the impact pass, host-read here.
-  // Tear-free enough for the ring: the serial is a single u32 and the host consumes
-  // between steps (the sim loop synchronizes the GPU around every step).
+  // Compact FRACTURE event bridge: geometric payloads stay in GPU pending storage.
+  // Read/ack only after simulation completion publishes the host-visible summary.
+  // A scalar generation alone is not a synchronization primitive.
+  void acknowledge_fracture_events(daxa_u32 serial)
+  {
+    device.buffer_host_address_as<FractureEventBuffer>(fracture_events_buffer).value()->consumed_serial = serial;
+  }
   FractureEventBuffer const *get_fracture_events()
   {
     if (!initialized || fracture_events_buffer.is_empty()) { return nullptr; }
@@ -190,16 +192,22 @@ struct RigidBodyManager{
   void reset_fracture_events()
   {
     if (!initialized || fracture_events_buffer.is_empty()) { return; }
-    *device.buffer_host_address_as<FractureEventBuffer>(fracture_events_buffer).value() = FractureEventBuffer{};
+    auto *events = device.buffer_host_address_as<FractureEventBuffer>(fracture_events_buffer).value();
+    *events = FractureEventBuffer{};
+    events->scratch_addr = device.device_address(fracture_impact_scratch).value();
   }
-  // re-upload the (host-authoritative) VoxelShape records after the orchestrator fixed
-  // grid_origins from the derived readback (the prims pass reads grid_origin)
-  void upload_voxel_shapes(std::vector<VoxelShape> const &shapes);
+
+  // The renderer calls this only after all queues complete the frame's edits.
+  void release_completed_scene_uploads() { sim_config_upload_cursor = 0; }
 
 private:
+  daxa::TaskBuffer task_sim_config_upload{{.name="Immutable simulation upload"}};
+  std::vector<daxa::BufferId> sim_config_uploads;
+  size_t sim_config_upload_cursor = 0;
+  daxa::InlineTaskInfo sim_config_readback_task();
   void record_read_back_sim_config_tasks(TaskGraph &out_readback_SC_TG);
   void record_update_sim_config_tasks(TaskGraph &out_update_SC_TG);
-  void record_active_rigid_body_list_upload_tasks(TaskGraph &ARB_TG);
+  void record_active_rigid_body_list_tasks(TaskGraph &ARB_TG);
   void update_buffers();
   void update_buffers(daxa_u32 current_frame);
   
@@ -263,7 +271,17 @@ private:
   std::shared_ptr<daxa::ComputePipeline> pipeline_VSB_PRIMS;
   std::shared_ptr<daxa::ComputePipeline> pipeline_fragment_finalize;
   std::shared_ptr<daxa::ComputePipeline> pipeline_census_init, pipeline_census_accumulate, pipeline_census_compact;
-  daxa::BufferId fracture_census_scratch{}, fracture_census_output{};
+  daxa::BufferId fracture_census_scratch{}, fracture_census_output{}, fracture_remap_buffer{};
+  std::shared_ptr<daxa::ComputePipeline> pipeline_fragment_plan, pipeline_fracture_allocate, pipeline_fragment_batch_pack;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_impact_reset, pipeline_impact_select, pipeline_impact_publish;
+  void record_fragment_census(daxa::CommandRecorder &rec, daxa_u32vec3 dims, daxa_u64 labels_addr, bool compact, daxa_u32 body_id = MAX_U32);
+  void record_fracture_partition(daxa::CommandRecorder &rec,
+      daxa_u32 body_id, daxa_u32 body_count, daxa_u64 batch_addr, daxa_u32 recorded_passes,
+      bool compact, daxa::TimelineQueryPool *queries = nullptr,
+      daxa::TimelineQueryPool *stage_queries = nullptr, daxa_u32 stage_query_base = 0u);
+  std::shared_ptr<daxa::ComputePipeline> pipeline_body_list;
+  std::shared_ptr<daxa::ComputePipeline> pipeline_fracture_setup, pipeline_fracture_gather, pipeline_fracture_scene_edit, pipeline_fracture_layout, pipeline_voxel_primitive_batch;
+  daxa::BufferId fracture_plan_manifest{};
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_CARVE;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_VORONOI;
   std::shared_ptr<daxa::ComputePipeline> pipeline_VFR_FLOOD_INIT;
@@ -353,6 +371,7 @@ private:
   daxa::BufferId sim_config[DOUBLE_BUFFERING] = {};
   daxa::BufferId pick_state_buffer = {}; // host-visible bridge (see task_pick_state)
   bool narrow_phase_timing = false;
+  bool avbd_fine_timing = false;
   bool narrow_phase_query_pending = false;
   daxa::TimelineQueryPool narrow_phase_queries = {};
   daxa::TimelineQueryPool solver_stage_queries = {};
@@ -391,8 +410,12 @@ private:
   daxa::BufferId voxel_sdf = {};
   daxa::BufferId voxel_sdf_scratch[2] = {}; // squared-distance fields (solid/empty) for the GPU EDT
   daxa::BufferId voxel_derived = {};        // VoxelShapeDerived per shape (GPU mass-property reduce)
+  daxa::BufferId fracture_allocator = {}, fracture_allocations = {}, fracture_batch_manifest = {};
+  daxa::BufferId fracture_scene_manifest = {}, fracture_spawn_templates = {}, fracture_spawn_body = {};
+  daxa_u32 fracture_spawn_template_count = 0u;
+  daxa::BufferId fracture_contexts = {};
+  daxa::BufferId fracture_impact_scratch = {};
   daxa::BufferId fracture_events_buffer = {}; // host-visible impact->host fracture bridge
-  daxa::BufferId fracture_sites_buffer = {};  // host-written Voronoi site positions (grid space)
 
   // Simulation configuration. AVBD is the default solver (user decision after the A/B
   // campaign: rests flush at pen~0 vs 13mm Baumgarte sink, true zero residual velocity,

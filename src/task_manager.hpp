@@ -61,6 +61,7 @@ inline void allocate_fill_copy(daxa::TaskInterface ti, T value, daxa::TaskBuffer
 template<typename T>
 inline void allocate_fill_copy(daxa::TaskInterface ti, std::vector<T> value, daxa::TaskBufferAttachmentInfo dst, u32 dst_offset = 0)
 {
+  if (value.empty()) return; // Vulkan forbids zero-sized copies (e.g. F11 before its first spawn).
   auto size = static_cast<daxa::u32>(value.size() * sizeof(T));
   auto alloc = ti.allocator->allocate(size).value();
   memcpy(alloc.host_address, value.data(),size);

@@ -1,5 +1,7 @@
 # Fracture publication and TGS
 
+Historical measurements below use the original F10 material comparison scene. F10 now contains the breakable box pool described in [GPU fracture ownership](GPU_FRACTURE_OWNERSHIP.md).
+
 ## Changes
 
 - TGS now classifies material impacts once during contact preparation, before warm start

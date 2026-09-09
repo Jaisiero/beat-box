@@ -1,6 +1,7 @@
 #include "body_activity.slang"
 #include "rigid_body_math.slang"
 #include "solvers.slang"
+#include "color_solve_dispatch.slang"
 
 [[vk::push_constant]] CollisionPreSolverPushConstants CPS;
 [[vk::push_constant]] CollisionSolverPushConstants CS;
@@ -260,7 +261,7 @@ bool gc_overflowed(daxa_u32 c)
 }
 
 [shader("compute")]
-[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_pre_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+[numthreads(COLOR_SOLVE_COMPUTE_X, 1, 1)] void entry_collision_pre_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
   daxa_u32 m = compute_i.x;
@@ -296,7 +297,7 @@ bool gc_overflowed(daxa_u32 c)
     daxa::f32 h = sim_config->dt / daxa_f32(sim_config->tgs_substeps);
     daxa::f32 inv_h = h > 0.0f ? 1.0f / h : 0.0f;
     daxa::f32 tgs_hertz = min(TGS_CONTACT_HERTZ, inv_h * 0.3333333333333333f);
-    TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz, sim_config);
+    TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz, sim_config, m);
     return;
   }
   if (GCS.tgs_phase == 2) // Box2D v3's per-sub-step warm start stage
@@ -311,7 +312,7 @@ bool gc_overflowed(daxa_u32 c)
 }
 
 [shader("compute")]
-[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+[numthreads(COLOR_SOLVE_COMPUTE_X, 1, 1)] void entry_collision_solver_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
   daxa_u32 m = compute_i.x;
@@ -341,7 +342,7 @@ bool gc_overflowed(daxa_u32 c)
 }
 
 [shader("compute")]
-[numthreads(RIGID_BODY_SIM_COMPUTE_X, 1, 1)] void entry_collision_solver_relax_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
+[numthreads(COLOR_SOLVE_COMPUTE_X, 1, 1)] void entry_collision_solver_relax_color(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
   SimConfig* sim_config = (SimConfig*)(GCS.task_head.sim_config);
   daxa_u32 m = compute_i.x;
@@ -383,6 +384,7 @@ bool gc_overflowed(daxa_u32 c)
   bool serial_all = GCS.color == MAX_U32;
   if (!serial_all && sim_config->graph_color_overflow == 0u) return;
   let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  DispatchBuffer* dispatch = (DispatchBuffer*)(GCS.task_head.dispatch_buffer);
   daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
   RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
@@ -390,8 +392,11 @@ bool gc_overflowed(daxa_u32 c)
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
   daxa::f32 hertz = min(MIN_CONTACT_HERTZ, inv_dt * 0.3333333333333333f);
   for (daxa_u32 pass = 0u; pass < (serial_all ? BB_MAX_COLORS_SOLVE + 1u : 1u); ++pass)
-  for (daxa_u32 m = 0u; m < coll; ++m)
+  for (daxa_u32 ordinal = 0u;
+       ordinal < ((serial_all && pass < BB_MAX_COLORS_SOLVE) ? coll : dispatch->graph_color_overflow_count);
+       ++ordinal)
   {
+    daxa_u32 m = (serial_all && pass < BB_MAX_COLORS_SOLVE) ? ordinal : dispatch->graph_color_overflow_ids[ordinal];
     if (serial_all && pass < BB_MAX_COLORS_SOLVE)
     {
       if (manifold_color[m] != pass) continue;
@@ -411,7 +416,7 @@ bool gc_overflowed(daxa_u32 c)
         daxa::f32 h = sim_config->dt / daxa_f32(sim_config->tgs_substeps);
         daxa::f32 inv_h_sub = h > 0.0f ? 1.0f / h : 0.0f;
         daxa::f32 tgs_hertz = min(TGS_CONTACT_HERTZ, inv_h_sub * 0.3333333333333333f);
-        TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz, sim_config);
+        TGS_SOFT.pre_step(manifold, r1, r2, h, tgs_hertz, sim_config, m);
       }
       else if (GCS.tgs_phase == 2)
         TGS_SOFT.warm_start(manifold, r1, r2, accum_impulse, friction);
@@ -431,14 +436,18 @@ bool gc_overflowed(daxa_u32 c)
   bool serial_all = GCS.color == MAX_U32;
   if (!serial_all && sim_config->graph_color_overflow == 0u) return;
   let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  DispatchBuffer* dispatch = (DispatchBuffer*)(GCS.task_head.dispatch_buffer);
   daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
   RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
   for (daxa_u32 pass = 0u; pass < (serial_all ? BB_MAX_COLORS_SOLVE + 1u : 1u); ++pass)
-  for (daxa_u32 m = 0u; m < coll; ++m)
+  for (daxa_u32 ordinal = 0u;
+       ordinal < ((serial_all && pass < BB_MAX_COLORS_SOLVE) ? coll : dispatch->graph_color_overflow_count);
+       ++ordinal)
   {
+    daxa_u32 m = (serial_all && pass < BB_MAX_COLORS_SOLVE) ? ordinal : dispatch->graph_color_overflow_ids[ordinal];
     if (serial_all && pass < BB_MAX_COLORS_SOLVE)
     {
       if (manifold_color[m] != pass) continue;
@@ -468,14 +477,18 @@ bool gc_overflowed(daxa_u32 c)
   bool serial_all = GCS.color == MAX_U32;
   if (!serial_all && sim_config->graph_color_overflow == 0u) return;
   let coll = min(sim_config->g_c_info.collision_count, BB_MAX_COLLISION_COUNT);
+  DispatchBuffer* dispatch = (DispatchBuffer*)(GCS.task_head.dispatch_buffer);
   daxa_u32* manifold_color = (daxa_u32*)(GCS.task_head.manifold_color);
   RigidBody* rigid_bodies = (RigidBody*)(GCS.task_head.rigid_bodies);
   daxa::b32 accum_impulse = sim_config->has_flag(SimFlag::ACCUM_IMPULSE);
   daxa::b32 friction = sim_config->has_flag(SimFlag::FRICTION);
   daxa::f32 inv_dt = sim_config->dt > 0.0f ? 1.0f / sim_config->dt : 0.0f;
   for (daxa_u32 pass = 0u; pass < (serial_all ? BB_MAX_COLORS_SOLVE + 1u : 1u); ++pass)
-  for (daxa_u32 m = 0u; m < coll; ++m)
+  for (daxa_u32 ordinal = 0u;
+       ordinal < ((serial_all && pass < BB_MAX_COLORS_SOLVE) ? coll : dispatch->graph_color_overflow_count);
+       ++ordinal)
   {
+    daxa_u32 m = (serial_all && pass < BB_MAX_COLORS_SOLVE) ? ordinal : dispatch->graph_color_overflow_ids[ordinal];
     if (serial_all && pass < BB_MAX_COLORS_SOLVE)
     {
       if (manifold_color[m] != pass) continue;

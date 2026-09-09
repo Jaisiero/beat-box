@@ -164,6 +164,7 @@ enum SimFlag : daxa_u32
                                // layout-dependent per-sweep noise can't converge out -> ph=cph, which
                                // IS bitwise-deterministic across launches). Trades depenetration depth
                                // for reproducibility; the converged main solve + rest state are unaffected.
+  PROFILE_AVBD_WORK = 1 << 10, // optional contact/color workload counters; no solver behavior changes
   DET_HASHES = 1 << 9,         // compute the determinism debug pose/state hashes (dbg_*). OFF in normal
                                // runs so the per-body/per-manifold InterlockedXor + the chain-walk hash
                                // don't add hot-path atomic contention; set by main.cpp when any of
@@ -597,28 +598,6 @@ static const daxa_f32 PI = 3.14159265359f;
 static const daxa_f32 COLLISION_GUARD = 1e-3f;
 static const daxa_u32 AABB_CORNER_COUNT = 8;
 
-// FRACTURE (MVP): one impact strong enough to break a body. Latched by the impact pass
-// (which already computes each row's stopping impulse); consumed by the host orchestrator
-// (carve + connected components + fragment respawn). World-space contact data.
-static const daxa_u32 BB_MAX_FRACTURE_EVENTS = 8;
-struct FractureEvent
-{
-  daxa_u32 body_id;      // PERSISTENT body id (rows reorder every step)
-  daxa_f32 impulse;      // max fired-row impulse on this body (kg*m/s)
-  daxa_f32vec3 position; // contact point, world
-  daxa_f32vec3 normal;   // manifold normal, world
-};
-// DEDICATED host-visible bridge buffer (pick_state pattern), addressed through
-// SimConfig::fracture_events_addr. NOT inside SimConfig: the sim config is re-uploaded
-// from the host template EVERY STEP (that is how sim_flags propagate), which would wipe
-// any event state stored there - measured: a serial written by the impact pass survived
-// exactly one step. This buffer is written ONLY by the impact pass (GPU) and read/reset
-// ONLY by the host; the monotonic serial ring survives multi-step catch-up bursts.
-struct FractureEventBuffer
-{
-  daxa_u32 serial; // monotonic; slot = serial % BB_MAX_FRACTURE_EVENTS
-  FractureEvent events[BB_MAX_FRACTURE_EVENTS];
-};
 
 struct GlobalCollisionInfo
 {
@@ -643,7 +622,14 @@ struct SimConfig
   daxa_u32 dbg_node_overflow;      // narrow phase: # manifold-link nodes DROPPED because manifold_node_count hit BB_MAX_MANIFOLD_NODE_COUNT (0 = healthy; >0 = a body's manifold list truncated -> missed contacts)
   daxa_u32 gc_round;               // graph-coloring: current round index (incremented by owner_reset; seeds the fair-arbitration priority)
   daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
+  // Optional per-step awake-body workload, indexed by body color. Contact visits
+  // count both awake endpoints; they are not unique manifold/contact counts.
+  daxa_u32 avbd_work_bodies[32];
+  daxa_u32 avbd_work_contacts[32];
+  daxa_u32 avbd_work_max_contacts[32];
+  daxa_u32 avbd_work_max_manifolds[32];
   daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)
+  daxa_u32 avbd_layer_color_mask[12]; // awake body colors per support layer (BB_AVBD_SHOCK_LAYERS)
   daxa_u32 avbd_max_support_depth; // AVBD: max support-depth layer over dynamic bodies this step (post-BFS, clamped to SHOCK_LAYERS-1); the post-stab cascade skips layers above this
   daxa_u32 avbd_iter_tick;         // AVBD convergence early-out: main-sweep iteration counter, ticked by the dual pass (thread 0) between primal sweeps
   daxa_u32 avbd_step_res[2];       // AVBD: max primal step magnitude of main-sweep iteration (tick&1), stored as ordered float bits (asuint of a non-negative f32 compares like the float). When the PREVIOUS iteration's max step is below BB_AVBD_CONV_EPS the system converged: remaining main sweeps early-return (rest converges in a few of the 10 iterations; impacts keep the full budget - quality by construction)
@@ -708,7 +694,9 @@ struct SimConfig
   daxa_u32 dbg_color_pad;          // (repurposed = full contact-geometry lh hash, computed in IMPJ)
   daxa_u32 dbg_state_hash;         // XOR hash of avbd_state (pos_tilde+support_depth) — un-hashed
   daxa_u32 dbg_state_pad;          // read of the post-stab; diverges => avbd_state is process-specific
-                                   // --- per-frame reset boundary (see reset_fresh array) ---
+  daxa_u32 dbg_chain_max;         // DET_HASHES: largest complete per-body manifold chain
+  daxa_u32 dbg_chain_errors;      // DET_HASHES: chain/overflow ordering or chain membership failures
+  // Per-frame reset ends here; the following deep-miss latch persists.
   daxa_u32 dbg_dm_ids;             // PERSISTENT: first deep-MISS pair ever ((idA<<16)|idB)
   daxa_u32 dbg_dm_walk_a;          // PERSISTENT: that event's chain-walk forensics
   daxa_u32 dbg_dm_walk_b;
@@ -883,6 +871,8 @@ static const daxa_u32 GRAPH_COLOR_SOLVE_DISPATCH_OFFSET = 8; // per-color solve 
 static const daxa_u32 AVBD_COLOR_SOLVE_DISPATCH_OFFSET = GRAPH_COLOR_SOLVE_DISPATCH_OFFSET + 32; // per-color AVBD PRIMAL dispatch array (body color c at offset +c); empty body colors get 0 workgroups
 static const daxa_u32 AVBD_CASCADE_DISPATCH_OFFSET = AVBD_COLOR_SOLVE_DISPATCH_OFFSET + 32; // per-(layer,color) AVBD post-stab CASCADE dispatch array; entry [d*32+c]; layers d > avbd_max_support_depth get 0 workgroups
 
+static const daxa_u32 BB_MAX_COLLISION_COUNT = 32768;
+
 struct DispatchBuffer
 {
   daxa_u32vec3 rigid_body_dispatch;
@@ -897,13 +887,15 @@ struct DispatchBuffer
                                                           // ceil(coll/X), unused colors get 0 workgroups
                                                           // (a dense pile uses ~6-12 of 32 colors, so the
                                                           // rest cost nothing instead of full-count early-out)
-  daxa_u32vec3 avbd_color_dispatch[32]; // per-color AVBD PRIMAL dispatch (same idea as above but per-BODY):
-                                                    // used body colors (c < avbd_color_count = max(body_color)+1) get
-                                                    // ceil(rigid_body_count/X), the rest get 0 (a pile uses ~7 of 32)
-  daxa_u32vec3 avbd_cascade_dispatch[12 * 32]; // per-(layer,color) post-stab CASCADE dispatch [d*32+c]; 12 = BB_AVBD_SHOCK_LAYERS,
-                                                          // 32 = BB_MAX_COLORS (both defined below). entry = (d <= avbd_max_support_depth
-                                                          // && c < avbd_color_count) ? ceil(rigid_body_count/X) : 0 — a 2-4 layer pile
-                                                          // skips layers 4..11 entirely (subsumes the per-color skip for the cascade)
+  // Nonempty awake-body colors scan the body grid; empty colors get zero groups.
+  daxa_u32vec3 avbd_color_dispatch[32];
+  // Per-(layer,color) cascade arguments, using occupied awake-body masks. Keep
+  // the twelve layers in sync with BB_AVBD_SHOCK_LAYERS below.
+  daxa_u32vec3 avbd_cascade_dispatch[12 * 32];
+  // Stable serial-overflow worklist; existing indirect argument offsets stay fixed.
+  daxa_u32 graph_color_overflow_count;
+  daxa_u32 graph_color_overflow_ids[BB_MAX_COLLISION_COUNT];
+
 };
 DAXA_DECL_BUFFER_PTR(DispatchBuffer)
 
@@ -935,8 +927,47 @@ static const daxa_u32 BB_MAX_VOXEL_SDF_F32S = 65536;   // shared NODE signed-dis
 // overflow paths are LOUD: manifolds -> dbg_contact_overflow (PERF contact_of=, gauntlet-
 // visible), broad -> emission stops at the cap (LBVH.slang bp bound).
 static const daxa_u32 BB_MAX_BROAD_PAIR_COUNT = 65536; // broad-phase candidate pairs (8 B each)
-static const daxa_u32 BB_MAX_COLLISION_COUNT = 32768;  // manifolds (~460 B each, x2 parities + scratch)
+  // manifolds (~460 B each, x2 parities + scratch)
 static const daxa_u32 BB_MAX_MANIFOLD_NODE_COUNT = BB_MAX_COLLISION_COUNT * 2;
+
+// GPU impact reduction publishes at most one strongest event per persistent body.
+static const daxa_u32 BB_MAX_FRACTURE_EVENTS = BB_MAX_RIGID_BODY_COUNT;
+struct FractureEvent
+{
+  daxa_u32 body_id;
+  daxa_f32 impulse;
+  daxa_f32vec3 position;
+  daxa_f32vec3 normal;
+};
+// Host bridge metadata only; geometric impact data stays in pending GPU storage.
+struct FractureEventSummary
+{
+  daxa_u32 body_id;
+  daxa_f32 impulse;
+};
+#if defined(__cplusplus)
+static_assert(sizeof(FractureEvent)==32u && sizeof(FractureEventSummary)==8u);
+#endif
+struct FractureImpactScratch
+{
+  // One writer per manifold. Reset once per simulation step, including catch-up steps.
+  FractureEvent candidates[BB_MAX_COLLISION_COUNT];
+  FractureEvent selected[BB_MAX_RIGID_BODY_COUNT];
+  FractureEvent pending[BB_MAX_RIGID_BODY_COUNT];
+};
+struct FractureEventBuffer
+{
+  daxa_u64 scratch_addr;
+  // Generation/acknowledgement handshake. Pending impacts are coalesced per
+  // body across catch-up steps, so bursts never overwrite another body.
+  daxa_u32 serial, consumed_serial, count;
+  FractureEventSummary events[BB_MAX_FRACTURE_EVENTS];
+};
+struct FractureImpactPushConstants
+{
+  daxa_u64 config_addr, bodies_addr, nodes_addr, map_addr, manifolds_addr;
+};
+
 // Graph-coloring solver: a contact gets one of BB_MAX_COLORS colors (bit per color in a u32 body mask);
 // within a color no body repeats, so all that color's contacts solve in parallel. Leftovers go to an
 // overflow bucket (index BB_MAX_COLORS) solved serially. 32 fits a u32 mask and a stacked box's degree.
@@ -1338,6 +1369,7 @@ struct VoxelShapeDerived
 static const daxa_u32 BB_MAX_FRACTURE_SITES = 32;
 struct VoxelFracturePushConstants
 {
+  daxa_u64 context_addr; // resident parent context, including procedural sites
   daxa_u64 occupancy_addr;
   daxa_u64 labels_addr;      // u32 per cell of the target shape (connected-component label)
   daxa_u64 site_labels_addr; // u32 per cell: nearest Voronoi site index (scratch[1]); the
@@ -1395,6 +1427,15 @@ struct GraphColorPushConstants
 
 // Per-color solver: each dispatch (one per color) runs over all manifolds and processes only the
 // ones whose manifold_color == push-constant color. Within a color no body repeats => no race.
+DAXA_DECL_TASK_HEAD_BEGIN(GraphColorSolveListTaskHead)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(DispatchBuffer), dispatch_buffer)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Manifold), collisions)
+DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(daxa_u32), manifold_color)
+DAXA_DECL_TASK_HEAD_END
+struct GraphColorSolveListPushConstants { DAXA_TH_BLOB(GraphColorSolveListTaskHead, task_head) };
+
 DAXA_DECL_TASK_HEAD_BEGIN(GraphColorSolveTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(SimConfig), sim_config)
@@ -1888,21 +1929,6 @@ typedef struct
 } daxa_BlasInstanceData;
 #endif // DAXA_SHADERLANG == DAXA_SHADERLANG_SLANG
 DAXA_DECL_BUFFER_PTR(daxa_BlasInstanceData)
-
-DAXA_DECL_TASK_HEAD_BEGIN(UpdateInstancesTaskHead)
-DAXA_TH_BUFFER_PTR(INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(SimConfig), sim_config)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_WRITE, daxa_RWBufferPtr(daxa_BlasInstanceData), blas_instance_data)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_RWBufferPtr(RigidBodyEntry), rigid_body_map)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(RigidBody), rigid_bodies)
-DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ, daxa_BufferPtr(Aabb), aabbs)
-DAXA_DECL_TASK_HEAD_END
-
-struct UpdateInstancesPushConstants
-{
-  DAXA_TH_BLOB(UpdateInstancesTaskHead, task_head)
-};
-
 
 DAXA_DECL_TASK_HEAD_BEGIN(CreatePointsTaskHead)
 DAXA_TH_BUFFER_PTR(COMPUTE_SHADER_READ_INDIRECT_COMMAND_READ, daxa_BufferPtr(DispatchBuffer), dispatch_buffer)

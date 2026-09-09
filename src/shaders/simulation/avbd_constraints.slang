@@ -9,9 +9,31 @@ daxa_f32vec3 avbd_small_angle_delta(Quaternion q_now, Quaternion q_start)
   return dq.v * (2.0f * sign);
 }
 
+// The current pose delta is shared by all contacts of one manifold visit.
+// Recompute on every visit: another color may have updated the partner since
+// the previous sweep. This is thread-local reuse, not a cross-sweep pose cache.
+struct AvbdMotion
+{
+  daxa_f32vec3 translation;
+  daxa_f32vec3 rotation;
+};
+
+AvbdMotion avbd_motion(RigidBody* r, AvbdBodyState* s, bool dynamic)
+{
+  AvbdMotion motion;
+  motion.translation = daxa_f32vec3(0.0f);
+  motion.rotation = daxa_f32vec3(0.0f);
+  if (dynamic)
+  {
+    motion.translation = r->position - s->pos_start;
+    motion.rotation = avbd_small_angle_delta(r->rotation, s->rot_start);
+  }
+  return motion;
+}
+
 daxa_f32 avbd_contact_C(Manifold* m, daxa_u32 j, RigidBody* r1, RigidBody* r2,
                         AvbdBodyState* s1, AvbdBodyState* s2,
-                        bool dyn1, bool dyn2, daxa_f32 stab_alpha,
+                        bool dyn1, bool dyn2, daxa_f32 stab_alpha, AvbdMotion motion1, AvbdMotion motion2,
                         out daxa_f32vec3 rr1, out daxa_f32vec3 rr2)
 {
   daxa_f32vec3 n = m->normal;
@@ -31,15 +53,11 @@ daxa_f32 avbd_contact_C(Manifold* m, daxa_u32 j, RigidBody* r1, RigidBody* r2,
   daxa_f32 C = C0 * (1.0f - stab_alpha);
   if (dyn1)
   {
-    daxa_f32vec3 dp1 = r1->position - s1->pos_start;
-    daxa_f32vec3 dth1 = avbd_small_angle_delta(r1->rotation, s1->rot_start);
-    C -= dot(n, dp1 + cross(dth1, rr1));
+    C -= dot(n, motion1.translation + cross(motion1.rotation, rr1));
   }
   if (dyn2)
   {
-    daxa_f32vec3 dp2 = r2->position - s2->pos_start;
-    daxa_f32vec3 dth2 = avbd_small_angle_delta(r2->rotation, s2->rot_start);
-    C += dot(n, dp2 + cross(dth2, rr2));
+    C += dot(n, motion2.translation + cross(motion2.rotation, rr2));
   }
   return C;
 }
@@ -49,10 +67,34 @@ daxa_f32vec3 avbd_q_rotate(Quaternion q, daxa_f32vec3 u)
   return u + 2.0f * cross(q.v, cross(q.v, u) + q.w * u);
 }
 
+// Reuse already-rotated anchor arms for another tangent direction of the same contact.
+daxa_f32 avbd_dir_C_from_arms(daxa_f32vec3 d, daxa_f32vec3 c1, daxa_f32vec3 c2,
+                            daxa_f32vec3 ar1, daxa_f32vec3 ar2,
+                            bool dyn1, bool dyn2, daxa_f32 stab_alpha,
+                            AvbdMotion motion1, AvbdMotion motion2, out daxa_f32 C0t)
+{
+  // pre-existing tangential drift between the anchors (C grows when body2 leads along +d).
+  // The positional pull-back only acts on the drift beyond a small slop: a deadband that
+  // keeps the post-stabilization sweep from perpetually micro-correcting compressed pile
+  // contacts (sub-mm jitter that vetoes sleeping). Drift stays bounded by the slop.
+  C0t = dot(d, (c2 + ar2) - (c1 + ar1));
+  daxa_f32 c0_eff = sign(C0t) * max(0.0f, abs(C0t) - BB_AVBD_STICK_SLOP);
+  daxa_f32 C = c0_eff * (1.0f - stab_alpha);
+  if (dyn1)
+  {
+    C -= dot(d, motion1.translation + cross(motion1.rotation, ar1));
+  }
+  if (dyn2)
+  {
+    C += dot(d, motion2.translation + cross(motion2.rotation, ar2));
+  }
+  return C;
+}
+
 daxa_f32 avbd_dir_C(daxa_f32vec3 d, Manifold* m, daxa_u32 j,
                     RigidBody* r1, RigidBody* r2,
                     AvbdBodyState* s1, AvbdBodyState* s2,
-                    bool dyn1, bool dyn2, daxa_f32 stab_alpha,
+                    bool dyn1, bool dyn2, daxa_f32 stab_alpha, AvbdMotion motion1, AvbdMotion motion2,
                     out daxa_f32vec3 ar1, out daxa_f32vec3 ar2, out daxa_f32 C0t)
 {
   // step-start poses (statics: current pose == start pose)
@@ -63,24 +105,5 @@ daxa_f32 avbd_dir_C(daxa_f32vec3 d, Manifold* m, daxa_u32 j,
   // world arms of the anchored contact points at step start
   ar1 = avbd_q_rotate(q1, m->contacts[j].anchor_a);
   ar2 = avbd_q_rotate(q2, m->contacts[j].anchor_b);
-  // pre-existing tangential drift between the anchors (C grows when body2 leads along +d).
-  // The positional pull-back only acts on the drift beyond a small slop: a deadband that
-  // keeps the post-stabilization sweep from perpetually micro-correcting compressed pile
-  // contacts (sub-mm jitter that vetoes sleeping). Drift stays bounded by the slop.
-  C0t = dot(d, (c2 + ar2) - (c1 + ar1));
-  daxa_f32 c0_eff = sign(C0t) * max(0.0f, abs(C0t) - BB_AVBD_STICK_SLOP);
-  daxa_f32 C = c0_eff * (1.0f - stab_alpha);
-  if (dyn1)
-  {
-    daxa_f32vec3 dp1 = r1->position - s1->pos_start;
-    daxa_f32vec3 dth1 = avbd_small_angle_delta(r1->rotation, s1->rot_start);
-    C -= dot(d, dp1 + cross(dth1, ar1));
-  }
-  if (dyn2)
-  {
-    daxa_f32vec3 dp2 = r2->position - s2->pos_start;
-    daxa_f32vec3 dth2 = avbd_small_angle_delta(r2->rotation, s2->rot_start);
-    C += dot(d, dp2 + cross(dth2, ar2));
-  }
-  return C;
+  return avbd_dir_C_from_arms(d, c1, c2, ar1, ar2, dyn1, dyn2, stab_alpha, motion1, motion2, C0t);
 }

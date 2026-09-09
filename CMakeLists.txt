@@ -132,6 +132,8 @@ if (Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/solver_replay_tests.py)
     add_test(NAME shader_dependencies_tests
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/shader_dependencies_tests.py)
+    add_test(NAME avbd_workload_tests
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/avbd_workload_tests.py)
 endif()
 
 # Analytical mass/kinematics checks for the CPU oracle used by BB_FRAGMENT_VERIFY.
@@ -144,3 +146,16 @@ add_executable(fragment_census_tests tests/fragment_census_tests.cpp)
 target_include_directories(fragment_census_tests PRIVATE include)
 target_link_libraries(fragment_census_tests PRIVATE daxa::daxa glm::glm)
 add_test(NAME fragment_census_tests COMMAND fragment_census_tests)
+
+add_executable(gpu_pool_allocator_tests tests/gpu_pool_allocator_tests.cpp)
+target_include_directories(gpu_pool_allocator_tests PRIVATE include)
+target_link_libraries(gpu_pool_allocator_tests PRIVATE daxa::daxa glm::glm)
+add_test(NAME gpu_pool_allocator_tests COMMAND gpu_pool_allocator_tests)
+
+add_executable(performance_metrics_tests tests/performance_metrics_tests.cpp)
+target_include_directories(performance_metrics_tests PRIVATE src)
+add_test(NAME performance_metrics_tests COMMAND performance_metrics_tests)
+
+add_executable(render_pacing_tests tests/render_pacing_tests.cpp)
+target_include_directories(render_pacing_tests PRIVATE src)
+add_test(NAME render_pacing_tests COMMAND render_pacing_tests)

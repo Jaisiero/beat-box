@@ -333,7 +333,7 @@ struct TGS_SOFT {
   // It deliberately does NOT warm start -- that is a separate stage inside the sub-step loop,
   // exactly as in Box2D v3 (b2PrepareContactsTask once, b2WarmStartContactsTask per sub-step).
   static void pre_step(Manifold* manifold, RigidBody* body_a, RigidBody* body_b,
-                       daxa_f32 h, daxa_f32 hertz, SimConfig* sim_config) {
+                       daxa_f32 h, daxa_f32 hertz, SimConfig* sim_config, daxa_u32 manifold_index) {
     daxa_f32 fracture_impulse = 0.0f;
     daxa_f32vec3 fracture_position = daxa_f32vec3(0);
     const bool breakable = body_a->fracture_impulse > 0.0f || body_b->fracture_impulse > 0.0f;
@@ -384,7 +384,7 @@ struct TGS_SOFT {
       manifold->contacts[i].mass_coefficient = a2 * a3;
       manifold->contacts[i].impulse_coefficient = a3;
     }
-    emit_fracture_pair(sim_config, body_a, body_b, fracture_impulse, fracture_position, manifold->normal);
+    emit_fracture_pair(sim_config, body_a, body_b, manifold_index, fracture_impulse, fracture_position, manifold->normal);
   }
 
   // Warm start: re-apply the accumulated impulse as a velocity delta. Box2D v3 runs this at the

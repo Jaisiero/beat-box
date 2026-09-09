@@ -23,6 +23,12 @@ class ShaderDependenciesTests(unittest.TestCase):
             "src/shaders/simulation/passes/avbd_impact.slang": 2,
             "src/shaders/simulation/voxel_fracture.slang": 4,
             "src/shaders/simulation/fragment_census.slang": 3,
+            "src/shaders/simulation/fragment_batch_packing.slang": 1,
+            "src/shaders/simulation/fragment_plan.slang": 1,
+            "src/shaders/simulation/fracture_setup.slang": 1,
+            "src/shaders/simulation/fracture_allocator.slang": 1,
+            "src/shaders/simulation/fracture_scene_edits.slang": 1,
+            "src/shaders/simulation/gpu_pool_validation.slang": 1,
             "src/shaders/simulation/voxel_sdf.slang": 6,
         }
         for path, limit in limits.items():

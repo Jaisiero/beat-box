@@ -32,11 +32,11 @@ struct GUIDrawTask
 
   void callback(daxa::TaskInterface ti)
   {
-    if(status_manager->is_gui_enabled()) {
+    if(status_manager->is_gui_enabled() && (rigid_body_manager->render_config.flags & SimFlag::DEBUG_INFO) != 0u) {
       daxa::ImageInfo color_img_info = ti.info(GUITaskHead::AT.render_target).value();
       auto const size_x = color_img_info.size.x;
       auto const size_y = color_img_info.size.y;
-      auto& sim_config = rigid_body_manager->get_sim_config_reference();
+      auto& sim_config = rigid_body_manager->render_config;
       auto render_recorder = std::move(ti.recorder).begin_renderpass({
         .color_attachments = std::array{
           daxa::RenderAttachmentInfo{
@@ -81,11 +81,11 @@ struct GUILineDrawTask
 
   void callback(daxa::TaskInterface ti)
   {
-    if(status_manager->is_gui_enabled()) {
+    if(status_manager->is_gui_enabled() && (rigid_body_manager->render_config.flags & SimFlag::DEBUG_INFO) != 0u) {
       daxa::ImageInfo color_img_info = ti.info(GUILineTaskHead::AT.render_target).value();
       auto const size_x = color_img_info.size.x;
       auto const size_y = color_img_info.size.y;
-      auto& sim_config = rigid_body_manager->get_sim_config_reference();
+      auto& sim_config = rigid_body_manager->render_config;
       auto render_recorder = std::move(ti.recorder).begin_renderpass({
         .color_attachments = std::array{
           daxa::RenderAttachmentInfo{
@@ -132,11 +132,12 @@ struct GUIAxesDrawTask
 
   void callback(daxa::TaskInterface ti)
   {
-    if(status_manager->is_gui_enabled() && status_manager->is_axis_enabled()) {
+    if(status_manager->is_gui_enabled() && status_manager->is_axis_enabled() &&
+       (rigid_body_manager->render_config.flags & SimFlag::DEBUG_INFO) != 0u) {
       daxa::ImageInfo color_img_info = ti.info(GUIAxesTaskHead::AT.render_target).value();
       auto const size_x = color_img_info.size.x;
       auto const size_y = color_img_info.size.y;
-      auto& sim_config = rigid_body_manager->get_sim_config_reference();
+      auto& sim_config = rigid_body_manager->render_config;
       auto render_recorder = std::move(ti.recorder).begin_renderpass({
         .color_attachments = std::array{
           daxa::RenderAttachmentInfo{

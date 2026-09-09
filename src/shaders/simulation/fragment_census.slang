@@ -1,12 +1,16 @@
 #include "fragment_census.inl"
+#include "fracture_setup.inl"
 [[vk::push_constant]] FragmentCensusPushConstants C;
+
+uint3 census_dims() { return C.context_addr!=0u ? ((FractureParentContext*)C.context_addr)->shape.dims : C.dims; }
 
 [shader("compute")]
 [numthreads(64,1,1)]
 void entry_fragment_census_init(uint3 tid : SV_DispatchThreadID)
 {
+  uint3 dims=census_dims();
   uint c = tid.x;
-  if (c >= C.dims.x*C.dims.y*C.dims.z) return;
+  if (c >= dims.x*dims.y*dims.z) return;
   FragmentComponent* s = &((FragmentComponent*)C.scratch_addr)[c];
   s->label = c;
   s->count = 0;
@@ -20,10 +24,11 @@ void entry_fragment_census_init(uint3 tid : SV_DispatchThreadID)
 [numthreads(64,1,1)]
 void entry_fragment_census_accumulate(uint3 tid : SV_DispatchThreadID)
 {
+  uint3 dims=census_dims();
   uint c = tid.x;
-  uint cells = C.dims.x*C.dims.y*C.dims.z;
+  uint cells = dims.x*dims.y*dims.z;
   uint pending = c < cells ? ((uint*)C.labels_addr)[c] : 0xffffffffu;
-  uint x = c%C.dims.x, y = (c/C.dims.x)%C.dims.y, z = c/(C.dims.x*C.dims.y);
+  uint x = c%dims.x, y = (c/dims.x)%dims.y, z = c/(dims.x*dims.y);
   // Aggregate equal labels within the subgroup before updating shared component
   // records. Every lane participates, including the tail of a partial dispatch.
   while (WaveActiveAnyTrue(pending != 0xffffffffu))
@@ -55,8 +60,9 @@ void entry_fragment_census_accumulate(uint3 tid : SV_DispatchThreadID)
 [numthreads(64,1,1)]
 void entry_fragment_census_compact(uint3 tid : SV_DispatchThreadID)
 {
+  uint3 dims=census_dims();
   uint c = tid.x;
-  if (c >= C.dims.x*C.dims.y*C.dims.z) return;
+  if (c >= dims.x*dims.y*dims.z) return;
   FragmentComponent s = ((FragmentComponent*)C.scratch_addr)[c];
   if (s.count == 0) return;
   FragmentCensusOutput* output = (FragmentCensusOutput*)C.output_addr;

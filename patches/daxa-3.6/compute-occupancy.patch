@@ -1,0 +1,121 @@
+--- a/src/impl_device.hpp
++++ b/src/impl_device.hpp
+@@ -12,6 +12,11 @@
+ #include <daxa/c/device.h>
+ 
+ #include <atomic>
++#include <cstdlib>
++#include <cstdio>
++
++#include "impl_compute_occupancy.hpp"
++
+ #include <mutex>
+ 
+ using namespace daxa;
+@@ -36,6 +41,7 @@
+     daxa_DeviceProperties properties = {};
+     PhysicalDeviceFeaturesStruct physical_device_features = {};
+     VkDevice vk_device = {};
++    PFN_vkCmdSetComputeOccupancyPriorityNV bb_set_occupancy = nullptr;
+     VmaAllocator vma_allocator = {};
+ 
+     // Dynamic State:
+--- a/src/impl_device.cpp
++++ b/src/impl_device.cpp
+@@ -2086,6 +2086,30 @@
+     enabled_features.initialize(physical_device.extensions);
+     fill_create_features(enabled_features, properties.implicit_features, info.explicit_features);
+ 
++    std::vector<char const *> bb_extensions(physical_device.extensions.extension_name_list,
++        physical_device.extensions.extension_name_list + physical_device.extensions.extension_name_list_size);
++    VkPhysicalDeviceComputeOccupancyPriorityFeaturesNV bb_occupancy{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_OCCUPANCY_PRIORITY_FEATURES_NV, nullptr, VK_FALSE};
++    auto const bb_priority_env = std::getenv("BB_NV_COMPUTE_PRIORITY");
++    if (!bb_priority_env || bb_priority_env[0] != '0') {
++        uint32_t count = 0;
++        auto const count_result = vkEnumerateDeviceExtensionProperties(self->vk_physical_device, nullptr, &count, nullptr);
++        if (count_result != VK_SUCCESS) count = 0;
++        std::vector<VkExtensionProperties> extensions(count);
++        auto const list_result = vkEnumerateDeviceExtensionProperties(self->vk_physical_device, nullptr, &count, extensions.data());
++        if (list_result != VK_SUCCESS) extensions.clear();
++        for (auto const &extension : extensions) {
++            if (std::strcmp(extension.extensionName, "VK_NV_compute_occupancy_priority") != 0) continue;
++            VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &bb_occupancy, {}};
++            vkGetPhysicalDeviceFeatures2(self->vk_physical_device, &query);
++            if (bb_occupancy.computeOccupancyPriority) {
++                bb_extensions.push_back("VK_NV_compute_occupancy_priority");
++                bb_occupancy.pNext = enabled_features.physical_device_features_2.pNext;
++                enabled_features.physical_device_features_2.pNext = &bb_occupancy;
++            }
++            break;
++        }
++    }
++
+     VkDeviceCreateInfo const device_ci = {
+         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+         .pNext = r_cast<void const *>(&enabled_features.physical_device_features_2),
+@@ -2094,8 +2118,8 @@
+         .pQueueCreateInfos = queues_ci.data(),
+         .enabledLayerCount = 0,
+         .ppEnabledLayerNames = nullptr,
+-        .enabledExtensionCount = physical_device.extensions.extension_name_list_size,
+-        .ppEnabledExtensionNames = physical_device.extensions.extension_name_list,
++        .enabledExtensionCount = static_cast<uint32_t>(bb_extensions.size()),
++        .ppEnabledExtensionNames = bb_extensions.data(),
+         .pEnabledFeatures = nullptr,
+     };
+     result = static_cast<daxa_Result>(vkCreateDevice(self->vk_physical_device, &device_ci, nullptr, &self->vk_device));
+@@ -2107,6 +2131,11 @@
+             vkDestroyDevice(self->vk_device, nullptr);
+         }
+     };
++
++    if (bb_occupancy.computeOccupancyPriority)
++        self->bb_set_occupancy = reinterpret_cast<PFN_vkCmdSetComputeOccupancyPriorityNV>(vkGetDeviceProcAddr(self->vk_device, "vkCmdSetComputeOccupancyPriorityNV"));
++    if (bb_priority_env || std::getenv("BB_FRAME_TIMING"))
++        std::fprintf(stderr, "[COMPUTE-PRIORITY] requested=%s enabled=%d\n", bb_priority_env ? bb_priority_env : "auto", self->bb_set_occupancy != nullptr);
+ 
+     // Queue initialization:
+     defer
+--- a/src/impl_command_recorder.cpp
++++ b/src/impl_command_recorder.cpp
+@@ -1246,6 +1246,13 @@
+     result = static_cast<daxa_Result>(vkBeginCommandBuffer(cmd_arena->vk_command_buffer, &vk_command_buffer_begin_info));
+     _DAXA_RETURN_IF_ERROR(result, result);
+ 
++    // Command-buffer state starts at NORMAL; set it for every compute recorder.
++    // MAIN and TRANSFER retain their default priority. No occupancy cap is imposed.
++    if (info->queue_type == DAXA_QUEUE_TYPE_COMPUTE && device->bb_set_occupancy) {
++        VkComputeOccupancyPriorityParametersNV priority{VK_STRUCTURE_TYPE_COMPUTE_OCCUPANCY_PRIORITY_PARAMETERS_NV, nullptr, VK_COMPUTE_OCCUPANCY_PRIORITY_HIGH_NV, 0.0f};
++        device->bb_set_occupancy(cmd_arena->vk_command_buffer, &priority);
++    }
++
+     auto ret = daxa_ImplCommandRecorder{};
+     ret.device = device;
+     ret.info = *info;
+--- /dev/null
++++ b/src/impl_compute_occupancy.hpp
+@@ -0,0 +1,24 @@
++#pragma once
++
++// Compatibility with the Vulkan headers shipped with Daxa 3.6.
++// Definitions from Khronos Vulkan-Headers, extension 646, revision 1.
++#ifndef VK_NV_compute_occupancy_priority
++#define VK_NV_compute_occupancy_priority 1
++#define VK_COMPUTE_OCCUPANCY_PRIORITY_HIGH_NV 0.75f
++// These enumerators are absent from older VkStructureType declarations.
++// C++ cannot extend an existing enum; preserve their official type and ABI values.
++inline constexpr VkStructureType VK_STRUCTURE_TYPE_COMPUTE_OCCUPANCY_PRIORITY_PARAMETERS_NV = static_cast<VkStructureType>(1000645000);
++inline constexpr VkStructureType VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_OCCUPANCY_PRIORITY_FEATURES_NV = static_cast<VkStructureType>(1000645001);
++struct VkComputeOccupancyPriorityParametersNV {
++    VkStructureType sType;
++    void const *pNext;
++    float occupancyPriority;
++    float occupancyThrottling;
++};
++struct VkPhysicalDeviceComputeOccupancyPriorityFeaturesNV {
++    VkStructureType sType;
++    void *pNext;
++    VkBool32 computeOccupancyPriority;
++};
++using PFN_vkCmdSetComputeOccupancyPriorityNV = void (VKAPI_PTR *)(VkCommandBuffer, VkComputeOccupancyPriorityParametersNV const *);
++#endif
