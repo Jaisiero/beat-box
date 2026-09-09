@@ -1,4 +1,4 @@
-#include "shared.inl"
+#include "voxel_sdf_sampling.slang"
 
 // GPU node-SDF build (GPU-first directive + destructibility prerequisite): computes each
 // voxel shape's node signed-distance field FROM the occupancy bitmask, on the GPU, exactly.
@@ -174,7 +174,18 @@ groupshared daxa_u32 vsb_surface_count;
     {
       daxa_u32 rank = countbits(vsb_surface_masks[lane / 32u] & ((1u << (lane % 32u))-1u));
       if (lane >= 32u) rank += countbits(vsb_surface_masks[0]);
-      surf[VSB.surf_offset + vsb_surface_count + rank] = packed;
+      daxa_u32 slot = VSB.surf_offset + vsb_surface_count + rank;
+      surf[slot] = packed;
+      // Geometry is immutable until this shape is rebuilt. Cache the raw local
+      // gradient once; narrow phase still rotates it for each body pair.
+      VoxelShape* shape = &((VoxelShape*)VSB.shapes_addr)[VSB.shape_index];
+      daxa_f32 vs = shape->voxel_size;
+      daxa_f32vec3 local = daxa_f32vec3(shape->grid_origin.x + (daxa_f32(packed & 0xFFu) + 0.5f) * vs,
+                                      shape->grid_origin.y + (daxa_f32((packed >> 8u) & 0xFFu) + 0.5f) * vs,
+                                      shape->grid_origin.z + (daxa_f32((packed >> 16u) & 0xFFu) + 0.5f) * vs);
+      daxa_f32vec3 gradient;
+      voxel_sdf_sample((daxa_f32*)VSB.sdf_addr, shape, local, gradient);
+      voxel_surface_gradients(surf)[slot] = daxa_f32vec4(gradient, 0.0f);
     }
     // Readers must consume the old count before lane zero advances it. The
     // next tile's first barrier publishes the new count and cleared masks.

@@ -274,7 +274,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
           .name = "voxel_occupancy",
       });
       voxel_surface = device.create_buffer({
-          .size = sizeof(daxa_u32) * BB_MAX_VOXEL_SURF_COUNT,
+          .size = (sizeof(daxa_u32) + sizeof(daxa_f32vec4)) * BB_MAX_VOXEL_SURF_COUNT,
           .name = "voxel_surface",
       });
       voxel_sdf = device.create_buffer({
@@ -2335,8 +2335,8 @@ void RigidBodyManager::build_voxel_pools_gpu(std::vector<VoxelShape> const &shap
     rec.dispatch({.x = (nodes + 63u) / 64u, .y = 1, .z = 1});
     barrier();
     stamp(3u);
-    // surface list + mass-property reduce are independent of the EDT chain (they read
-    // only the bitmask); single group each
+    // Surface compaction also caches gradients from the completed SDF. The
+    // preceding barrier publishes finalize writes; inertia only reads occupancy.
     rec.set_pipeline(*pipeline_VSB_SURF);
     rec.push_constant(pc);
     rec.dispatch({.x = 1, .y = 1, .z = 1});
