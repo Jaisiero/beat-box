@@ -164,6 +164,7 @@ enum SimFlag : daxa_u32
                                // layout-dependent per-sweep noise can't converge out -> ph=cph, which
                                // IS bitwise-deterministic across launches). Trades depenetration depth
                                // for reproducibility; the converged main solve + rest state are unaffected.
+  PROFILE_AVBD_WORK = 1 << 10, // optional contact/color workload counters; no solver behavior changes
   DET_HASHES = 1 << 9,         // compute the determinism debug pose/state hashes (dbg_*). OFF in normal
                                // runs so the per-body/per-manifold InterlockedXor + the chain-walk hash
                                // don't add hot-path atomic contention; set by main.cpp when any of
@@ -621,6 +622,12 @@ struct SimConfig
   daxa_u32 dbg_node_overflow;      // narrow phase: # manifold-link nodes DROPPED because manifold_node_count hit BB_MAX_MANIFOLD_NODE_COUNT (0 = healthy; >0 = a body's manifold list truncated -> missed contacts)
   daxa_u32 gc_round;               // graph-coloring: current round index (incremented by owner_reset; seeds the fair-arbitration priority)
   daxa_u32 sleeping_count;         // neighborhood sleeping: # bodies currently asleep (diagnostics; recomputed per step)
+  // Optional per-step awake-body workload, indexed by body color. Contact visits
+  // count both awake endpoints; they are not unique manifold/contact counts.
+  daxa_u32 avbd_work_bodies[32];
+  daxa_u32 avbd_work_contacts[32];
+  daxa_u32 avbd_work_max_contacts[32];
+  daxa_u32 avbd_work_max_manifolds[32];
   daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)
   daxa_u32 avbd_max_support_depth; // AVBD: max support-depth layer over dynamic bodies this step (post-BFS, clamped to SHOCK_LAYERS-1); the post-stab cascade skips layers above this
   daxa_u32 avbd_iter_tick;         // AVBD convergence early-out: main-sweep iteration counter, ticked by the dual pass (thread 0) between primal sweeps
