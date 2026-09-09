@@ -629,6 +629,7 @@ struct SimConfig
   daxa_u32 avbd_work_max_contacts[32];
   daxa_u32 avbd_work_max_manifolds[32];
   daxa_u32 avbd_color_count;       // AVBD: # body colors used this step (validator)
+  daxa_u32 avbd_layer_color_mask[12]; // awake body colors per support layer (BB_AVBD_SHOCK_LAYERS)
   daxa_u32 avbd_max_support_depth; // AVBD: max support-depth layer over dynamic bodies this step (post-BFS, clamped to SHOCK_LAYERS-1); the post-stab cascade skips layers above this
   daxa_u32 avbd_iter_tick;         // AVBD convergence early-out: main-sweep iteration counter, ticked by the dual pass (thread 0) between primal sweeps
   daxa_u32 avbd_step_res[2];       // AVBD: max primal step magnitude of main-sweep iteration (tick&1), stored as ordered float bits (asuint of a non-negative f32 compares like the float). When the PREVIOUS iteration's max step is below BB_AVBD_CONV_EPS the system converged: remaining main sweeps early-return (rest converges in a few of the 10 iterations; impacts keep the full budget - quality by construction)
@@ -886,13 +887,11 @@ struct DispatchBuffer
                                                           // ceil(coll/X), unused colors get 0 workgroups
                                                           // (a dense pile uses ~6-12 of 32 colors, so the
                                                           // rest cost nothing instead of full-count early-out)
-  daxa_u32vec3 avbd_color_dispatch[32]; // per-color AVBD PRIMAL dispatch (same idea as above but per-BODY):
-                                                    // used body colors (c < avbd_color_count = max(body_color)+1) get
-                                                    // ceil(rigid_body_count/X), the rest get 0 (a pile uses ~7 of 32)
-  daxa_u32vec3 avbd_cascade_dispatch[12 * 32]; // per-(layer,color) post-stab CASCADE dispatch [d*32+c]; 12 = BB_AVBD_SHOCK_LAYERS,
-                                                          // 32 = BB_MAX_COLORS (both defined below). entry = (d <= avbd_max_support_depth
-                                                          // && c < avbd_color_count) ? ceil(rigid_body_count/X) : 0 — a 2-4 layer pile
-                                                          // skips layers 4..11 entirely (subsumes the per-color skip for the cascade)
+  // Nonempty awake-body colors scan the body grid; empty colors get zero groups.
+  daxa_u32vec3 avbd_color_dispatch[32];
+  // Per-(layer,color) cascade arguments, using occupied awake-body masks. Keep
+  // the twelve layers in sync with BB_AVBD_SHOCK_LAYERS below.
+  daxa_u32vec3 avbd_cascade_dispatch[12 * 32];
   // Stable serial-overflow worklist; existing indirect argument offsets stay fixed.
   daxa_u32 graph_color_overflow_count;
   daxa_u32 graph_color_overflow_ids[BB_MAX_COLLISION_COUNT];

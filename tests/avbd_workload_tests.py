@@ -21,6 +21,15 @@ class WorkloadTests(unittest.TestCase):
         self.assertEqual([r["contact_visits"] for r in rows], [8, 4])
         self.assertEqual(rows[0]["awake"], 2)
 
+    def test_occupied_dispatch_colors_override_global_colors(self):
+        stage, work = sample(10, 3, 8)
+        work = work.replace("colors=1", "colors=4")
+        old = parse(stage + "\n" + work)[0]
+        new = parse(stage + "\n" + work + " dispatch_colors=1 dispatch_batches=1")[0]
+        self.assertEqual(old["useful_lane_fraction"], .125)
+        self.assertEqual(new["useful_lane_fraction"], .5)
+        self.assertEqual(new["dispatch_batches"], 1)
+
     def test_missing_stages_rejected(self):
         with self.assertRaises(ValueError):
             parse(sample(10, 3, 8)[1])
