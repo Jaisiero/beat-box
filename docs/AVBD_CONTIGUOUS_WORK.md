@@ -107,3 +107,35 @@ Raw logs are retained on the benchmark host under
 `/root/beat-box/work/contiguous-contacts/`: `baseline3`, `opt1`, `opt2`,
 `baseline4`, `listbase1`, `compact1`, `compact2`, `listbase2`, `onebase1`,
 and `one1` (each with a `.log` suffix).
+
+## Follow-up arithmetic experiments (2026-09-09)
+
+Two additional candidates were tested independently against this PR and
+rejected. Neither changes the shipped shader.
+
+1. **Packed lower Hessian:** explicitly store the 21 entries consumed by LDL^T
+   instead of a 6 x 6 array, omit upper-triangle accumulation, and preserve the
+   operation order of every lower-triangle entry. F11 and F7 each matched all
+   1,800 recorded DET states with synchronization validation. The baseline mean
+   step was 3.98895 ms; two candidate runs measured 3.98917 and 3.98911 ms.
+   Primal was 1.07455 ms before and 1.07337/1.07398 ms after; post was
+   0.85569 ms before and 0.85726/0.85887 ms after. No useful improvement was
+   observed. This is consistent with the compiler already eliminating unused
+   entries, but generated machine code/register counts were not inspected.
+   The final control run was interrupted when the existing input-reload
+   service restarted Xorg and is excluded. This is not a completed ABBA result.
+2. **Reuse self motion across manifolds:** compute the current body's pose
+   delta once per solve while continuing to read each neighbor's current pose.
+   F11/F7 again matched all 1,800 recorded states with synchronization
+   validation. A fresh reference/candidate pair after the Xorg restart measured
+   4.08363/4.32677 ms per step, 1.09318/1.16631 ms primal, and
+   0.86046/0.93031 ms post. P99 increased from 9.50093 to 10.31843 ms.
+   The screening comparison failed and was not promoted to a full repeated
+   experiment. A register-lifetime or scheduling explanation is only a
+   hypothesis; these measurements do not identify the hardware cause.
+
+Runs used the same F11 4K/requested-144-Hz 70-second configuration described
+above. Do not compare absolute times across the Xorg restart. Sources and raw
+logs remain in `work/packed-hessian/` and `work/self-motion/` on the benchmark
+host, including the interrupted control log. The final runtime was restored
+to this PR's validated contact-stream implementation.
