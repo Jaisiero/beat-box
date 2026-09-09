@@ -54,7 +54,9 @@ def parse(text):
             row["active_colors"] = sum(n > 0 for n in arrays["color_bodies"])
             # Existing colored shaders use groups of four and scan all body ids.
             # This is a dispatch-lane ratio, not measured hardware occupancy.
-            lanes = ((row["bodies"] + 3) // 4) * 4 * row["colors"]
+            row["dispatch_colors"] = int(fields.get("dispatch_colors", row["colors"]))
+            row["dispatch_batches"] = int(fields.get("dispatch_batches", row["colors"] * (row["depth"] + 1)))
+            lanes = ((row["bodies"] + 3) // 4) * 4 * row["dispatch_colors"]
             row["useful_lane_fraction"] = row["awake"] / lanes if lanes else 0.0
             row.update(arrays)
             work[tick] = row

@@ -1343,8 +1343,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        },
                        user_callback_GCSD);
 
-  // AVBD per-color primal dispatcher (A1): after the AVBD body-color validator, write per-color
-  // workgroup counts (used body colors -> ceil(rigid_body_count/X), empty -> 0). Reuses the same
+  // After support-depth reduction, dispatch only colors containing awake bodies.
+  // Nonempty colors retain ceil(rigid_body_count/X) workgroups. Reuses the same
   // original dispatcher head; primal sweeps dispatch_indirect per color (skip empty).
   auto user_callback_AVBD_CDISP = [this](daxa::TaskInterface ti, auto &)
   {
@@ -1360,7 +1360,7 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
                        user_callback_AVBD_CDISP);
 
   // AVBD per-(layer,color) CASCADE dispatcher (A2): after entry_avbd_max_depth (avbd_max_support_depth
-  // final), write per-(layer,color) workgroup counts so the post-stab cascade skips empty upper layers.
+  // final), write per-(layer,color) workgroup counts, skipping every unoccupied batch.
   auto user_callback_AVBD_CASCD = [this](daxa::TaskInterface ti, auto &)
   {
     ti.recorder.set_pipeline(*pipeline_AVBD_CASCD);
@@ -1795,7 +1795,6 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     G.add_task(task_AVBD_CMT_vec[rd]);  // commit proposed_color -> body_color (barrier between rounds)
   }
   G.add_task(task_AVBD_CV);
-  G.add_task(task_AVBD_CDISP); // A1: per-color primal dispatch args (skip empty body colors) — avbd_color_count now final
   G.add_task(task_AVBD_PRE); // AVBD: save step-start pose + jump to the inertial target
   G.add_task(task_AVBD_WS);  // AVBD: lambda/k warm-start scaling
   // shock propagation: support-depth BFS (statics/sleepers = 0; each pass relaxes
@@ -1807,7 +1806,8 @@ bool RigidBodyManager::create(char const *name, std::shared_ptr<RendererManager>
     G.add_task(task_AVBD_DRLX);
   }
   G.add_task(task_AVBD_MAXD);  // A2: reduce max support-depth (BFS converged; support_depth not touched after this)
-  G.add_task(task_AVBD_CASCD); // A2: per-(layer,color) cascade dispatch args (skip empty upper layers)
+  G.add_task(task_AVBD_CDISP); // awake color mask is now final
+  G.add_task(task_AVBD_CASCD); // skip unoccupied layer/color batches
   profile_point(2u);
   for (daxa_u32 it = 0u; it < BB_AVBD_ITERATIONS; ++it)
   {
@@ -3152,10 +3152,19 @@ bool RigidBodyManager::read_back_sim_config(bool completed_simulation_snapshot)
       std::cout << std::endl;
       if (!tgs && static_cast<daxa_u32>(completed_config.flags & SimFlag::PROFILE_AVBD_WORK) != 0u) {
         auto const &sc = completed_config;
+        daxa_u32 awake_colors = 0u, dispatch_batches = 0u, dispatch_colors = 0u;
+        for (daxa_u32 d = 0u; d < BB_AVBD_SHOCK_LAYERS; ++d) {
+          awake_colors |= sc.avbd_layer_color_mask[d];
+          for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+            dispatch_batches += (sc.avbd_layer_color_mask[d] >> c) & 1u;
+        }
+        for (daxa_u32 c = 0u; c < BB_AVBD_MAX_BODY_COLORS; ++c)
+          dispatch_colors += (awake_colors >> c) & 1u;
         std::cout << "[AVBD-WORK] frame=" << sc.frame_count << " begin_tick=" << results[0]
                   << " bodies=" << sc.rigid_body_count << " sleeping=" << sc.sleeping_count
                   << " pairs=" << sc.broad_phase_collision_count << " manifolds=" << sc.g_c_info.collision_count
-                  << " colors=" << sc.avbd_color_count << " depth=" << sc.avbd_max_support_depth;
+                  << " colors=" << sc.avbd_color_count << " depth=" << sc.avbd_max_support_depth
+                  << " dispatch_colors=" << dispatch_colors << " dispatch_batches=" << dispatch_batches;
         auto print_colors = [&](char const *name, auto const &values) {
           std::cout << ' ' << name << '=';
           for (daxa_u32 c = 0u; c < 32u; ++c) std::cout << (c ? ":" : "") << values[c];

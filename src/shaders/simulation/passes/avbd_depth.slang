@@ -12,6 +12,8 @@
   {
     sim_config->avbd_max_support_depth = 0u; // A2: reset before the per-body reduction (entry_avbd_max_depth)
   }
+  if (compute_i.x < BB_AVBD_SHOCK_LAYERS)
+    sim_config->avbd_layer_color_mask[compute_i.x] = 0u;
   daxa_u32 i = compute_i.x;
   if (i >= sim_config->rigid_body_count)
   {
@@ -86,4 +88,7 @@
   daxa_u32 layer = min(s->support_depth, BB_AVBD_SHOCK_LAYERS - 1u); // same clamp the cascade filter uses
   daxa_u32 prev;
   InterlockedMax(sim_config->avbd_max_support_depth, layer, prev);
+  daxa_u32 color = ((daxa_u32*)AVBD_PC.task_head.body_color)[i];
+  if (color < BB_AVBD_MAX_BODY_COLORS)
+    InterlockedOr(sim_config->avbd_layer_color_mask[layer], 1u << color, prev);
 }

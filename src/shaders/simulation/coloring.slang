@@ -117,11 +117,8 @@ void build_overflow_list(SimConfig* config, DispatchBuffer* dispatch)
   dispatch_buffer->graph_color_solve_dispatch[c] = (c < used) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
 }
 
-// AVBD analog: runs AFTER entry_avbd_color_validate (avbd_color_count final). AVBD's primal is per-BODY,
-// so a used body color needs ceil(rigid_body_count/X) workgroups. avbd_color_count = max(body_color)+1,
-// so colors >= avbd_color_count are provably empty -> 0 workgroups. A dense pile uses ~7 of 32 colors,
-// so the per-color primal dispatch (avbd_dispatch, indirect at AVBD_COLOR_SOLVE_DISPATCH_OFFSET + c) skips
-// the ~25 unused colors entirely instead of dispatching the full body grid for all 32 and early-outing.
+// After support-depth reduction, dispatch only colors containing awake dynamic
+// bodies. Sleeping bodies keep their colors but never run a primal update.
 [shader("compute")]
 [numthreads(BB_MAX_COLORS, 1, 1)] void entry_avbd_color_dispatcher(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
@@ -131,14 +128,14 @@ void build_overflow_list(SimConfig* config, DispatchBuffer* dispatch)
   DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCD.task_head.dispatch_buffer);
   let bodies = min(sim_config->rigid_body_count, BB_MAX_RIGID_BODY_COUNT);
   let cnt = (bodies + COLOR_SOLVE_COMPUTE_X - 1u) / COLOR_SOLVE_COMPUTE_X;
-  let used = min(sim_config->avbd_color_count, BB_MAX_COLORS);
-  dispatch_buffer->avbd_color_dispatch[c] = (c < used) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
+  daxa_u32 awake_colors = 0u;
+  for (daxa_u32 d = 0u; d < BB_AVBD_SHOCK_LAYERS; ++d)
+    awake_colors |= sim_config->avbd_layer_color_mask[d];
+  dispatch_buffer->avbd_color_dispatch[c] = ((awake_colors & (1u << c)) != 0u) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
 }
 
-// A2: per-(layer,color) dispatch args for the post-stab CASCADE. Runs AFTER entry_avbd_max_depth
-// (avbd_max_support_depth final). Combines the empty-color skip (A1) with an empty-LAYER skip: a used
-// color in an active layer (d <= max_support_depth) gets ceil(rigid_body_count/X); everything else 0.
-// A 2-4 layer pile therefore never launches the 8+ empty upper layers (each was a full-grid early-out).
+// Dispatch only occupied (support layer, body color) batches. Membership uses
+// exactly the same awake/dynamic and clamped-layer predicates as primal.
 [shader("compute")]
 [numthreads(BB_MAX_COLORS, 1, 1)] void entry_avbd_cascade_dispatcher(daxa_u32vec3 compute_i : SV_DispatchThreadID)
 {
@@ -148,13 +145,12 @@ void build_overflow_list(SimConfig* config, DispatchBuffer* dispatch)
   DispatchBuffer* dispatch_buffer = (DispatchBuffer*)(GCD.task_head.dispatch_buffer);
   let bodies = min(sim_config->rigid_body_count, BB_MAX_RIGID_BODY_COUNT);
   let cnt = (bodies + COLOR_SOLVE_COMPUTE_X - 1u) / COLOR_SOLVE_COMPUTE_X;
-  let used_colors = min(sim_config->avbd_color_count, BB_MAX_COLORS);
-  let max_layer = min(sim_config->avbd_max_support_depth, BB_AVBD_SHOCK_LAYERS - 1u);
-  let active = (c < used_colors) ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
   [unroll]
   for (daxa_u32 d = 0u; d < BB_AVBD_SHOCK_LAYERS; ++d)
   {
-    dispatch_buffer->avbd_cascade_dispatch[d * BB_MAX_COLORS + c] = (d <= max_layer) ? active : daxa_u32vec3(0u, 1u, 1u);
+    bool occupied = (sim_config->avbd_layer_color_mask[d] & (1u << c)) != 0u;
+    dispatch_buffer->avbd_cascade_dispatch[d * BB_MAX_COLORS + c] = occupied
+        ? daxa_u32vec3(cnt, 1u, 1u) : daxa_u32vec3(0u, 1u, 1u);
   }
 }
 
