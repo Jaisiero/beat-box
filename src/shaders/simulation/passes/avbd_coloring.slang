@@ -16,6 +16,7 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   daxa_u32 i = compute_i.x;
   if (i == 0u)
   {
+    *avbd_contact_cursor((AvbdBodyState*)AVBD_PC.task_head.avbd_state) = 0u;
     sim_config->avbd_color_count = 0u;
     sim_config->avbd_violations = 0u;
   }
@@ -177,7 +178,7 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
   bool has_contacts = false;
   daxa_u32 node = r->manifold_node_index;
   daxa_u32 steps = 0u;
-  while (node != MAX_U32 && steps < manifold_node_count)
+  while (node < manifold_node_count && steps < manifold_node_count)
   {
     daxa_u32 packed = avbd_node_to_packed(node, manifold_node_count, collision_count, manifold_nodes, collision_map);
     if (packed != MAX_U32)
@@ -200,6 +201,19 @@ daxa_u32 avbd_priority(daxa_u32 body, daxa_u32 round)
     daxa_i32 next = manifold_nodes[node].next;
     node = next < 0 ? MAX_U32 : daxa_u32(next);
     ++steps;
+  }
+
+  // This validation already walks the complete canonical chain. Reserve its
+  // stream span here; prepare fills it after the existing task dependency.
+  if ((r->flags & RigidBodyFlag::SLEEPING) == RigidBodyFlag::NONE)
+  {
+    AvbdBodyState* states = (AvbdBodyState*)AVBD_PC.task_head.avbd_state;
+    daxa_u32 offset = 0u;
+    if (steps != 0u) InterlockedAdd(*avbd_contact_cursor(states), steps, offset);
+    bool fits = offset <= BB_MAX_MANIFOLD_NODE_COUNT && steps <= BB_MAX_MANIFOLD_NODE_COUNT - offset;
+    // Valid chains own disjoint nodes. A malformed over-capacity chain uses
+    // bounded direct traversal instead of an out-of-range stream write.
+    avbd_contact_spans(states)[i] = daxa_u32vec2(fits ? offset : MAX_U32, steps);
   }
 
   if (my_color == AVBD_UNCOLORED)
